@@ -129,3 +129,17 @@ automation another way to escalate.
 **Why it exists:** `/` is a small root partition by design; Docker images/containers/volumes are write-heavy and rebuildable, so they belong on `/srv/apps`, not root. Unbounded container logs are one of the two most common ways a box like this fills `/`.
 
 **Added:** 2026-09-16, Task 04, Section 5 (re-applying the Task 01 convention after the rebuild).
+
+---
+
+## `etc/samba/smb.conf`
+
+**What it does:** standalone (not AD DC) Samba file server exporting only `/srv/library` as a read-only, authenticated share named `library`. SMB3 minimum (SMB1 explicitly refused), bound only to the `eno1` interface (`bind interfaces only = yes` — this also excludes loopback, so testing must use the LAN IP, not `localhost`).
+
+**Why it exists:** MyHomeLib (Windows client) reads the fb2/ebook archive over SMB. Read-only removes the entire category of "a client deleted the archive"; authenticated (not guest) restricts it to a dedicated `smbshare` system user (`useradd -M -s /usr/sbin/nologin`, Samba password set via `smbpasswd`, not a real login account) rather than opening it to anyone on the LAN.
+
+**Deliberately NOT containerized**, unlike every other service in this project. Samba's correctness here depends on host-level UID/GID semantics and file permissions on `/srv/library` in a way that adds real complexity in a container (UID mapping between host and container, socket/broadcast behavior for NetBIOS); it's also one of the most mature, heavily-used pieces of the Debian base system — about as "boring" and battle-tested a solution as exists for this exact job. Docker earns its place for app-shaped services (Scrutiny, qBittorrent); this is closer to core OS plumbing.
+
+**`samba-ad-dc` was pulled in by the `samba` metapackage but explicitly disabled** (`systemctl disable --now samba-ad-dc`) — an Active Directory domain controller is not wanted or provisioned here; only `smbd`/`nmbd` (classic standalone file server) run.
+
+**Added:** 2026-09-16, Task 03.
