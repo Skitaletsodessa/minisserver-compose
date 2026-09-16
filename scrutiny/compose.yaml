@@ -1,0 +1,20 @@
+services:
+  scrutiny:
+    image: ghcr.io/analogj/scrutiny:v0.9.3-omnibus
+    container_name: scrutiny
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - scrutiny-config:/opt/scrutiny/config
+      - scrutiny-influxdb:/opt/scrutiny/influxdb
+      - ./config/scrutiny.yaml:/opt/scrutiny/config/scrutiny.yaml:ro
+      - /run/udev:/run/udev:ro
+      - /dev:/dev
+    environment:
+      - COLLECTOR_CRON_SCHEDULE=0 */6 * * *
+
+volumes:
+  scrutiny-config:
+  scrutiny-influxdb:
