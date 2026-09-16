@@ -1,0 +1,6 @@
+[Unit]
+Description=Check kernel log for disk/USB-bus failure signatures, alert via Telegram
+
+[Service]
+Type=oneshot
+ExecStart=/srv/compose/_system/disk-error-watch/check-disk-errors.sh
