@@ -1,0 +1,6 @@
+[Unit]
+Description=Pause/resume qBittorrent based on /srv/staging free space
+
+[Service]
+Type=oneshot
+ExecStart=/srv/compose/_system/qbt-space-guard/qbt-space-guard.sh
