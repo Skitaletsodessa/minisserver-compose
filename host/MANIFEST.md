@@ -119,3 +119,13 @@ automation another way to escalate.
 **Why it exists:** hard rule 9 — `/srv/compose` needs an off-machine remote, and this machine has no reverse network path to Ivan's desktop. A GitHub deploy key scoped to one repository (write access, nothing else) is a smaller blast radius than a personal access token tied to Ivan's whole account.
 
 **Added:** 2026-09-16, Task 04, Section 4. The private key and `~/.ssh/config` entry are not mirrored here (same reasoning as the sudoers file below) — if the key is ever rotated, generate a new one, update the GitHub deploy-key setting, and update this description with the date.
+
+---
+
+## `etc/docker/daemon.json`
+
+**What it does:** points Docker's storage (`data-root`) at `/srv/apps/docker` instead of the default `/var/lib/docker` (which would land on `/`), and caps container log growth (`json-file`, 10m × 3 files per container).
+
+**Why it exists:** `/` is a small root partition by design; Docker images/containers/volumes are write-heavy and rebuildable, so they belong on `/srv/apps`, not root. Unbounded container logs are one of the two most common ways a box like this fills `/`.
+
+**Added:** 2026-09-16, Task 04, Section 5 (re-applying the Task 01 convention after the rebuild).
