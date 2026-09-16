@@ -1,0 +1,6 @@
+[Unit]
+Description=Check /srv/staging disk usage, alert via Telegram at 80%
+
+[Service]
+Type=oneshot
+ExecStart=/srv/compose/_system/disk-space-watch/check-disk-space.sh
