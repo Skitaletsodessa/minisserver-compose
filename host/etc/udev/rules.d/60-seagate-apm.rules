@@ -1,0 +1,1 @@
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]",   ENV{ID_SERIAL_SHORT}=="WDE6X73A",   RUN+="/usr/sbin/hdparm -B 254 -S 242 /dev/%k"
