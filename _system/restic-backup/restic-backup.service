@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily restic backup of /srv/data to /srv/vault
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/srv/compose/_system/restic-backup/restic-backup.sh
