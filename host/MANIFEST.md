@@ -109,3 +109,13 @@ typos and better inspected live with `visudo -c`.
 Section 0 of `tasks/task-04.md` (console access restore, done before the
 agent could reach the machine at all). Do not remove without providing
 automation another way to escalate.
+
+---
+
+## `~/.ssh/id_ed25519_srv_compose` (skit's home dir) — described here, NOT copied
+
+**What it does:** dedicated ed25519 deploy key, used only for pushing `/srv/compose` to its GitHub remote (`Skitaletsodessa/minisserver-compose`, private). Referenced via an SSH config alias `github.com-srv-compose` in `~/.ssh/config` so it doesn't interfere with any other SSH identity on this box.
+
+**Why it exists:** hard rule 9 — `/srv/compose` needs an off-machine remote, and this machine has no reverse network path to Ivan's desktop. A GitHub deploy key scoped to one repository (write access, nothing else) is a smaller blast radius than a personal access token tied to Ivan's whole account.
+
+**Added:** 2026-09-16, Task 04, Section 4. The private key and `~/.ssh/config` entry are not mirrored here (same reasoning as the sudoers file below) — if the key is ever rotated, generate a new one, update the GitHub deploy-key setting, and update this description with the date.
