@@ -157,3 +157,31 @@ automation another way to escalate.
 **Only affects binding-to-a-specific-IP services** (currently just qBittorrent, since Samba starts later via its own service and Scrutiny/Caddy bind to loopback/tailscale0 which come up on a different timeline than `eno1`'s DHCP lease) — but the fix is applied at the Docker daemon level since that's what actually races, not per-container.
 
 **Added:** 2026-09-17, Task 05.
+
+**Correction, 2026-09-17, same day:** the "confirmed" verification above was wrong — it checked `docker ps` status ("Up") but not the actual port binding, which was silently empty (`docker inspect ... NetworkSettings.Ports` → `{}`) on that boot. A second, independent reboot reproduced the exact same "cannot assign requested address" failure the sleep was supposed to fix — 5 seconds was not consistently enough, since dhcpcd's DHCPDISCOVER/OFFER/ACK cycle starts at a variable point after `networking.service` completes and takes a variable few seconds itself. **This file (`10-wait-for-dhcp.conf`) has been removed.** Superseded by a real fix: `eno1` moved to a static IP (see `etc/network/interfaces` below), which removes the DHCP negotiation — and therefore this whole race — entirely, rather than trying to out-wait it.
+
+---
+
+## `etc/network/interfaces` —  moved from DHCP to static
+
+**What it does:** `eno1` now gets `192.168.31.2/24` via a static `iface eno1 inet static` stanza instead of `iface eno1 inet dhcp`.
+
+**Why it exists:** two reasons, one immediate and one precautionary, both from the same conversation. Immediate: DHCP was the direct cause of a boot-time race that killed qBittorrent's LAN-IP binding on every reboot (see the superseded docker.service.d entry above) — a sleep-based workaround proved unreliable because the DHCP negotiation's timing varies, so removing the negotiation entirely is the real fix, not a longer guess. Precautionary, per Ivan directly: even though the router has a DHCP reservation for this machine's MAC, a reservation is only as good as the router honoring it, and a headless box in a basement should not depend on that surviving a router reset/replacement/misconfiguration.
+
+**Verified:** `ip route show default` unaffected (same gateway, same address), confirmed via a full reboot that `eno1` has `192.168.31.2` immediately with no DHCP log lines at all in that boot's journal, and `qbittorrent`'s port binding (`192.168.31.2:8081`) succeeds on the very first container start after boot — no more race window to lose.
+
+**Added:** 2026-09-17, Task 05.
+
+**Correction, 2026-09-17, same day:** the "confirmed" verification above was wrong — it checked `docker ps` status ("Up") but not the actual port binding, which was silently empty (`docker inspect ... NetworkSettings.Ports` → `{}`) on that boot. A second, independent reboot reproduced the exact same "cannot assign requested address" failure the sleep was supposed to fix — 5 seconds was not consistently enough, since dhcpcd's DHCPDISCOVER/OFFER/ACK cycle starts at a variable point after `networking.service` completes and takes a variable few seconds itself. **This file (`10-wait-for-dhcp.conf`) has been removed.** Superseded by a real fix: `eno1` moved to a static IP (see `etc/network/interfaces` below), which removes the DHCP negotiation — and therefore this whole race — entirely, rather than trying to out-wait it.
+
+---
+
+## `etc/network/interfaces` — `eno1` moved from DHCP to static
+
+**What it does:** `eno1` now gets `192.168.31.2/24` via a static `iface eno1 inet static` stanza instead of `iface eno1 inet dhcp`.
+
+**Why it exists:** two reasons, one immediate and one precautionary, both from the same conversation. Immediate: DHCP was the direct cause of a boot-time race that killed qBittorrent's LAN-IP binding on every reboot (see the superseded docker.service.d entry above) — a sleep-based workaround proved unreliable because the DHCP negotiation's timing varies, so removing the negotiation entirely is the real fix, not a longer guess. Precautionary, per Ivan directly: even though the router has a DHCP reservation for this machine's MAC, a reservation is only as good as the router honoring it, and a headless box in a basement should not depend on that surviving a router reset/replacement/misconfiguration.
+
+**Verified:** `ip route show default` unaffected (same gateway, same address), confirmed via a full reboot that `eno1` has `192.168.31.2` immediately with no DHCP log lines at all in that boot's journal, and `qbittorrent`'s port binding (`192.168.31.2:8081`) succeeds on the very first container start after boot — no more race window to lose.
+
+**Added:** 2026-09-17, Task 05.

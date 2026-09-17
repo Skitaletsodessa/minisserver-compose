@@ -1,0 +1,19 @@
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface — static, not DHCP.
+# Was DHCP with a router-side MAC reservation for 192.168.31.2, but a
+# reservation is only as reliable as the router (Task 05: caused a boot-time
+# race with Docker binding to this IP before the lease was even acquired).
+# Same address, configured synchronously by ifup instead of negotiated.
+allow-hotplug eno1
+iface eno1 inet static
+    address 192.168.31.2/24
+    gateway 192.168.31.1
+    dns-nameservers 192.168.31.1
