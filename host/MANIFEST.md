@@ -143,3 +143,17 @@ automation another way to escalate.
 **`samba-ad-dc` was pulled in by the `samba` metapackage but explicitly disabled** (`systemctl disable --now samba-ad-dc`) — an Active Directory domain controller is not wanted or provisioned here; only `smbd`/`nmbd` (classic standalone file server) run.
 
 **Added:** 2026-09-16, Task 03.
+
+---
+
+## `etc/systemd/docker.service.d/10-wait-for-dhcp.conf`
+
+**What it does:** adds a 5-second `ExecStartPre=/bin/sleep 5` delay before Docker starts.
+
+**Why it exists:** found during Task 05's reboot verification — `qbittorrent` (bound to the specific LAN IP `192.168.31.2:8081`, not `0.0.0.0`) failed to start after a reboot with "cannot assign requested address". Root cause: this box's DHCP client (`dhcpcd`, invoked by ifupdown's `dhcp` method) is not tracked as its own systemd unit and daemonizes quickly — `networking.service`/`network-online.target` complete once the interface is administratively up, not once `dhcpcd` has actually secured a lease and configured the address. `docker.service` already has `After=network-online.target`, which does not help here since that target fires too early for this specific DHCP setup. Docker's own container restart policy did not recover from this — the container ended up in a stable `Exited` state, not a retry loop.
+
+**Verified:** reproduced the race directly (`journalctl -u docker` showed the exact `failed to bind host port 192.168.31.2:8081/tcp: cannot assign requested address` error at the boot immediately following this fix's predecessor state), then confirmed a clean reboot with this drop-in in place starts `qbittorrent` successfully with no manual intervention.
+
+**Only affects binding-to-a-specific-IP services** (currently just qBittorrent, since Samba starts later via its own service and Scrutiny/Caddy bind to loopback/tailscale0 which come up on a different timeline than `eno1`'s DHCP lease) — but the fix is applied at the Docker daemon level since that's what actually races, not per-container.
+
+**Added:** 2026-09-17, Task 05.
