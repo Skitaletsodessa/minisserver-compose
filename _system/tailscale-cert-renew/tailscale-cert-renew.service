@@ -1,0 +1,6 @@
+[Unit]
+Description=Renew the Tailscale HTTPS cert for Caddy
+
+[Service]
+Type=oneshot
+ExecStart=/srv/compose/_system/tailscale-cert-renew/tailscale-cert-renew.sh

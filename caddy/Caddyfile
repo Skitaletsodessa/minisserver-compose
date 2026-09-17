@@ -1,0 +1,11 @@
+minisserver.tail6bf4d5.ts.net {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 127.0.0.1:8080
+}
+
+minisserver.tail6bf4d5.ts.net:8443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 192.168.31.2:8081
+}
