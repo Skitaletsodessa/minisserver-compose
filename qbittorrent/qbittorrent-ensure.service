@@ -1,0 +1,12 @@
+[Unit]
+Description=Force-recreate qbittorrent after boot (dockerd live-restore silently drops its port binding sometimes)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f /srv/compose/qbittorrent/compose.yaml up -d --force-recreate
+
+[Install]
+WantedBy=multi-user.target
