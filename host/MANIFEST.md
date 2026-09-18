@@ -124,11 +124,13 @@ automation another way to escalate.
 
 ## `etc/docker/daemon.json`
 
-**What it does:** points Docker's storage (`data-root`) at `/srv/apps/docker` instead of the default `/var/lib/docker` (which would land on `/`), and caps container log growth (`json-file`, 10m × 3 files per container).
+**What it does:** points Docker's storage (`data-root`) at `/srv/apps/docker` instead of the default `/var/lib/docker` (which would land on `/`), caps container log growth (`json-file`, 10m × 3 files per container), and explicitly sets `"live-restore": false`.
 
 **Why it exists:** `/` is a small root partition by design; Docker images/containers/volumes are write-heavy and rebuildable, so they belong on `/srv/apps`, not root. Unbounded container logs are one of the two most common ways a box like this fills `/`.
 
 **Added:** 2026-09-16, Task 04, Section 5 (re-applying the Task 01 convention after the rebuild).
+
+**Updated, 2026-09-18, Task 07 Section 0.2:** added `"live-restore": false` explicitly. It turns out this key was never set before, meaning live-restore was already running at Docker's own default (`false`) the whole time — so Task 05's attribution of the qBittorrent port-binding bug to a live-restore quirk may have been wrong; the real cause was never conclusively identified. Made explicit here anyway so it's never ambiguous, and because this task removes the `qbittorrent-ensure.service` workaround that depended on it not mattering (see below) — verified with a real reboot that port bindings survive without the workaround, live-restore setting aside.
 
 ---
 
@@ -186,6 +188,8 @@ automation another way to escalate.
 **Verified:** `sudo systemctl start qbittorrent-ensure.service` recreates the container cleanly; `docker inspect qbittorrent --format '{{json .NetworkSettings.Ports}}'` shows the real binding and `ss -tlnp` shows an active listener on `192.168.31.2:8081` immediately after. Full-reboot verification pending as of this entry — see `docs/measurements.md` for the outcome.
 
 **Added:** 2026-09-17, Task 05.
+
+**Removed, 2026-09-18, Task 07 Section 0.2.** The per-container `-ensure.service` pattern doesn't scale — Task 07 adds two more containers, Immich (task-08) adds four or more, and each would need its own copy of this workaround against a bug whose failure mode is silent. `/etc/docker/daemon.json` now sets `live-restore: false` explicitly instead (see above), and a real reboot with the ensure-service gone confirmed every container's port binding survives correctly via `docker inspect`/`ss -tlnp` — not just `qbittorrent`'s. Kept in this manifest as history rather than deleted outright, per the project's own convention for superseded fixes (see the `10-wait-for-dhcp.conf` entry above).
 
 ---
 
