@@ -132,6 +132,8 @@ automation another way to escalate.
 
 **Updated, 2026-09-18, Task 07 Section 0.2:** added `"live-restore": false` explicitly. It turns out this key was never set before, meaning live-restore was already running at Docker's own default (`false`) the whole time — so Task 05's attribution of the qBittorrent port-binding bug to a live-restore quirk may have been wrong; the real cause was never conclusively identified. Made explicit here anyway so it's never ambiguous, and because this task removes the `qbittorrent-ensure.service` workaround that depended on it not mattering (see below) — verified with a real reboot that port bindings survive without the workaround, live-restore setting aside.
 
+**Correction, 2026-09-18, same day, Task 07 Section 7:** the reboot verification above was real, but incomplete — it happened to land on a boot where `/srv/library` mounted before Docker started. A later reboot (still the same day, after Jellyfin/Navidrome were added) landed on the opposite timing and both `qbittorrent` and `jellyfin` came up with **empty, stale bind mounts** for `/srv/library` — confirmed via `docker exec jellyfin ls /media/video/movies/` returning nothing while the host's real directory had four real entries, and `stat` showing a different device/inode entirely. Root cause, confirmed directly from `journalctl -b`: `docker.service` has no dependency on `srv-library.mount`, and the fstab entry's `nofail` means systemd doesn't order them automatically — so on a boot where the Seagate's mount takes a few seconds longer than usual, Docker starts and bind-mounts containers against the empty pre-mount placeholder directory instead of the real filesystem. **The same class of race as Task 05's dhcpcd/Docker one, but for a disk mount instead of a network interface.** Real fix, same philosophy as that one (remove the race, don't out-wait it): `etc/systemd/system/docker.service.d/10-wait-for-library.conf` (see below), not a workaround on the container side. Verified by a further reboot showing the correct order in `journalctl -b` (`Mounted srv-library.mount` → `Starting docker.service` → containers start) and both mounts correct afterward.
+
 ---
 
 ## `etc/samba/smb.conf`
@@ -204,3 +206,15 @@ automation another way to escalate.
 **Verified:** `getent hosts github.com` resolves; Tailscale's MagicDNS (`*.tail6bf4d5.ts.net`) also still resolves, confirming `tailscaled` correctly picked up the `resolvconf` integration instead of falling back to its own direct-file-replacement mode.
 
 **Added:** 2026-09-17, Task 05. Rebuild note: if this box is ever reinstalled from scratch, `apt install resolvconf` must happen *before* or alongside setting `eno1` to static, or DNS will silently break the same way.
+
+---
+
+## `etc/systemd/docker.service.d/10-wait-for-library.conf`
+
+**What it does:** `RequiresMountsFor=/srv/library /srv/staging /srv/vault` — tells systemd `docker.service` may not start until all three of these filesystems are actually mounted.
+
+**Why it exists:** on some boots, `/srv/library` (the Seagate, spinning disk, slower to enumerate than the NVMe) was still mounting when Docker started and bind-mounted containers against it — Docker had no ordering dependency on it at all, and the fstab entry's `nofail` (needed so a missing/failed disk doesn't block boot entirely) means systemd does not order dependents against it automatically either. Containers that started in that window got a bind mount pointing at the empty pre-mount placeholder directory instead of the real filesystem, silently — `docker inspect` still reported the mount as correct. Confirmed directly via `journalctl -b`: `srv-library.mount` finishing *after* `docker.service` had already started containers, on the reboot that exposed this. Same race shape as the `10-wait-for-dhcp.conf` / static-IP saga above (Task 05), but for a disk mount instead of a network interface — same fix philosophy too: make the real dependency explicit instead of guessing at a delay. `/srv/staging` and `/srv/vault` added alongside `/srv/library` pre-emptively, since they're mounted from the same physical disks and would race the same way.
+
+**Verified:** a further reboot's `journalctl -b` shows the correct order (`Mounted srv-library.mount` → `Starting docker.service` → containers start), and both `qbittorrent`'s and `jellyfin`'s bind mounts were correct immediately, with no force-recreate needed.
+
+**Added:** 2026-09-18, Task 07 Section 7.
