@@ -1,0 +1,7 @@
+[Unit]
+Description=Sort finished content from /srv/library/downloads into the Jellyfin-facing video/ structure via hardlinks
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/_system/library-sort/library-sort.py
