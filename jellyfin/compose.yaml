@@ -1,0 +1,22 @@
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    container_name: jellyfin
+    restart: unless-stopped
+    user: "1000:1000"  # official image has no PUID/PGID support (that's a linuxserver.io convention) - use Docker's own user: directive
+    ports:
+      - "192.168.31.2:8096:8096"
+    environment:
+      - TZ=Europe/Prague
+      - JELLYFIN_PublishedServerUrl=http://192.168.31.2:8096
+    volumes:
+      - /srv/apps/jellyfin/config:/config
+      - /srv/apps/jellyfin/cache:/cache
+      - /srv/apps/jellyfin/transcodes:/transcodes
+      - /srv/library/video:/media/video:ro
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri/card0:/dev/dri/card0
+    group_add:
+      - "44"   # video - actual host GID, confirmed via `getent group video`, not assumed 44/104
+      - "992"  # render - actual host GID, confirmed via `getent group render`, not assumed 44/104
