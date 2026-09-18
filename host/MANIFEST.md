@@ -146,6 +146,8 @@ automation another way to escalate.
 
 **Added:** 2026-09-16, Task 03.
 
+**Updated, 2026-09-18, Task 07 Section 1.3:** added a second share, `[dropbox]`, exporting only `/srv/library/downloads` (not the whole library), writable, same `eno1`-only binding and SMB3 minimum, same `valid users = smbshare`. `force user = skit` / `force group = skit` on this share specifically, so a file dropped via SMB lands with identical ownership (`skit:skit`) to a file qBittorrent completes (its container runs `PUID=1000`/`PGID=1000`, which is `skit`) — verified directly, not assumed: both a real qBittorrent download and a manual `smbclient put` produce byte-identical `uid:gid`. `create mask = 0664` / `directory mask = 0775`. Checked with `smbclient -L` that `/srv/data` and `/srv/vault` are still not exported by anything — only `library` and `dropbox` appear. `[library]` itself is untouched: still read-only, still the whole `/srv/library` tree, confirmed still refusing writes after this change.
+
 ---
 
 ## `etc/systemd/docker.service.d/10-wait-for-dhcp.conf`
