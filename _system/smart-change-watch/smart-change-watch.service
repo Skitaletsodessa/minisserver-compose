@@ -1,0 +1,7 @@
+[Unit]
+Description=Alert when a watched SMART raw value changes (Seagate, hynix, NVMe)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /srv/compose/_system/smart-change-watch/smart-change-watch.py
