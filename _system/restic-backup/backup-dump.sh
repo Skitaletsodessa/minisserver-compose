@@ -44,11 +44,13 @@ while read -r kind a b c d _; do
         # pg_dump from the RUNNING container: a consistent MVCC snapshot, no downtime. Same
         # command and format as Immich's documented CLI backup (--clean --if-exists, gzip), so
         # the file is also accepted by Immich's own restore. No -t: a tty would turn \n into \r\n.
+        # --rsyncable: plain gzip shifts the whole stream after any early change, so restic could not
+        # dedup day N against day N-1 (measured 2026-09-21 on real dumps: +17.5 MiB/day vs +2.5 MiB/day).
         name=$a; container=$b; pguser=$c; pgdb=$d
         mkdir -p -m 700 "$STAGE/$name"
         out="$STAGE/$name/$pgdb.sql.gz"
         rm -f "$out.new"
-        docker exec "$container" pg_dump --clean --if-exists --dbname="$pgdb" --username="$pguser" </dev/null | gzip > "$out.new"
+        docker exec "$container" pg_dump --clean --if-exists --dbname="$pgdb" --username="$pguser" </dev/null | gzip --rsyncable > "$out.new"
         gzip -t "$out.new"
         # pg_dump writes this trailer last: its absence means a truncated dump
         gzip -dc "$out.new" | tail -n 5 | grep -q "PostgreSQL database dump complete" \
