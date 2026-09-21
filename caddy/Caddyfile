@@ -21,3 +21,9 @@ minisserver.tail6bf4d5.ts.net:10443 {
 	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
 	reverse_proxy 192.168.31.2:4533
 }
+
+minisserver.tail6bf4d5.ts.net:11443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 192.168.31.2:2283
+}
