@@ -48,6 +48,7 @@ trap 'rm -rf "$TMP"' EXIT
 awk '$1=="path"{print $2}'       "$SET" > "$TMP/paths"
 awk '$1=="exclude"{print $2}'    "$SET" > "$TMP/excludes"
 awk '$1=="path-local"{print $2}' "$SET" > "$TMP/paths-local"
+awk '$1=="exclude-local"{print $2}' "$SET" > "$TMP/excludes-local"
 
 # every path must exist: a typo or a vanished directory must fail loudly, not back up less
 while read -r p; do
@@ -55,7 +56,7 @@ while read -r p; do
 done < <(cat "$TMP/paths"; [ "$TARGET" = local ] && cat "$TMP/paths-local" || true)
 
 if [ "$TARGET" = local ]; then
-    restic backup --tag data --files-from "$TMP/paths-local"
+    restic backup --tag data --files-from "$TMP/paths-local" --exclude-file "$TMP/excludes-local"
 fi
 restic backup --tag set --files-from "$TMP/paths" --exclude-file "$TMP/excludes"
 restic forget "${KEEP[@]}" "${PRUNE[@]}"

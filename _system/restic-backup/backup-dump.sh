@@ -3,6 +3,7 @@
 # A live database is never file-copied while its owner runs (that restores to a corrupt DB often
 # enough not to risk it):
 #   sqlite    -> `sqlite3 -readonly .backup` (no downtime), then PRAGMA integrity_check must say "ok"
+#   pgdump    -> pg_dump inside the running container (no downtime), gzip -t + completion trailer checked
 #   stopcopy  -> stop the container, cp -a, start it, and verify it answers again
 # Fails loudly (non-zero) on any problem; restic-backup.sh does not run restic after a failed dump.
 set -euo pipefail
@@ -38,6 +39,22 @@ while read -r kind a b c d _; do
         [ "$chk" = "ok" ] || { echo "backup-dump: integrity_check FAILED for $name: $chk" >&2; exit 1; }
         mv -f "$out.new" "$out"
         echo "dumped sqlite $name ($(stat -c %s "$out") bytes, integrity ok)"
+        ;;
+    pgdump)
+        # pg_dump from the RUNNING container: a consistent MVCC snapshot, no downtime. Same
+        # command and format as Immich's documented CLI backup (--clean --if-exists, gzip), so
+        # the file is also accepted by Immich's own restore. No -t: a tty would turn \n into \r\n.
+        name=$a; container=$b; pguser=$c; pgdb=$d
+        mkdir -p -m 700 "$STAGE/$name"
+        out="$STAGE/$name/$pgdb.sql.gz"
+        rm -f "$out.new"
+        docker exec "$container" pg_dump --clean --if-exists --dbname="$pgdb" --username="$pguser" </dev/null | gzip > "$out.new"
+        gzip -t "$out.new"
+        # pg_dump writes this trailer last: its absence means a truncated dump
+        gzip -dc "$out.new" | tail -n 5 | grep -q "PostgreSQL database dump complete" \
+            || { echo "backup-dump: pg_dump of $name is truncated (no completion trailer)" >&2; exit 1; }
+        mv -f "$out.new" "$out"
+        echo "dumped postgres $name ($(stat -c %s "$out") bytes, gzip ok, trailer ok)"
         ;;
     stopcopy)
         name=$a; container=$b; src=$c; health_url=$d

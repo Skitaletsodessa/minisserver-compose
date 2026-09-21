@@ -1,0 +1,19 @@
+{
+  "backup": {
+    "database": {
+      "enabled": false
+    }
+  },
+  "ffmpeg": {
+    "accel": "vaapi",
+    "accelDecode": true
+  },
+  "machineLearning": {
+    "enabled": false
+  },
+  "storageTemplate": {
+    "enabled": true,
+    "hashVerificationEnabled": true,
+    "template": "{{y}}/{{y}}-{{MM}}-{{dd}}/{{filename}}"
+  }
+}
