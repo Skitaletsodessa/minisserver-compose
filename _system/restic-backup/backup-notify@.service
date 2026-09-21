@@ -1,0 +1,6 @@
+[Unit]
+Description=Telegram alert: %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/srv/compose/_system/restic-backup/notify-failure.sh %i

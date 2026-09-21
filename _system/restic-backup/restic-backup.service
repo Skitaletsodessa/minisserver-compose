@@ -1,7 +1,8 @@
 [Unit]
-Description=Daily restic backup of /srv/data to /srv/vault
+Description=Daily restic backup of the backup set + /srv/data to the local repository (/srv/vault)
+OnFailure=backup-notify@%n.service
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/srv/compose/_system/restic-backup/restic-backup.sh
+ExecStart=/srv/compose/_system/restic-backup/restic-backup.sh local

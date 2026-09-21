@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly forget + prune of the off-site restic repository (Cloudflare R2)
+After=network-online.target
+Wants=network-online.target
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/srv/compose/_system/restic-backup/restic-backup.sh r2-prune
