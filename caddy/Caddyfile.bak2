@@ -43,21 +43,5 @@ minisserver.tail6bf4d5.ts.net:11443 {
 		}
 		format json
 	}
-
-	# Task 10: real client IP is available via X-Forwarded-For (trusted_proxies above) because
-	# Immich sits behind Tailscale Funnel, not a raw internet-facing socket - so a firewall-level
-	# ban has nothing to act on here; Caddy itself has to be the enforcement point. Only the
-	# login endpoint is limited; everything else (browsing, uploads, downloads) is unrestricted.
-	rate_limit {
-		zone login_per_ip {
-			match {
-				path /api/auth/login
-			}
-			key    {vars.client_ip}
-			events 5
-			window 5m
-		}
-	}
-
 	reverse_proxy 192.168.31.2:2283
 }
