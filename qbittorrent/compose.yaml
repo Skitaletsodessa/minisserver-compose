@@ -3,6 +3,14 @@ services:
     image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls476
     container_name: qbittorrent
     restart: unless-stopped
+    labels:
+      # lexicographical, not semver: linuxserver's compound tag (qbt_v2.0.14-ls476) isn't valid
+      # semver - a semver parser could mis-sort or reject it. include_tags keeps it to the same shape.
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=lexicographical"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^\\d+\\.\\d+\\.\\d+_v\\d+\\.\\d+\\.\\d+-ls\\d+$$"
     ports:
       - "192.168.31.2:8081:8080"
     environment:

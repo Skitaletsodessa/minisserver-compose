@@ -1,0 +1,10 @@
+# Diun's file provider: images to watch that are NOT auto-detectable from a running container.
+# Our caddy container runs a locally-built image (caddy-caddy:latest, from Task 10's custom
+# Dockerfile) - Diun's Docker provider can't resolve a local build tag against any registry, so
+# the upstream image it's built FROM is tracked explicitly here instead.
+- name: caddy
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - ^\d+\.\d+\.\d+$

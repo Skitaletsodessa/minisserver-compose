@@ -1,0 +1,39 @@
+services:
+  diun:
+    image: crazymax/diun:4.33.0
+    container_name: diun
+    command: serve
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=Europe/Prague
+      - DIUN_DB_PATH=/data/diun.db
+      - DIUN_WATCH_WORKERS=10
+      - DIUN_WATCH_SCHEDULE=0 8 * * *
+      - DIUN_WATCH_JITTER=30m
+      - DIUN_WATCH_RUNONSTARTUP=false
+      # 2026-09-22 incident: without this, the very first run treats EVERY tag in a repo's whole
+      # history as "new" - 144 false notifications fired for Navidrome alone before this was set.
+      # See docs/measurements.md and CLAUDE.md hard rule 5.
+      - DIUN_WATCH_FIRSTCHECKNOTIF=false
+      - DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=false
+      - DIUN_PROVIDERS_DOCKER_WATCHSTOPPED=true
+      - DIUN_PROVIDERS_FILE_FILENAME=/etc/diun/caddy.yml
+    volumes:
+      - diun-data:/data
+      - ./caddy.yml:/etc/diun/caddy.yml:ro
+      # Read-only: stops the container from replacing the socket file. It does NOT limit which
+      # Docker API calls Diun could make over that socket - the real safety is behavioral, not
+      # this flag: Diun's own code only ever inspects images/containers and queries registries
+      # over HTTP, it never issues a pull/restart/update call. See CLAUDE.md hard rule 5.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "diun", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  diun-data:

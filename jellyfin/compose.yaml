@@ -3,6 +3,14 @@ services:
     image: jellyfin/jellyfin:10.11.11
     container_name: jellyfin
     restart: unless-stopped
+    labels:
+      # Task 11: Diun watches the upstream repo for new tags (pinned digest is not enough) -
+      # see CLAUDE.md hard rule 5 and docs/report-11.md for why plain semver, not a range.
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^\\d+\\.\\d+\\.\\d+$$"
     user: "1000:1000"  # official image has no PUID/PGID support (that's a linuxserver.io convention) - use Docker's own user: directive
     ports:
       - "192.168.31.2:8096:8096"

@@ -46,8 +46,10 @@ minisserver.tail6bf4d5.ts.net:11443 {
 
 	# Task 10: real client IP is available via X-Forwarded-For (trusted_proxies above) because
 	# Immich sits behind Tailscale Funnel, not a raw internet-facing socket - so a firewall-level
-	# ban has nothing to act on here; Caddy itself has to be the enforcement point. Only the
-	# login endpoint is limited; everything else (browsing, uploads, downloads) is unrestricted.
+	# ban has nothing to act on here; Caddy itself has to be the enforcement point.
+	# Task 11: widened past the login form to every endpoint that accepts a guessable secret.
+	# No real traffic was ever observed on these four (checked the access log first, per the task);
+	# thresholds are set by how guessable the secret is, not by an observed legitimate rate.
 	rate_limit {
 		zone login_per_ip {
 			match {
@@ -56,6 +58,27 @@ minisserver.tail6bf4d5.ts.net:11443 {
 			key    {vars.client_ip}
 			events 5
 			window 5m
+		}
+		# PIN unlock/change/setup/reset and password change: all require an already-authenticated
+		# session (stolen-token threat model, not a cold internet guesser), but a 4-6 digit PIN is
+		# a small keyspace - worth throttling anyway. Longer window than login: legitimately rare.
+		zone secrets_per_ip {
+			match {
+				path /api/auth/session/unlock /api/auth/pin-code /api/auth/change-password
+			}
+			key    {vars.client_ip}
+			events 5
+			window 15m
+		}
+		# Shared-link passwords: the one secret in this list reachable with NO Immich account at
+		# all - anyone with a link ID can try. Same budget, same reasoning as secrets_per_ip.
+		zone shared_link_per_ip {
+			match {
+				path /api/shared-links/login /api/shared-links/me
+			}
+			key    {vars.client_ip}
+			events 5
+			window 15m
 		}
 	}
 

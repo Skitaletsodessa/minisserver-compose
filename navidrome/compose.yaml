@@ -3,6 +3,12 @@ services:
     image: deluan/navidrome:0.59.0
     container_name: navidrome
     restart: unless-stopped
+    labels:
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^\\d+\\.\\d+\\.\\d+$$"
     user: "1000:1000"
     ports:
       - "192.168.31.2:4533:4533"

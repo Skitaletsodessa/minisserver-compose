@@ -3,6 +3,14 @@ services:
     image: ghcr.io/analogj/scrutiny:v0.9.3-omnibus
     container_name: scrutiny
     restart: unless-stopped
+    labels:
+      # lexicographical: the -omnibus suffix isn't guaranteed to parse the way we'd want under
+      # strict semver precedence rules (pre-release segments sort BELOW the plain version).
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=lexicographical"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^v\\d+\\.\\d+\\.\\d+-omnibus$$"
     privileged: true
     ports:
       - "127.0.0.1:8080:8080"

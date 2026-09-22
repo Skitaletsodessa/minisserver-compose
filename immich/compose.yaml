@@ -12,6 +12,14 @@ services:
   immich-server:
     container_name: immich_server
     image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:?set IMMICH_VERSION in .env}
+    labels:
+      # Task 11: Diun watches the upstream repo for new tags (pinned digest is not enough) -
+      # see CLAUDE.md hard rule 5 and docs/report-11.md.
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^v\\d+\\.\\d+\\.\\d+$$"
     devices:
       - /dev/dri:/dev/dri
     volumes:
@@ -36,6 +44,12 @@ services:
   immich-machine-learning:
     container_name: immich_machine_learning
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION}
+    labels:
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^v\\d+\\.\\d+\\.\\d+$$"
     # Task 08: cap ML at half the threads. Sustained full-CPU ML on this chassis would push Tctl past 95 C
     # (85-87 C was already measured with ~1 core busy during the import). Measured in docs/measurements.md.
     cpus: 8
