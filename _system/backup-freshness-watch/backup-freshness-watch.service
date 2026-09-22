@@ -1,0 +1,7 @@
+[Unit]
+Description=Alert if the newest 'set' snapshot in either restic repository is older than the freshness threshold
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/srv/compose/_system/backup-freshness-watch/backup-freshness-watch.sh

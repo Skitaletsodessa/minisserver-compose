@@ -1,0 +1,10 @@
+[Unit]
+Description=Run backup-freshness-watch daily, after both restic jobs have had a chance to complete
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
