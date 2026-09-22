@@ -2,12 +2,18 @@
 # qBittorrent has no native "pause when free space below X" preference - checked
 # its full WebAPI preferences dump directly, no such key exists (confirmed against
 # v5.2.3). This script is the substitute task-03 asked for: pause all torrents
-# when /srv/staging's free space drops below PAUSE_BELOW_GB, resume once it
+# when /srv/library's free space drops below PAUSE_BELOW_GB, resume once it
 # recovers above RESUME_ABOVE_GB (hysteresis band so it doesn't flap right at
 # the boundary).
+#
+# Repointed 2026-09-22 (Task 13): the hynix (/srv/staging) is physically removed;
+# qBittorrent now downloads straight onto the Seagate (/srv/library), Ivan's
+# decision (low download volume, auto-remove on completion). This guard now
+# protects the whole library disk, not a dedicated disposable staging device -
+# still useful, arguably more so.
 set -euo pipefail
 
-MOUNT=/srv/staging
+MOUNT=/srv/library
 PAUSE_BELOW_GB=15
 RESUME_ABOVE_GB=20
 STATE_DIR=/var/lib/qbt-space-guard
@@ -54,7 +60,7 @@ if [ "$AVAIL_GB" -lt "$PAUSE_BELOW_GB" ]; then
         docker exec qbittorrent curl -s -b "$COOKIE_JAR" --referer "$QBT_URL" \
             -X POST "$QBT_URL/api/v2/torrents/pause" --data-urlencode "hashes=all" >/dev/null
         touch "$STATE_FILE"
-        telegram "minisserver qbt-space-guard: /srv/staging has ${AVAIL_GB}GB free (below ${PAUSE_BELOW_GB}GB) - all torrents paused."
+        telegram "minisserver qbt-space-guard: /srv/library has ${AVAIL_GB}GB free (below ${PAUSE_BELOW_GB}GB) - all torrents paused."
     fi
 elif [ "$AVAIL_GB" -ge "$RESUME_ABOVE_GB" ]; then
     if [ -f "$STATE_FILE" ]; then
@@ -62,6 +68,6 @@ elif [ "$AVAIL_GB" -ge "$RESUME_ABOVE_GB" ]; then
         docker exec qbittorrent curl -s -b "$COOKIE_JAR" --referer "$QBT_URL" \
             -X POST "$QBT_URL/api/v2/torrents/resume" --data-urlencode "hashes=all" >/dev/null
         rm -f "$STATE_FILE"
-        telegram "minisserver qbt-space-guard: /srv/staging has ${AVAIL_GB}GB free again (above ${RESUME_ABOVE_GB}GB) - torrents resumed."
+        telegram "minisserver qbt-space-guard: /srv/library has ${AVAIL_GB}GB free again (above ${RESUME_ABOVE_GB}GB) - torrents resumed."
     fi
 fi

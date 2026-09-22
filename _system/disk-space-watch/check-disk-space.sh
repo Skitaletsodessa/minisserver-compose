@@ -1,8 +1,9 @@
 #!/bin/bash
-# Alerts via Telegram when /srv/staging crosses 80% used - qBittorrent's own
-# threshold should pause it before this, but this is the independent check
-# that proves it actually did, or catches it if the qBittorrent-side setting
-# is ever misconfigured or bypassed.
+# Alerts via Telegram when /srv/library crosses 80% used. qBittorrent now downloads
+# straight onto /srv/library (Task 13, 2026-09-22, Ivan's decision) instead of the
+# old hynix /srv/staging (removed); qbt-space-guard is the independent free-space
+# pause for qBittorrent itself, this is the general "is the disk filling up" check,
+# now covering the whole library disk instead of a dedicated staging device.
 #
 # Separate from disk-error-watch on purpose: that one greps kernel log events
 # (a "did something happen" check), this one polls a numeric threshold (a
@@ -10,7 +11,7 @@
 # own alert-once/reset-on-recovery logic rather than content-hash dedup.
 set -euo pipefail
 
-MOUNT=/srv/staging
+MOUNT=/srv/library
 THRESHOLD=80
 STATE_DIR=/var/lib/disk-space-watch
 STATE_FILE="$STATE_DIR/staging-alerted"
