@@ -20,4 +20,4 @@ UUID=83004607-fc8f-44c4-aec1-8aaff844350b /srv/data       ext4    defaults,error
 UUID=7c09276d-d793-4d04-aac4-9561299b1815 none            swap    sw              0       0
 UUID=ba42438a-b394-41f6-bb46-322f092f3e48  /srv/library  ext4  defaults,nofail,x-systemd.device-timeout=10,errors=remount-ro  0 2
 UUID=9699630f-f5ea-436e-b1d1-5c6dc9c272fe  /srv/vault    ext4  defaults,nofail,x-systemd.device-timeout=10,errors=remount-ro  0 2
-UUID=6923f79b-bc3b-4c6b-bdb9-1a814fbfea43  /srv/staging  ext4  defaults,nofail,x-systemd.device-timeout=10,errors=remount-ro  0 2
+# 2026-09-22 (Task 13): hynix physically removed, written off, will not return - was: UUID=6923f79b-bc3b-4c6b-bdb9-1a814fbfea43  /srv/staging  ext4  defaults,nofail,x-systemd.device-timeout=10,errors=remount-ro  0 2

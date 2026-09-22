@@ -1,5 +1,5 @@
 [Unit]
-Description=Alert when a watched SMART raw value changes (Seagate, hynix, NVMe)
+Description=Alert when a watched SMART raw value changes (Seagate, NVMe)
 
 [Service]
 Type=oneshot

@@ -27,11 +27,6 @@ ENV_FILE = Path("/srv/compose/scrutiny/.env")
 DISKS = {
     "WDE6X73A": ("Seagate ST1000LM035 (library + vault)", "ata",
                  {5: 1, 184: 1, 187: 1, 188: 1, 197: 1, 198: 1, 199: 1}),
-    # 212 Phy_Error_Count counts link resets: the known ASM1166 fault adds a handful per boot and
-    # hundreds in a storm, and disk-error-watch already alerts on those. Threshold 100 keeps this
-    # quiet about the known fault; drop it to 1 once the hardware is fixed.
-    "EI74N00071140435W": ("SK hynix 128GB (staging, ASM1166)", "ata",
-                          {5: 1, 184: 1, 187: 1, 188: 1, 196: 1, 198: 1, 199: 1, 212: 100}),
     "S4ENNF1MA94910": ("Samsung PM981a NVMe (boot)", "nvme",
                        {"critical_warning": 1, "media_errors": 1}),
 }
