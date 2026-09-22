@@ -9,7 +9,7 @@
     "accelDecode": true
   },
   "machineLearning": {
-    "enabled": false
+    "enabled": true
   },
   "storageTemplate": {
     "enabled": true,

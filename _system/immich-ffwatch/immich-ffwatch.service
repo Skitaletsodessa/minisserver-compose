@@ -1,0 +1,15 @@
+[Unit]
+Description=Kill hung Immich ffmpeg processes (VAAPI loop on odd inputs) and log every kill
+After=docker.service
+Requires=docker.service
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/srv/compose/_system/immich-ffwatch/ffwatch.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

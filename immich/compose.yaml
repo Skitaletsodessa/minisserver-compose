@@ -36,6 +36,9 @@ services:
   immich-machine-learning:
     container_name: immich_machine_learning
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION}
+    # Task 08: cap ML at half the threads. Sustained full-CPU ML on this chassis would push Tctl past 95 C
+    # (85-87 C was already measured with ~1 core busy during the import). Measured in docs/measurements.md.
+    cpus: 8
     volumes:
       - ${ML_CACHE_LOCATION:?}:/cache
     env_file:
