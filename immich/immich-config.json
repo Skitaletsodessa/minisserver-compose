@@ -15,5 +15,8 @@
     "enabled": true,
     "hashVerificationEnabled": true,
     "template": "{{y}}/{{y}}-{{MM}}-{{dd}}/{{filename}}"
+  },
+  "server": {
+    "externalDomain": "https://minisserver.tail6bf4d5.ts.net:10000"
   }
 }
