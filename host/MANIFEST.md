@@ -234,3 +234,17 @@ automation another way to escalate.
 **Found missing from this mirror, 2026-09-21 (Task 06):** the file existed and was live, but was never copied into `host/` or listed here — a gap against the "host-level configuration must be tracked" rule, found while defining the backup set. Copied now. It is also in the backup set (`_system/restic-backup/backup-set.conf` covers `/etc/ssh/sshd_config.d` directly).
 
 **Added:** 2026-09-16 (Task 04); mirrored 2026-09-21.
+
+---
+
+## `etc/containerd/config.toml` and `etc/systemd/system/containerd.service.d/10-wait-for-apps.conf`
+
+**What they do:** `config.toml` sets containerd's `root` (the persistent image/snapshot store) to `/srv/apps/containerd`, off the root filesystem. The drop-in adds `RequiresMountsFor=/srv/apps` to `containerd.service` itself — before this, only `docker.service` waited for `/srv/apps`; `containerd.service` had no such dependency of its own, a gap in the exact same shape as the original bind-mount boot-race bug (docker inspect can lie / boot-order race entry above), just for containerd's own data directory instead of a bind mount.
+
+**Why they exist:** `/var/lib/containerd` (the default `root`) was filling the 38 GB root filesystem — 11 GB and rising ~4 GB per Immich release (Task 08 finding). Moved to `/srv/apps` (112 GB, built for this). `state` (`/run/containerd`, already tmpfs/volatile) was deliberately left at its default — only the persistent data needed to move.
+
+**How it was done:** `docker.service` and `containerd.service` stopped, data copied (not moved) with `cp -a` to the new location, config changed, both services started, **verified via `lsof` that the running containerd process actually had its database files open under the new path** (not just "it still works," which would look identical if the old copy were silently still in use) before the old `/var/lib/containerd` was removed. Freed ~10.6 GB on `/` (13 G used → 2.4 G).
+
+**Found along the way:** `immich-ffwatch.service` has `Requires=docker.service` and stopped when `docker.service` was stopped for this move — it does not restart on its own when `docker.service` comes back (`Restart=always` governs its own crashes, not a dependency-triggered stop). **After any `docker.service` stop/restart, check `immich-ffwatch` is still active, the same way `docker inspect` needs re-checking** (see that entry above).
+
+**Added:** 2026-09-22, Task 11 §4.
