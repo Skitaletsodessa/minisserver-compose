@@ -11,7 +11,7 @@ name: immich
 services:
   immich-server:
     container_name: immich_server
-    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:?set IMMICH_VERSION in .env}
+    image: ghcr.io/immich-app/immich-server:v3.2.4
     labels:
       # Task 11: Diun watches the upstream repo for new tags (pinned digest is not enough) -
       # see CLAUDE.md hard rule 5 and docs/report-11.md.
@@ -43,7 +43,7 @@ services:
 
   immich-machine-learning:
     container_name: immich_machine_learning
-    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION}
+    image: ghcr.io/immich-app/immich-machine-learning:v3.2.4
     labels:
       - "diun.enable=true"
       - "diun.watch_repo=true"
