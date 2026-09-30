@@ -18,7 +18,14 @@ yt = YTMusic(str(HERE / "browser.json"))
 
 
 def norm(s: str) -> str:
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    # Apostrophes dropped (not turned into a space) BEFORE the ascii-encode, and consistently
+    # regardless of character used - straight ' (ASCII) survives encode/ignore, curly '/'
+    # (non-ASCII) gets silently dropped by it - that asymmetry alone turned "fool's" into
+    # "fool s" from one source and "fools" from the other, breaking every match depending on
+    # it. Found via create_ytm_playlist.py's pilot run; fixed there and mirrored here since
+    # this script's own sp_only/yt_only split has exactly the same exposure.
+    s = (s or "").replace("'", "").replace("’", "").replace("‘", "")
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
     return s
 
@@ -107,5 +114,16 @@ for key in sorted(sp_only, key=lambda k: sp_tracks[k][0].lower()):
     lines.append(f"| {title} | {artists} | {sources} |")
 
 out_path.write_text("\n".join(lines) + "\n")
+
+# also a clean CSV of the transfer candidates, for scripted consumption (create_ytm_playlist.py)
+transfer_csv = OUT_DIR / "transfer-candidates.csv"
+with open(transfer_csv, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(["title", "artists", "spotify_source"])
+    for key in sorted(sp_only, key=lambda k: sp_tracks[k][0].lower()):
+        title, artists, sources = sp_tracks[key]
+        w.writerow([title, artists, sources])
+
 print(f"\nWrote {out_path}", file=sys.stderr)
+print(f"Wrote {transfer_csv} ({len(sp_only)} rows)", file=sys.stderr)
 print(f"In both: {len(both)}, only Spotify: {len(sp_only)}, only YTM: {len(yt_only)}", file=sys.stderr)

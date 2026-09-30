@@ -3,5 +3,6 @@ settings.ini
 *.cache
 .spotipy-cache
 browser.json
+.ytm-playlist-id
 noresults_youtube.txt
 __pycache__/
