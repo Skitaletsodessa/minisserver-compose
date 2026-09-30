@@ -1,0 +1,10 @@
+{
+  "name": "Забытое любимое",
+  "comment": "Любимое, не игравшее последние 180 дней",
+  "all": [
+    { "is": { "loved": true } },
+    { "notInTheLast": { "lastPlayed": 180 } }
+  ],
+  "sort": "random",
+  "limit": 50
+}
