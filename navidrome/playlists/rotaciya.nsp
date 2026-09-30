@@ -1,0 +1,7 @@
+{
+  "name": "Ротация",
+  "comment": "Не игралось последние 60 дней",
+  "all": [{ "notInTheLast": { "lastPlayed": 60 } }],
+  "sort": "random",
+  "limit": 100
+}

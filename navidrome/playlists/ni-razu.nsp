@@ -1,0 +1,7 @@
+{
+  "name": "Ни разу",
+  "comment": "Ни разу не прослушано",
+  "all": [{ "is": { "playCount": 0 } }],
+  "sort": "random",
+  "limit": 100
+}
