@@ -2,5 +2,6 @@ venv/
 settings.ini
 *.cache
 .spotipy-cache
+browser.json
 noresults_youtube.txt
 __pycache__/
