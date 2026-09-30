@@ -1,0 +1,4 @@
+spotify_to_ytmusic==0.8.0
+ytmusicapi==1.12.3
+spotipy==2.26.0
+platformdirs==4.12.2
