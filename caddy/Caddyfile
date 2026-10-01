@@ -109,6 +109,25 @@ minisserver.tail6bf4d5.ts.net:11443 {
 			events 5
 			window 5m
 		}
+		# Task 18: /rest/* takes credentials on every request (u+p or u+t+s) and was left entirely
+		# unlimited - an open password-guessing endpoint on a public Funnel port, since the login
+		# limit above only covers the web form. Measured real per-IP traffic first (Caddy access
+		# log during normal Substreamer playback): median 1 req/min, p90 85, p99/peak 302 (one
+		# cover-art/offline-sync burst). Ceiling set at ~10x that peak - high enough that normal
+		# use, including a burst like the one observed, never trips it, low enough that an
+		# unthrottled guesser is meaningfully slowed rather than unlimited. Total-request count,
+		# not failed-auth count: Subsonic returns HTTP 200 with an in-body error code (40) on bad
+		# credentials, so Caddy can't distinguish a failed login from a successful one by status
+		# code alone - a response-code-based limit isn't available here, a total-request ceiling is
+		# the mechanism that exists.
+		zone navidrome_rest_per_ip {
+			match {
+				path /rest/*
+			}
+			key    {vars.client_ip}
+			events 3000
+			window 5m
+		}
 	}
 
 	reverse_proxy 192.168.31.2:4533
