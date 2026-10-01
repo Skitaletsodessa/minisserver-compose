@@ -1,0 +1,11 @@
+[Unit]
+Description=Fill empty Album tags from MusicBrainz for any new file in /srv/library/music (Task 19)
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=skit
+Nice=15
+IOSchedulingClass=idle
+WorkingDirectory=/srv/compose/_system/music-tagging
+ExecStart=/srv/compose/_system/music-tagging/venv/bin/python /srv/compose/_system/music-tagging/daily_tag.py
