@@ -10,7 +10,7 @@ minisserver.tail6bf4d5.ts.net {
 	reverse_proxy 127.0.0.1:8080
 }
 
-minisserver.tail6bf4d5.ts.net:8443 {
+minisserver.tail6bf4d5.ts.net:12443 {
 	bind 100.76.61.8
 	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
 	reverse_proxy 192.168.31.2:8081
@@ -83,4 +83,33 @@ minisserver.tail6bf4d5.ts.net:11443 {
 	}
 
 	reverse_proxy 192.168.31.2:2283
+}
+
+:8443 {
+	bind 127.0.0.1
+	log {
+		output file /data/funnel-navidrome-access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		format json
+	}
+
+	# Task 15 §5: Navidrome publicly exposed via a second Funnel port, same design as Immich's
+	# :10000 (Funnel -> loopback Caddy -> app, never Funnel straight to the app). Real client IP
+	# via X-Forwarded-For, same reasoning as Immich (Funnel traffic arrives already-tunneled over
+	# loopback from tailscaled, so there is no raw connection for the OS firewall to block - Caddy
+	# is the only place that resolves the real client IP, so it has to be the enforcement point).
+	rate_limit {
+		zone navidrome_login_per_ip {
+			match {
+				path /auth/login
+			}
+			key    {vars.client_ip}
+			events 5
+			window 5m
+		}
+	}
+
+	reverse_proxy 192.168.31.2:4533
 }

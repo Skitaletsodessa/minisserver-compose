@@ -16,6 +16,7 @@ services:
       - ND_MUSICFOLDER=/music
       - ND_DATAFOLDER=/data
       - TZ=Europe/Prague
+      - ND_SHAREURL=https://minisserver.tail6bf4d5.ts.net:8443
     volumes:
       - /srv/apps/navidrome:/data
       - /srv/library/music:/music:ro
