@@ -82,6 +82,7 @@ def pooled_release_groups(cache, candidates):
     rg_release_counts = {}
     rg_objects = {}
     rg_track_info = {}  # rg_id -> set of (position, track_count) seen across its releases
+    rg_track_ids = {}  # rg_id -> set of release-track ids seen for our recording
 
     for rec in candidates:
         rec_id = rec.get("id")
@@ -99,6 +100,7 @@ def pooled_release_groups(cache, candidates):
                 for t in medium.get("track-list", []):
                     if (t.get("recording") or {}).get("id") == rec_id:
                         rg_track_info.setdefault(rg_id, set()).add((t.get("position"), track_count))
+                        rg_track_ids.setdefault(rg_id, set()).add(t.get("id"))
 
     pooled = []
     for rg_id, rg in rg_objects.items():
@@ -112,6 +114,8 @@ def pooled_release_groups(cache, candidates):
         else:
             rg["_track_position"] = None
             rg["_track_count"] = None
+        track_ids = rg_track_ids.get(rg_id, set())
+        rg["_release_track_id"] = next(iter(track_ids)) if len(track_ids) == 1 else None
         pooled.append(rg)
     return pooled
 
@@ -197,6 +201,7 @@ def main():
                     "proposed_totaltracks": chosen.get("_track_count") or "",
                     "recording_mbid": passing[0].get("id", ""),
                     "release_group_mbid": chosen.get("id", ""),
+                    "release_track_mbid": chosen.get("_release_track_id") or "",
                 })
 
         if i % 20 == 0:
@@ -206,7 +211,7 @@ def main():
     fieldnames = [
         "path", "title", "artist", "action", "reason", "rank", "title_sim", "artist_sim",
         "proposed_album", "proposed_albumartist", "proposed_date", "proposed_track",
-        "proposed_totaltracks", "recording_mbid", "release_group_mbid",
+        "proposed_totaltracks", "recording_mbid", "release_group_mbid", "release_track_mbid",
     ]
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames, restval="")
