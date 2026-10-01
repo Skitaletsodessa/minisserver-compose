@@ -1,9 +1,0 @@
-[Unit]
-Description=Download audio for any new YouTube Music Liked Music / playlist track not yet in /srv/library/music
-OnFailure=backup-notify@%n.service
-
-[Service]
-Type=oneshot
-User=skit
-WorkingDirectory=/srv/compose/_system/ytdlp
-ExecStart=/srv/compose/_system/ytdlp/venv/bin/python /srv/compose/_system/ytdlp/sync_from_ytmusic.py

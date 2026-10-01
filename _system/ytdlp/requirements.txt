@@ -1,3 +1,0 @@
-yt-dlp==2026.8.19
-mutagen==1.48.1
-ytmusicapi==1.12.3
