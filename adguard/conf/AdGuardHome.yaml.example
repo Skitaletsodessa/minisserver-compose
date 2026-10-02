@@ -124,6 +124,14 @@ filters:
   url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_3.txt
   name: Peter Lowe's Blocklist
   id: 3
+- enabled: true
+  url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_11.txt
+  name: Malicious URL Blocklist (URLHaus)
+  id: 1790919100
+- enabled: true
+  url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_18.txt
+  name: Phishing Army
+  id: 1790919101
 whitelist_filters: []
 user_rules: []
 dhcp:

@@ -9,6 +9,7 @@ request so rotating it needs no restart). Standard library only.
 import base64
 import datetime
 import hmac
+import ipaddress
 import html
 import json
 import sys
@@ -20,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import childpolicy  # noqa: E402
 import audit  # noqa: E402
+import devices  # noqa: E402
 import overrides  # noqa: E402
 
 BIND = ("127.0.0.1", 8099)
@@ -153,13 +155,19 @@ def _list_form(kind, op, domain, back, label, cls=""):
 
 
 def page_log(ip, hours, show, msg=""):
-    clients = {c[0]: c[1] for c in childpolicy.load_clients()}
-    if ip not in clients:
-        ip = next(iter(clients))
+    kids = {c[0]: (c[1], c[2]) for c in childpolicy.load_clients()}
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        ip = next(iter(kids))
+    is_kid = ip in kids
     hours = hours if hours in (24, 168) else 24
     show = show if show in ("all", "blocked", "allowed") else "all"
     back = f"/log?ip={urllib.parse.quote(ip)}&h={hours}&show={show}"
     api = childpolicy.Api()
+    devs = devices.list_devices(api, kids)
+    me = next((d for d in devs if d["ip"] == ip), {"ip": ip, "nick": "", "kid": False, "mac": None,
+                                                     "vendor": None, "random": False, "host": "", "queries": 0})
     rows, truncated = audit.collect(api, ip, hours)
     filters = {f["id"]: f["name"] for f in api.call("GET", "/filtering/status").get("filters", [])}
     allow_x, deny_x = childpolicy.extra_list("allow"), childpolicy.extra_list("deny")
@@ -177,8 +185,31 @@ def page_log(ip, hours, show, msg=""):
     parts = ['<h1>Журнал посещений</h1><div class="nav"><a href="/">← Ограничения</a></div>']
     if msg:
         parts.append(f'<div class="card ok">{esc(msg)}</div>')
+    def dev_line(d):
+        who = d["nick"] or d["host"] or "без имени"
+        mac = ""
+        if d["mac"]:
+            what = "случайный/виртуальный MAC" if d["random"] else (d["vendor"] or "производитель неизвестен")
+            mac = f' · <code>{esc(d["mac"])}</code> ({esc(what)})'
+        use = f'{d["queries"]} запр. за 30 дн.' if d["queries"] else "этот DNS пока не использует"
+        return f'<b>{esc(who)}</b> <code>{esc(d["ip"])}</code>{mac} · {use}'
+
+    rows_html = []
+    for d in devs:
+        mark = '<span class="badge">ребёнок</span> ' if d["kid"] else ""
+        cur = " ← открыто" if d["ip"] == ip else ""
+        rows_html.append(f'<div class="dom">{mark}{dev_line(d)}{cur}<div class="acts">'
+                         f'<a href="/log?ip={urllib.parse.quote(d["ip"])}&h={hours}&show={show}">Журнал</a></div></div>')
+    dev_card = ('<div class="card"><h2>Устройства в сети</h2><div class="mut">Чтобы узнать детское устройство: '
+                'сверьте IP и MAC с таблицей DHCP на роутере. Ник для устройства задаётся в '
+                '<code>child-policy/clients.conf</code> — скажите мне, добавлю.</div>'
+                + "".join(rows_html) + '</div>')
+    parts.append(dev_card)
+    title = me["nick"] or me["host"] or "устройство"
+    sub = "" if is_kid else ('<div class="mut">Это не детское устройство: журнал только для просмотра, правила '
+                              '«разрешить / блокировать» к нему не применяются.</div>')
     parts.append(
-        f'<div class="card"><h2>{esc(clients[ip])} <span class="mut">{esc(ip)}</span></h2>'
+        f'<div class="card"><h2>{esc(title)} <span class="mut">{esc(ip)}</span></h2>{sub}'
         f'<div class="tabs">{tab("24 часа", 24, show)}{tab("7 дней", 168, show)}</div>'
         f'<div class="tabs">{tab("все", hours, "all")}{tab("заблокировано", hours, "blocked")}{tab("разрешено", hours, "allowed")}</div>'
         '<div class="mut" style="margin-top:.5rem">Это <b>домены</b>, а не адреса страниц: HTTPS прячет путь и '
@@ -187,11 +218,18 @@ def page_log(ip, hours, show, msg=""):
     cards = []
     for r in rows:
         n = r["name"]
-        label = audit.list_label(api, n, filters)
-        badge = f'<span class="badge w">в списке: {esc(label)}</span>' if label else ""
+        label, threat = audit.list_label(api, n, filters)
+        if threat:
+            badge = f'<span class="badge w">⚠ угроза: {esc(label)}</span>'
+        elif label:
+            badge = f'<span class="badge">реклама/трекер: {esc(label)}</span>'
+        else:
+            badge = ""
         state = ("заблокирован" if not r["allowed"] else "разрешён" if not r["blocked"] else "и то и другое")
         acts = ""
-        if childpolicy.is_under(n, deny_x):
+        if not is_kid:
+            pass  # read-only for devices that are not configured as children's
+        elif childpolicy.is_under(n, deny_x):
             acts += '<span class="badge w">всегда блокируется</span>' + _list_form("deny", "remove", n, back, "снять блок")
         elif childpolicy.is_under(n, allow_x):
             acts += '<span class="badge">всегда разрешён</span>' + _list_form("allow", "remove", n, back, "снять")
