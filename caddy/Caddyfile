@@ -23,6 +23,14 @@ minisserver.tail6bf4d5.ts.net:13443 {
 	reverse_proxy 127.0.0.1:3000
 }
 
+minisserver.tail6bf4d5.ts.net:14443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 20: page to open YouTube/Roblox/Maps/everything for a limited time for the
+	# children's devices - tailnet only; the app itself also demands Basic auth.
+	reverse_proxy 127.0.0.1:8099
+}
+
 minisserver.tail6bf4d5.ts.net:9443 {
 	bind 100.76.61.8
 	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key

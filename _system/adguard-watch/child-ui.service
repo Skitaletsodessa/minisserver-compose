@@ -1,0 +1,12 @@
+[Unit]
+Description=Admin page for the children's DNS policy (Task 20) - loopback only, behind Caddy on the tailnet
+After=docker.service
+
+[Service]
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/adguard/child-ui.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

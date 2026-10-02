@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Temporary exceptions to the children's DNS policy.
+
+  child-override list
+  child-override open <youtube|roblox|maps|all> <30m|2h|eod> [--client 192.168.31.60]
+  child-override close [youtube|roblox|maps|all] [--client 192.168.31.60]
+
+`eod` = until the end of today (Prague time). With one child device configured, --client
+is optional. The web page (child-ui) does the same thing.
+"""
+import argparse
+import datetime
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import childpolicy  # noqa: E402
+import overrides  # noqa: E402
+
+
+def parse_duration(s):
+    if s == "eod":
+        return None
+    m = re.fullmatch(r"(\d+)([mh])", s)
+    if not m:
+        raise SystemExit("duration: 30m, 2h or eod")
+    n = int(m.group(1))
+    return n * (60 if m.group(2) == "h" else 1)
+
+
+def pick_client(arg):
+    clients = childpolicy.load_clients()
+    ips = [c[0] for c in clients]
+    if arg:
+        if arg not in ips:
+            raise SystemExit(f"unknown client {arg}; known: {', '.join(ips)}")
+        return arg
+    if len(ips) == 1:
+        return ips[0]
+    raise SystemExit(f"several clients configured, pass --client ({', '.join(ips)})")
+
+
+def show():
+    rows = overrides.active()
+    if not rows:
+        print("no active exceptions")
+    now = datetime.datetime.now(overrides.TZ)
+    for e in rows:
+        left = datetime.datetime.fromisoformat(e["expires"]) - now
+        print(f"{e['client']}  {e['target']:8}  until {e['expires']}  ({int(left.total_seconds() // 60)} min left)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list")
+    o = sub.add_parser("open")
+    o.add_argument("target", choices=list(overrides.TARGETS))
+    o.add_argument("duration")
+    o.add_argument("--client")
+    c = sub.add_parser("close")
+    c.add_argument("target", nargs="?", choices=list(overrides.TARGETS))
+    c.add_argument("--client")
+    a = ap.parse_args()
+
+    if a.cmd == "list":
+        show()
+        return
+    if a.cmd == "open":
+        exp = overrides.add(pick_client(a.client), a.target, parse_duration(a.duration))
+        print(f"opened {a.target} until {exp.strftime('%a %H:%M')}")
+    else:
+        n = overrides.remove(pick_client(a.client) if a.client else None, a.target)
+        print(f"closed {n} exception(s)")
+    for note in childpolicy.run():
+        print(note)
+
+
+if __name__ == "__main__":
+    main()
