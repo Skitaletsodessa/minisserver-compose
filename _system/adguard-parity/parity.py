@@ -39,9 +39,9 @@ TOLERANCE = 0.05          # relative difference in per-list rule counts that is 
 COUNT_GRACE = 3600        # seconds a count difference may persist before it alerts
 CONSECUTIVE = 2           # runs a mismatch must persist before alerting
 
-# Intentional differences (not compared). dns_info: private-PTR is forced off on the replica by the sync tool
-# (origin has it on with an empty list); default_local_ptr_upstreams come from each host's own resolvers.
-DNS_INFO_SKIP = {"default_local_ptr_upstreams", "use_private_ptr_resolvers", "local_ptr_upstreams"}
+# Intentional differences (not compared). dns_info: default_local_ptr_upstreams are computed from each host's own
+# resolvers. (use_private_ptr_resolvers is false on both since the 2026-10-02 DNS loop and IS compared.)
+DNS_INFO_SKIP = {"default_local_ptr_upstreams"}
 
 DNS_PROBES = ["example.com", "doubleclick.net", "use-application-dns.net", "dnssec-failed.org",
               "parity-probe-nonexistent-name.example.com"]
