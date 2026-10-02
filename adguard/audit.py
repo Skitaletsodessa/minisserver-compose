@@ -63,20 +63,24 @@ def collect(api, ip, hours, now=None):
     return rows, truncated
 
 
+THREAT_HINTS = ("urlhaus", "phishing", "malware", "threat", "scam")
+
+
 def list_label(api, name, filters):
-    """Which of the house-wide block lists (ads / trackers / threats) already lists this
-    domain, independent of the child's own catch-all. None = no list flags it."""
+    """Which of the house-wide block lists already lists this domain, independent of the
+    child's own catch-all. Returns (list name, is_threat_list) or (None, False) when no list
+    flags it. "Threat" = a malware/phishing feed; the other lists are ads/trackers."""
     hit = _class_cache.get(name)
     if hit and time.time() - hit[0] < _CLASS_TTL:
         return hit[1]
-    label = None
+    result = (None, False)
     try:
         r = api.call("GET", "/filtering/check_host?name=" + urllib.parse.quote(name))
         if str(r.get("reason", "")).startswith("Filtered"):
-            ids = [x.get("filter_list_id") for x in (r.get("rules") or [])]
-            names = [filters.get(i) for i in ids if i]
-            label = names[0] if names else "правило AdGuard"
+            names = [filters.get(x.get("filter_list_id")) for x in (r.get("rules") or []) if x.get("filter_list_id")]
+            label = next((n for n in names if n), "правило AdGuard")
+            result = (label, any(h in label.lower() for h in THREAT_HINTS))
     except Exception:  # noqa: BLE001 - a missing label must never break the page
-        label = None
-    _class_cache[name] = (time.time(), label)
-    return label
+        pass
+    _class_cache[name] = (time.time(), result)
+    return result
