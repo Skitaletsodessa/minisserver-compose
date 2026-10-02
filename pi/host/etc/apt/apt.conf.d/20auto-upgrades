@@ -1,0 +1,4 @@
+// Task 22 / CLAUDE.md rule 5: nothing is installed or restarted automatically.
+// The server reads the pending list weekly and tells Ivan.
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";

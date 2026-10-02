@@ -1,0 +1,8 @@
+[Unit]
+Description=Weekly piserver health and pending updates to Telegram (Task 22)
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/pi-watch/pi-weekly.sh

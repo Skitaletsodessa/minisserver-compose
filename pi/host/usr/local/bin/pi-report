@@ -1,0 +1,13 @@
+#!/bin/bash
+# Run on the Pi by the server's forced-command SSH key (Task 22). Read-only report, one line each.
+# The only thing it changes is the apt package list (apt-get update) - no package is installed.
+echo "throttled=$(vcgencmd get_throttled | cut -d= -f2)"
+echo "temp=$(vcgencmd measure_temp | cut -d= -f2)"
+echo "uptime=$(uptime -p)"
+echo "root_used=$(df --output=pcent / | tail -1 | tr -d ' ')"
+echo "sd_written_mib=$(awk '$3=="mmcblk0"{printf "%d", $10/2048}' /proc/diskstats)"
+sudo -n apt-get update -qq >/dev/null 2>&1
+n=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst ')
+sec=$(apt-get -s upgrade 2>/dev/null | grep '^Inst ' | grep -ci 'security')
+echo "upgradable=$n security=$sec"
+apt-get -s upgrade 2>/dev/null | grep '^Inst ' | awk '{print $2}' | head -20 | tr '\n' ' '; echo
