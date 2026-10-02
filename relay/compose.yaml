@@ -1,0 +1,44 @@
+# Task 23 fetch relay: NOT a general proxy. Fetches only the hosts in allowlist.txt, only https GET, for a caller
+# that signs each request (HMAC). Published on loopback only; nothing is exposed to the internet until Ivan says
+# so (Phase C: Cloudflare Tunnel / Funnel in front of 127.0.0.1:18090).
+# Hardening: non-root, read-only root filesystem, no capabilities, no-new-privileges, memory/CPU/pids limits,
+# its own network on a FIXED subnet (172.30.0.0/24) so relay-firewall.sh can drop its traffic to every private
+# range and to the host's own addresses (rule 2: never reach the house - enforced twice, here at the network layer
+# and in relay.py at the application layer).
+services:
+  relay:
+    build: .
+    image: relay:local
+    container_name: relay
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:18090:8080"
+    volumes:
+      - ./allowlist.txt:/app/allowlist.txt:ro
+      - /srv/apps/relay-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 64
+    networks: [relay-net]
+    dns: [1.1.1.1, 8.8.8.8]          # explicit public resolvers: the firewall drops the container's traffic to 100.64/10 (the host's MagicDNS)
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "10"}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  relay-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
