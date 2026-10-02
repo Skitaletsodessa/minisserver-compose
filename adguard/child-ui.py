@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import childpolicy  # noqa: E402
+import audit  # noqa: E402
 import overrides  # noqa: E402
 
 BIND = ("127.0.0.1", 8099)
@@ -41,6 +42,12 @@ button.p{background:var(--acc);border-color:var(--acc);color:#fff}button.d{color
 .ex{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:.35rem 0;border-top:1px solid var(--line)}
 .ex:first-of-type{border-top:0}code{font-size:.85rem;word-break:break-all}
 .ok{color:var(--ok)}.bad{color:var(--bad)}ul{margin:.3rem 0;padding-left:1.1rem}
+a{color:var(--acc)}.sm{padding:4px 9px;font-size:.85rem}.nav{margin:0 0 .8rem}
+.dom{padding:.55rem 0;border-top:1px solid var(--line)}.dom:first-of-type{border-top:0}
+.badge{display:inline-block;font-size:.75rem;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.badge.w{border-color:var(--bad);color:var(--bad)}.acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:.3rem}
+input[type=text]{font:inherit;padding:7px 10px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--fg);min-width:0;flex:1 1 12rem}
+.tabs a{margin-right:.8rem}.tabs b{margin-right:.8rem}
 """
 
 
@@ -79,7 +86,7 @@ def page(msg=""):
     now = datetime.datetime.now(overrides.TZ)
     sunday, in_window = childpolicy.schedule_state(now)
     active = overrides.active(now)
-    parts = [f"<h1>Ограничения для детей</h1>"]
+    parts = ['<h1>Ограничения для детей</h1><div class="nav"><a href="/log">Журнал посещений →</a></div>']
     if msg:
         parts.append(f'<div class="card ok">{esc(msg)}</div>')
     parts.append(
@@ -133,6 +140,90 @@ def page(msg=""):
             + "".join(parts) + "</main></body></html>")
 
 
+def _shell(body):
+    return ("<!doctype html><html lang=ru><head><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            f"<title>Журнал посещений</title><style>{CSS}</style></head><body><main>{body}</main></body></html>")
+
+
+def _list_form(kind, op, domain, back, label, cls=""):
+    return (f'<form method="post" action="/list"><input type="hidden" name="kind" value="{kind}">'
+            f'<input type="hidden" name="op" value="{op}"><input type="hidden" name="domain" value="{esc(domain)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}"><button class="sm {cls}">{label}</button></form>')
+
+
+def page_log(ip, hours, show, msg=""):
+    clients = {c[0]: c[1] for c in childpolicy.load_clients()}
+    if ip not in clients:
+        ip = next(iter(clients))
+    hours = hours if hours in (24, 168) else 24
+    show = show if show in ("all", "blocked", "allowed") else "all"
+    back = f"/log?ip={urllib.parse.quote(ip)}&h={hours}&show={show}"
+    api = childpolicy.Api()
+    rows, truncated = audit.collect(api, ip, hours)
+    filters = {f["id"]: f["name"] for f in api.call("GET", "/filtering/status").get("filters", [])}
+    allow_x, deny_x = childpolicy.extra_list("allow"), childpolicy.extra_list("deny")
+    if show == "blocked":
+        rows = [r for r in rows if r["blocked"]]
+    elif show == "allowed":
+        rows = [r for r in rows if r["allowed"]]
+    total = len(rows)
+    rows = rows[:300]
+
+    def tab(label, h, s):
+        sel = (h, s) == (hours, show)
+        return f"<b>{label}</b>" if sel else f'<a href="/log?ip={urllib.parse.quote(ip)}&h={h}&show={s}">{label}</a>'
+
+    parts = ['<h1>Журнал посещений</h1><div class="nav"><a href="/">← Ограничения</a></div>']
+    if msg:
+        parts.append(f'<div class="card ok">{esc(msg)}</div>')
+    parts.append(
+        f'<div class="card"><h2>{esc(clients[ip])} <span class="mut">{esc(ip)}</span></h2>'
+        f'<div class="tabs">{tab("24 часа", 24, show)}{tab("7 дней", 168, show)}</div>'
+        f'<div class="tabs">{tab("все", hours, "all")}{tab("заблокировано", hours, "blocked")}{tab("разрешено", hours, "allowed")}</div>'
+        '<div class="mut" style="margin-top:.5rem">Это <b>домены</b>, а не адреса страниц: HTTPS прячет путь и '
+        'параметры, DNS их не видит. «Нет в списках» не значит «безопасно» — только что ни один список не '
+        'помечал этот домен. Журнал AdGuard хранит 7 дней.</div></div>')
+    cards = []
+    for r in rows:
+        n = r["name"]
+        label = audit.list_label(api, n, filters)
+        badge = f'<span class="badge w">в списке: {esc(label)}</span>' if label else ""
+        state = ("заблокирован" if not r["allowed"] else "разрешён" if not r["blocked"] else "и то и другое")
+        acts = ""
+        if childpolicy.is_under(n, deny_x):
+            acts += '<span class="badge w">всегда блокируется</span>' + _list_form("deny", "remove", n, back, "снять блок")
+        elif childpolicy.is_under(n, allow_x):
+            acts += '<span class="badge">всегда разрешён</span>' + _list_form("allow", "remove", n, back, "снять")
+        else:
+            if r["blocked"]:
+                acts += _list_form("allow", "add", n, back, "Разрешить всегда")
+            acts += _list_form("deny", "add", n, back, "Блокировать навсегда", "d")
+        cards.append(
+            f'<div class="dom"><code>{esc(n)}</code> {badge}<div class="mut">{state} · '
+            f'{r["allowed"]} разр. / {r["blocked"]} блок. · последний раз {DAYS[r["last"].weekday()]} {r["last"]:%H:%M}</div>'
+            f'<div class="acts">{acts}</div></div>')
+    note = ""
+    if total > 300 or truncated:
+        note = '<div class="mut">Показаны последние 300 доменов' + (' (журнал за период длиннее, чем читаем за раз)' if truncated else '') + '.</div>'
+    parts.append(f'<div class="card"><h2>Домены ({total})</h2>{"".join(cards) or "<div class=mut>Пока ничего нет.</div>"}{note}</div>')
+
+    def listing(kind, items, title):
+        lis = "".join(f'<div class="ex"><code>{esc(d)}</code>{_list_form(kind, "remove", d, back, "убрать")}</div>' for d in items)
+        return f'<h2 style="margin-top:.8rem">{title}</h2>{lis or "<div class=mut>пусто</div>"}'
+
+    parts.append(
+        '<div class="card"><h2>Списки вручную (для всех детских устройств)</h2>'
+        '<form method="post" action="/list" class="row"><input type="text" name="domain" placeholder="example.com" '
+        'autocapitalize=none autocorrect=off required>'
+        f'<input type="hidden" name="op" value="add"><input type="hidden" name="back" value="{esc(back)}">'
+        '<button class="sm" name="kind" value="allow">Всегда разрешать</button>'
+        '<button class="sm d" name="kind" value="deny">Всегда блокировать</button></form>'
+        '<div class="mut">Поддомены включены. «Всегда блокировать» действует и тогда, когда открыто «Всё».</div>'
+        + listing("allow", allow_x, "Всегда разрешено") + listing("deny", deny_x, "Всегда заблокировано") + "</div>")
+    return _shell("".join(parts))
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "child-ui"
 
@@ -179,10 +270,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return
         u = urllib.parse.urlparse(self.path)
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        if u.path == "/log":
+            try:
+                h = int(q.get("h", "24"))
+            except ValueError:
+                h = 24
+            try:
+                return self._send(200, page_log(q.get("ip", ""), h, q.get("show", "all"), q.get("m", "")[:200]))
+            except Exception as e:  # noqa: BLE001
+                return self._send(502, f"AdGuard Home недоступен или ответил ошибкой: {e!r}", "text/plain; charset=utf-8")
         if u.path != "/":
             return self._send(404, "not found", "text/plain")
-        msg = urllib.parse.parse_qs(u.query).get("m", [""])[0][:200]
-        self._send(200, page(msg))
+        self._send(200, page(q.get("m", "")[:200]))
 
     def do_POST(self):
         if not self._authed():
@@ -195,6 +295,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, "bad origin", "text/plain")
         length = int(self.headers.get("Content-Length") or 0)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(length, 4096)).decode()).items()}
+        if self.path == "/list":
+            kind, op, domain = form.get("kind", ""), form.get("op", ""), form.get("domain", "")
+            back = form.get("back", "/log")
+            if kind not in ("allow", "deny") or op not in ("add", "remove") or not back.startswith("/log"):
+                return self._send(400, "bad request", "text/plain")
+            try:
+                childpolicy.extra_change(kind, domain, add=(op == "add"))
+                childpolicy.run()
+            except ValueError as e:
+                return self._send(400, str(e), "text/plain; charset=utf-8")
+            except Exception as e:  # noqa: BLE001
+                return self._send(502, f"Ошибка: {e!r}", "text/plain; charset=utf-8")
+            dom = domain.strip().lower().rstrip(".")
+            msg = {("allow", "add"): f"{dom}: теперь всегда разрешён.", ("deny", "add"): f"{dom}: теперь всегда блокируется.",
+                   ("allow", "remove"): f"{dom}: убран из «всегда разрешено».", ("deny", "remove"): f"{dom}: убран из «всегда заблокировано»."}[(kind, op)]
+            self.send_response(303)
+            self.send_header("Location", back.split("&m=")[0] + "&m=" + urllib.parse.quote(msg))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         ips = [c[0] for c in childpolicy.load_clients()]
         client, target = form.get("client", ""), form.get("target") or None
         if client not in ips or (target and target not in overrides.TARGETS):

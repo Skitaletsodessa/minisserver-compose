@@ -1,0 +1,2 @@
+# Managed from the admin page (child-ui). One domain per line; subdomains are included.
+# allow-extra: always allowed. deny-extra: always blocked, even when everything is opened.
