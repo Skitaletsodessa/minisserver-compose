@@ -16,4 +16,6 @@ allow-hotplug eno1
 iface eno1 inet static
     address 192.168.31.2/24
     gateway 192.168.31.1
-    dns-nameservers 192.168.31.1
+    # Task 21: NOT the router - since Phase B the router asks AdGuard, and the server must not depend on AdGuard
+    # (and AGH forwarding PTR queries back into Tailscale DNS made a loop). Plain DNS to Quad9 is unreachable here.
+    dns-nameservers 1.1.1.1 8.8.8.8

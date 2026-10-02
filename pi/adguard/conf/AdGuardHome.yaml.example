@@ -5,6 +5,7 @@
 #   - querylog: memory-only (file_enabled false), 6 h, so the SD card is not written per query
 #   - statistics: off (no stats.db writes); query-log and stats settings are NOT synced
 #   - http.address stays 127.0.0.1:3000 - same as the origin; reachable only through tailscale serve
+#   - (use_private_ptr_resolvers is now false on BOTH: on the origin it formed a DNS loop through Tailscale, see report-21a section 8)
 #   - not synced: DHCP (off on both), TLS (off on both), web UI theme
 http:
   pprof:
@@ -83,7 +84,7 @@ dns:
   bootstrap_prefer_ipv6: false
   upstream_timeout: 10s
   private_networks: []
-  use_private_ptr_resolvers: true
+  use_private_ptr_resolvers: false
   local_ptr_upstreams: []
   use_dns64: false
   dns64_prefixes: []
