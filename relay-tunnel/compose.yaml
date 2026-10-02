@@ -1,0 +1,24 @@
+# Task 23 Phase C: outbound-only Cloudflare Tunnel to the loopback relay port. No inbound port is opened on the house,
+# no router change, no Funnel. Cloudflare Access (service token) stops everybody else at Cloudflare's edge; the relay's
+# HMAC check and allow-list are the second and third locks.
+# Host network on purpose: the relay is published on 127.0.0.1:18090 (the relay container's own subnet is firewalled
+# against private ranges, so a sidecar there could not reach it). cloudflared opens no listening socket except its
+# metrics endpoint on loopback. Started only after the token exists:  docker compose up -d
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: relay-tunnel
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env                     # TUNNEL_TOKEN=... (git-ignored, mode 600)
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:20241 run
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    labels:
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^20\d\d\.\d+\.\d+$$"
