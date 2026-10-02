@@ -1,0 +1,15 @@
+services:
+  adguardhome:
+    image: adguard/adguardhome:v0.107.79
+    container_name: adguardhome
+    restart: unless-stopped
+    network_mode: host
+    labels:
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=5"
+      - "diun.include_tags=^v\\d+\\.\\d+\\.\\d+$$"
+    volumes:
+      - /srv/compose/adguard/conf:/opt/adguardhome/conf
+      - /srv/apps/adguard/work:/opt/adguardhome/work

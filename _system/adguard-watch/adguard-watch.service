@@ -1,0 +1,7 @@
+[Unit]
+Description=Check AdGuard Home actually answers real DNS queries (Task 20)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/adguard-watch/adguard-watch.sh
