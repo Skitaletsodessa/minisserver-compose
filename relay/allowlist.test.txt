@@ -1,0 +1,4 @@
+# TEST instance only. example.com is IANA's test host; *.nip.io answers with whatever address is in the name,
+# which makes real DNS return private addresses for allow-listed names.
+example.com
+*.nip.io

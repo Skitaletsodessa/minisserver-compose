@@ -1,0 +1,9 @@
+# Hosts the relay may fetch (https only, GET only). One per line: host or *.suffix, then optional flags:
+#   cookies  - the caller's Cookie header is forwarded and Set-Cookie pairs are returned in X-Relay-Cookies
+#   images   - image/* responses are allowed (up to the body cap)
+# Start with only what the reality-parser Worker sends through paid proxies today (Ivan, 2026-10-02):
+#   Sreality search (_next/data), Sreality detail fallback, /api/verify-alive for Sreality and Bazos, Bazos images.
+# Everything else the Worker fetches directly from Cloudflare and does NOT belong here.
+www.sreality.cz   cookies
+reality.bazos.cz
+www.bazos.cz      images

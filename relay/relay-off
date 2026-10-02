@@ -1,0 +1,3 @@
+#!/bin/sh
+# Task 23 kill switch / status. Works in seconds over SSH: relay-off, relay-on, relay-status, relay-reset (circuit breakers).
+exec docker exec relay python /app/relayctl.py off

@@ -1,0 +1,12 @@
+[Unit]
+Description=Network-layer lock for the fetch relay: drop its traffic to private ranges and the host (Task 23)
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/srv/compose/relay/relay-firewall.sh
+
+[Install]
+WantedBy=multi-user.target docker.service

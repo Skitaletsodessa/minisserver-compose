@@ -1,0 +1,28 @@
+# Test instance for the attack suite (Task 23). Same image and hardening as production, loopback port 18091,
+# its own state, its own secret, a test allow-list (example.com + *.nip.io) and a small daily cap. Never exposed.
+# Start only when testing:  docker compose -f compose.test.yaml up -d ; stop afterwards.
+services:
+  relay-test:
+    image: relay:local
+    container_name: relay-test
+    env_file: .env.test
+    ports:
+      - "127.0.0.1:18091:8080"
+    volumes:
+      - ./allowlist.test.txt:/app/allowlist.txt:ro
+      - /srv/apps/relay-state-test:/state
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 64
+    dns: [1.1.1.1, 8.8.8.8]
+    networks: [relay-net]
+
+networks:
+  relay-net:
+    external: true
+    name: relay_relay-net

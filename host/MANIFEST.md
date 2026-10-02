@@ -257,3 +257,9 @@ automation another way to escalate.
 **What changed:** `dns-nameservers 192.168.31.1` -> `1.1.1.1 8.8.8.8` (backup `/etc/network/interfaces.bak-task21`).
 
 **Why:** since Phase B the router asks AdGuard, so the server's own resolution chain (apps -> Tailscale MagicDNS -> `eno1` nameserver -> router -> AdGuard) made the server depend on AdGuard, breaking the Task 20 rule that it never does. In the same minutes AdGuard's PTR queries for private addresses went into MagicDNS and came back through the router, a loop that filled MagicDNS's request queue ("dns udp query: request queue full", SERVFAIL) and killed all name resolution on the server for about 40 minutes (17:12-17:50). Fixed twice over: AdGuard's `use_private_ptr_resolvers` is off (origin and replica), and the base resolvers bypass the router. Tailscale needed `systemctl restart tailscaled` to re-read them. Plain DNS to Quad9 is unreachable from this network, so it is not used.
+
+## `etc/sysctl.d/99-tailscale-exit-node.conf` — exit node forwarding (Task 23, 2026-10-02)
+IPv4 and IPv6 forwarding on, for the Tailscale exit node (`tailscale set --advertise-exit-node`, approved in the admin console). IPv4 forwarding was already 1 because of Docker; stated explicitly. Mirror copy: `etc/sysctl.d/99-tailscale-exit-node.conf`.
+
+## Relay firewall — `/srv/compose/relay/relay-firewall.sh` + `relay-firewall.service` (Task 23)
+Not a file under `/etc`, but host network policy: nftables table `inet relay_guard` (priority -10) and the iptables layer `RELAY-EGRESS` drop the relay container's (`172.30.0.0/24`) traffic to every private/special range and to the host's own addresses. `relay-firewall.service` runs after Docker and is part of it. Linked into `/etc/systemd/system/` together with `relay-watch.{service,timer}`; the `relay-*` CLIs are symlinked in `/usr/local/bin`.

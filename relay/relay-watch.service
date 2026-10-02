@@ -1,0 +1,7 @@
+[Unit]
+Description=Telegram alerts for the fetch relay (Task 23)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/relay/relay-watch.py
