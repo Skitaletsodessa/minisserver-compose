@@ -214,6 +214,22 @@ def ensure_client(api, ip, name, mac):
     return "updated"
 
 
+SYNC_TRIGGER = Path(__file__).resolve().parent / "sync-trigger.py"
+
+
+def trigger_sync():
+    """Task 21: tell adguard-sync to push the change to the replica NOW instead of at the next minute tick,
+    so the two resolvers disagree for seconds, not up to a minute, at the moments the policy changes (window
+    boundaries, expiring exceptions, UI clicks). Detached (a pass takes ~10 s and the caller holds a lock);
+    best effort, the 1-minute cron is the net."""
+    try:
+        import subprocess
+        subprocess.Popen([sys.executable, str(SYNC_TRIGGER)], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:  # noqa: BLE001 - never let the sync trigger break the policy job
+        print(f"trigger_sync: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def run(now=None):
     """Applies the policy. Returns a list of human-readable change notes (empty = nothing
     changed). Raises URLError if AGH is down, HTTPError on API/auth failures."""
@@ -239,6 +255,8 @@ def run(now=None):
             r = ensure_client(api, ip, name, mac)
             if r:
                 notes.append(f"client {name} ({ip}): {r}")
+        if notes:
+            trigger_sync()
         return notes
 
 

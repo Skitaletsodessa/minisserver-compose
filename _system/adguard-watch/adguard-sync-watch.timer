@@ -1,0 +1,9 @@
+[Unit]
+Description=Run adguard-sync-watch every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

@@ -45,7 +45,7 @@ for p in avahi-daemon triggerhappy bluez cups modemmanager rpi-connect rpi-conne
   if dpkg -s "$p" 2>/dev/null | grep -q '^Status: install ok installed'; then apt-get -y -qq purge "$p" >/dev/null 2>&1; did "purged $p"; fi
 done
 apt-get -y -qq autoremove --purge >/dev/null
-for p in nftables fake-hwclock; do
+for p in nftables fake-hwclock python3-yaml curl bind9-dnsutils; do
   dpkg -s "$p" 2>/dev/null | grep -q '^Status: install ok installed' || { apt-get -y -qq install "$p" >/dev/null 2>&1; did "installed $p"; }
 done
 
@@ -58,12 +58,16 @@ grep -qxF "$line" /home/skit/.ssh/authorized_keys || { echo "$line" >> /home/ski
 say "SSH: key-only (validated before reload)"
 if put etc/ssh/sshd_config.d/10-piserver.conf 644; then sshd -t && systemctl reload ssh || { echo "FATAL sshd config"; exit 1; }; fi
 
+say "host resolver: independent of the server (global DNS in NetworkManager)"
+if put etc/NetworkManager/conf.d/10-piserver-dns.conf 644; then systemctl reload NetworkManager; sleep 2; fi
+
 say "SD wear: journald"
 if put etc/systemd/journald.conf.d/10-sdwear.conf 644; then systemctl restart systemd-journald; fi
 
 say "firewall"
 if put etc/nftables.conf 755; then
-  nft -c -f /etc/nftables.conf && systemctl enable nftables >/dev/null 2>&1 && systemctl restart nftables || { echo "FATAL nft"; exit 1; }
+  # NOT "systemctl restart nftables": the Debian unit runs "nft flush ruleset" on stop and would wipe Docker's tables.
+  nft -c -f /etc/nftables.conf && nft -f /etc/nftables.conf && systemctl enable nftables >/dev/null 2>&1 || { echo "FATAL nft"; exit 1; }
 fi
 if ! nft list table inet piserver >/dev/null 2>&1; then
   nft -c -f /etc/nftables.conf && nft -f /etc/nftables.conf && did "firewall table loaded into the running kernel"
@@ -82,6 +86,18 @@ say "hardware: audio and camera off, I2C/SPI/1-wire stay off"
 cfg=/boot/firmware/config.txt
 grep -q '^dtparam=audio=on' "$cfg"       && { sed -i 's/^dtparam=audio=on/dtparam=audio=off/' "$cfg"; did "audio off"; }
 grep -q '^camera_auto_detect=1' "$cfg"   && { sed -i 's/^camera_auto_detect=1/camera_auto_detect=0/' "$cfg"; did "camera detect off"; }
+
+say "mutual DNS watchdog (the Pi checks the server's AdGuard)"
+put usr/local/bin/adguard-watch-origin 755
+put etc/systemd/system/adguard-watch-origin.service 644 && systemctl daemon-reload
+put etc/systemd/system/adguard-watch-origin.timer 644 && systemctl daemon-reload
+systemctl is-enabled adguard-watch-origin.timer >/dev/null 2>&1 || { systemctl enable --now adguard-watch-origin.timer >/dev/null 2>&1; did "enabled adguard-watch-origin.timer"; }
+
+say "Tailscale serve: AdGuard admin UI to the tailnet only (loopback :3000 behind tailscale)"
+if [ "$(tailscale status --json 2>/dev/null | grep -o '"BackendState": *"[A-Za-z]*"' | head -1 | cut -d'"' -f4)" = "Running" ]; then
+  tailscale serve status 2>/dev/null | grep -q "127.0.0.1:3000" || { tailscale serve --bg --https=443 http://127.0.0.1:3000 >/dev/null; did "tailscale serve 443 -> 127.0.0.1:3000"; }
+  tailscale set --accept-dns=false >/dev/null 2>&1
+fi
 
 say "result"
 echo "   hostname -f: $(hostname -f)"

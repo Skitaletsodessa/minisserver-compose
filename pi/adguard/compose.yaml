@@ -1,0 +1,14 @@
+# AdGuard Home REPLICA on piserver (Task 21). Nothing is configured here by hand: the server's AGH is
+# the origin and adguard-sync (on the server) pushes lists, rules, clients, upstreams and rewrites.
+# The image tag MUST equal the server's /srv/compose/adguard/compose.yaml (the parity checker alerts on a
+# difference). Diun on the server already watches this tag; no Diun label is needed here.
+# Update both on the same day.
+services:
+  adguardhome:
+    image: adguard/adguardhome:v0.107.79
+    container_name: adguardhome
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./conf:/opt/adguardhome/conf
+      - ./work:/opt/adguardhome/work

@@ -1,0 +1,7 @@
+[Unit]
+Description=Check the server's AdGuard Home really answers (Task 21, runs on the Pi)
+
+[Service]
+Type=oneshot
+StateDirectory=adguard-watch-origin
+ExecStart=/usr/local/bin/adguard-watch-origin

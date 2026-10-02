@@ -1,0 +1,7 @@
+[Unit]
+Description=Check adguard-sync reports success for origin and replica (Task 21)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/adguard-watch/adguard-sync-watch.sh
