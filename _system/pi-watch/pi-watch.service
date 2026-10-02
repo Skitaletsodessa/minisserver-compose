@@ -1,0 +1,7 @@
+[Unit]
+Description=Is piserver alive (ping + SSH port) (Task 22)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/pi-watch/pi-watch.sh
