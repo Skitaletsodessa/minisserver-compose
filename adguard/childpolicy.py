@@ -25,6 +25,7 @@ Limit that DNS cannot fix: closing a domain stops NEW lookups; a stream already 
 keeps playing until it ends, and the phone's DNS cache can keep names alive for minutes.
 """
 import base64
+import re
 import datetime
 import fcntl
 import json
@@ -60,6 +61,47 @@ def read_list(name):
             out.append(line)
     return out
 
+
+# A domain name that is safe to place inside a filtering rule: letters, digits, hyphens and
+# dots only, at least two labels. Nothing that could smuggle in a rule modifier ($ ^ | / etc).
+DOMAIN_RE = re.compile(
+    r"^(?=.{4,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+EXTRA = {"allow": "allow-extra.txt", "deny": "deny-extra.txt"}
+EXTRA_HEADER = [
+    "# Managed from the admin page (child-ui). One domain per line; subdomains are included.",
+    "# allow-extra: always allowed. deny-extra: always blocked, even when everything is opened.",
+]
+
+
+def read_optional(name):
+    return read_list(name) if (POLICY / name).exists() else []
+
+
+def extra_list(kind):
+    return read_optional(EXTRA[kind])
+
+
+def _write_extra(kind, domains):
+    (POLICY / EXTRA[kind]).write_text("\n".join(EXTRA_HEADER + sorted(set(domains))) + "\n", encoding="utf-8")
+
+
+def extra_change(kind, domain, add):
+    """Add/remove one domain in allow-extra.txt or deny-extra.txt. Adding to one list
+    removes it from the other (a domain cannot be both)."""
+    domain = (domain or "").strip().lower().rstrip(".")
+    if not DOMAIN_RE.match(domain):
+        raise ValueError(f"not a valid domain: {domain!r}")
+    other = "deny" if kind == "allow" else "allow"
+    mine = [d for d in extra_list(kind) if d != domain]
+    if add:
+        mine.append(domain)
+        _write_extra(other, [d for d in extra_list(other) if d != domain])
+    _write_extra(kind, mine)
+
+
+def is_under(domain, parents):
+    return any(domain == p or domain.endswith("." + p) for p in parents)
 
 def load_clients():
     clients = []
@@ -100,18 +142,25 @@ def render_block(api, clients, now, active_overrides):
     base = set(read_list("allow-always.txt")) | set(service_domains(api, ["telegram"]))
     maps = set(read_list("allow-weekdays.txt"))
     gated = {t: set(service_domains(api, [t])) for t in GATED}
+    extra_allow = set(extra_list("allow"))
+    deny = sorted(set(extra_list("deny")))
     lines = [BEGIN]
     for ip, _name in clients:
         targets = {e["target"] for e in active_overrides if e["client"] == ip}
+        # "Block always" holds even while everything is opened: that is the case where it matters.
+        deny_rules = [f"||{d}^$client={ip}" for d in deny]
         if "all" in targets:
-            continue  # no catch-all for this device while the exception lasts
-        allowed = set(base)
+            lines += deny_rules  # no catch-all for this device while the exception lasts
+            continue
+        allowed = set(base) | extra_allow
         if not sunday or "maps" in targets:
             allowed |= maps
         for t in GATED:
             if in_window or t in targets:
                 allowed |= gated[t]
+        allowed = {d for d in allowed if not is_under(d, deny)}
         lines.append(f"||*^$client={ip}")
+        lines += deny_rules
         lines += [f"@@||{d}^$client={ip}" for d in sorted(allowed)]
     lines.append(END)
     return lines
