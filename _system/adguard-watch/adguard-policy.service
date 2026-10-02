@@ -1,0 +1,7 @@
+[Unit]
+Description=Apply the children's DNS policy to AdGuard Home (Task 20)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/adguard/apply-child-policy.py

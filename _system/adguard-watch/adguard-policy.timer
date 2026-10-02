@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-render the children's DNS policy at the day/window boundaries (+ self-heal)
+
+[Timer]
+OnCalendar=*-*-* 00:00:10
+OnCalendar=*-*-* 16:00:10
+OnCalendar=*-*-* 19:00:10
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

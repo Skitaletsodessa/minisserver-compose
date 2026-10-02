@@ -1,0 +1,12 @@
+# Allowed every day, all day. Seeded with the Android plumbing a phone needs to
+# function at all under a block-everything policy; refine from the AGH query log
+# of the real device (admin UI -> Query log, filter by client), not by guessing.
+# --- connectivity check / time / push (Telegram notifications ride FCM)
+connectivitycheck.gstatic.com
+connectivitycheck.android.com
+time.android.com
+mtalk.google.com
+fcm.googleapis.com
+firebaseinstallations.googleapis.com
+android.apis.google.com
+# --- weather: app not yet identified - add its domains here once known
