@@ -22,10 +22,12 @@ dns:
   - 192.168.31.2
   port: 53
   anonymize_client_ip: false
-  ratelimit: 20
+  ratelimit: 500
   ratelimit_subnet_len_ipv4: 24
   ratelimit_subnet_len_ipv6: 56
-  ratelimit_whitelist: []
+  ratelimit_whitelist:
+  - 192.168.31.1
+  - 192.168.31.2
   refuse_any: true
   upstream_dns:
   - https://dns10.quad9.net/dns-query
