@@ -1,0 +1,43 @@
+# Task 21: mirrors the server's AdGuard Home (origin) onto the Pi's (replica) through AGH's own API, live.
+# One source of truth: nothing is ever configured on the replica by hand. Runs on the server.
+# Bridge network on purpose: the sync API is published on loopback only (127.0.0.1:18086), never 0.0.0.0.
+# Origin and replica are both reached over the tailnet HTTPS names (valid certificates).
+services:
+  adguard-sync:
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.3
+    container_name: adguard-sync
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18086:8080"
+    environment:
+      LOG_LEVEL: info
+      CRON: "* * * * *"          # every minute; policy job and override CLI also POST /api/v1/sync right after a change
+      RUN_ON_START: "true"
+      CONTINUE_ON_ERROR: "false"
+      HTTP_CLIENT_TIMEOUT: 60s
+      API_PORT: "8080"
+      API_USERNAME: ${SYNC_API_USER}
+      API_PASSWORD: ${SYNC_API_PASSWORD}
+      ORIGIN_URL: https://minisserver.tail6bf4d5.ts.net:13443
+      ORIGIN_USERNAME: admin
+      ORIGIN_PASSWORD: ${ORIGIN_PASSWORD}
+      REPLICA1_URL: https://piserver.tail6bf4d5.ts.net
+      REPLICA1_USERNAME: admin
+      REPLICA1_PASSWORD: ${REPLICA1_PASSWORD}
+      # Every feature set explicitly; a default that silently skips one is the trap.
+      FEATURES_GENERAL_SETTINGS: "true"
+      FEATURES_PROTECTION_STATUS: "true"
+      FEATURES_FILTERS_BLACKLIST: "true"
+      FEATURES_FILTERS_WHITELIST: "true"
+      FEATURES_FILTERS_USER_RULES: "true"     # the block childpolicy.py renders, incl. temporary exceptions
+      FEATURES_CLIENT_SETTINGS: "true"        # persistent clients incl. Safe Search
+      FEATURES_SERVICES: "true"               # blocked services and their schedules
+      FEATURES_DNS_SERVER_CONFIG: "true"      # upstreams, mode, bootstrap, DNSSEC, cache, rate limit + whitelist
+      FEATURES_DNS_ACCESS_LISTS: "true"
+      FEATURES_DNS_REWRITES: "true"
+      FEATURES_DHCP_SERVER_CONFIG: "false"    # intentional: off on both
+      FEATURES_DHCP_STATIC_LEASES: "false"
+      FEATURES_QUERY_LOG_CONFIG: "false"      # intentional: the replica logs in memory only (SD wear)
+      FEATURES_STATS_CONFIG: "false"          # intentional: replica statistics off
+      FEATURES_THEME: "false"
+      FEATURES_TLS_CONFIG: "false"            # intentional: no TLS on either

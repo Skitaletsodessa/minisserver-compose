@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the replica watch every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

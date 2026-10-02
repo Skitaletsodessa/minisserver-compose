@@ -1,0 +1,31 @@
+#!/bin/bash
+# Task 21 mutual watchdog, the Pi's half: does the SERVER's AdGuard Home (192.168.31.2) really answer?
+# A real A record for a normal name AND the known-blocked name sinkholed. 3 consecutive bad checks ->
+# one Telegram message, recovery -> one. Trade-off stated in CLAUDE.md: the Pi holds a Telegram bot token
+# (/etc/piserver/telegram.env, mode 600) - it can only SEND messages.
+set -uo pipefail
+TARGET=${WATCH_TARGET:-192.168.31.2}   # WATCH_TARGET is only for tests: messages then start with [TEST]
+TESTTAG=${WATCH_TARGET:+[TEST] }
+STATE_DIR=${STATE_DIRECTORY:-/var/lib/adguard-watch-origin}
+ENV_FILE=/etc/piserver/telegram.env
+mkdir -p "$STATE_DIR"
+[ -f "$ENV_FILE" ] || { echo "no $ENV_FILE (deploy-pi.sh installs it)" >&2; exit 1; }
+set -a; . "$ENV_FILE"; set +a
+send() { curl -s -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=$1" >/dev/null; }
+n=$(dig @"$TARGET" example.com +short +time=3 +tries=1 A 2>/dev/null)
+b=$(dig @"$TARGET" doubleclick.net +short +time=3 +tries=1 A 2>/dev/null)
+ok_n=false; echo "$n" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' && ok_n=true
+ok_b=false; [ "$b" = "0.0.0.0" ] && ok_b=true
+if $ok_n && $ok_b; then
+  [ -f "$STATE_DIR/alerted" ] && { send "${TESTTAG}piserver adguard-watch: the ORIGIN AdGuard on the server ($TARGET) answers again (normal and blocked-domain checks pass)."; rm -f "$STATE_DIR/alerted"; }
+  echo 0 > "$STATE_DIR/count"; exit 0
+fi
+c=$(cat "$STATE_DIR/count" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$STATE_DIR/count"
+echo "check failed (normal_ok=$ok_n blocked_ok=$ok_b) consecutive=$c" >&2
+if [ "$c" -ge 3 ] && [ ! -f "$STATE_DIR/alerted" ]; then
+  touch "$STATE_DIR/alerted"
+  send "${TESTTAG}piserver adguard-watch: the ORIGIN AdGuard on the server ($TARGET) failed $c consecutive checks.
+normal (example.com): ${n:-<none>}; blocked (doubleclick.net): ${b:-<none>} (expected 0.0.0.0). The house is being served by this Pi's replica."
+fi
+exit 0

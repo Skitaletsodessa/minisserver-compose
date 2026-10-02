@@ -9,11 +9,12 @@
 #     actually processing queries, even if something is listening on :53)
 set -uo pipefail
 
-SERVER=192.168.31.2
+SERVER=${WATCH_TARGET:-192.168.31.2}      # Task 21: the same script watches the replica (WATCH_TARGET=192.168.31.5)
+LABEL=${WATCH_LABEL:-origin}
 NORMAL_DOMAIN=example.com
 BLOCKED_DOMAIN=doubleclick.net
 
-STATE_DIR=/var/lib/adguard-watch
+STATE_DIR=${WATCH_STATE_DIR:-/var/lib/adguard-watch}
 COUNT_FILE="$STATE_DIR/consecutive-failures"
 ALERTED_FILE="$STATE_DIR/alerted"
 ENV_FILE=/srv/compose/scrutiny/.env
@@ -50,7 +51,7 @@ fi
 
 if $normal_ok && $blocked_ok; then
     if [ -f "$ALERTED_FILE" ]; then
-        send_telegram "minisserver adguard-watch: AdGuard Home DNS recovered (normal and blocked-domain checks both passing again)."
+        send_telegram "minisserver adguard-watch: AdGuard Home DNS ($LABEL, $SERVER) recovered (normal and blocked-domain checks both passing again)."
         rm -f "$ALERTED_FILE"
     fi
     echo 0 > "$COUNT_FILE"
@@ -68,7 +69,7 @@ echo "adguard-watch: check failed (normal_ok=$normal_ok blocked_ok=$blocked_ok),
 
 if [ "$COUNT" -ge 3 ] && [ ! -f "$ALERTED_FILE" ]; then
     touch "$ALERTED_FILE"
-    send_telegram "minisserver adguard-watch: AdGuard Home DNS has failed $COUNT consecutive checks.
+    send_telegram "minisserver adguard-watch: AdGuard Home DNS ($LABEL, $SERVER) has failed $COUNT consecutive checks.
 normal domain ($NORMAL_DOMAIN) answer: ${normal_answer:-<none>}
 blocked domain ($BLOCKED_DOMAIN) answer: ${blocked_answer:-<none>} (expected 0.0.0.0)"
 fi
