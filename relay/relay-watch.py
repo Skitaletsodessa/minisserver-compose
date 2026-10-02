@@ -52,6 +52,23 @@ def main():
         if st["health_fail"] >= 3 and not st.get("alerted_health"):
             tg("the relay is not answering on 127.0.0.1:18090 (3 checks).")
             st["alerted_health"] = True
+    # 1b. the Cloudflare tunnel: cloudflared answers /ready with 200 while it holds a connection to the edge
+    try:
+        urllib.request.urlopen("http://127.0.0.1:20241/ready", timeout=4).read()
+        tok = True
+    except Exception:  # noqa: BLE001
+        tok = False
+    if os.path.exists("/srv/compose/relay-tunnel/.env"):      # only once the tunnel has been set up
+        if tok:
+            if st.get("alerted_tunnel"):
+                tg("the Cloudflare tunnel is connected again.")
+                st["alerted_tunnel"] = False
+            st["tunnel_fail"] = 0
+        else:
+            st["tunnel_fail"] = st.get("tunnel_fail", 0) + 1
+            if st["tunnel_fail"] >= 3 and not st.get("alerted_tunnel"):
+                tg("the Cloudflare tunnel (relay.ivandeliver.email) is not connected (3 checks): the Worker falls back to the paid providers.")
+                st["alerted_tunnel"] = True
     # 2. events since the last offset
     off = st.get("offset", 0)
     try:
