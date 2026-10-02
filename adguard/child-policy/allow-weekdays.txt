@@ -1,0 +1,5 @@
+# Allowed Monday-Saturday, dropped on Sundays (Sunday = Telegram + weather only).
+# Google Maps. Seeded with the obvious API/tile hosts; refine from the real query log.
+maps.googleapis.com
+maps.gstatic.com
+maps.google.com
