@@ -9,4 +9,6 @@ mtalk.google.com
 fcm.googleapis.com
 firebaseinstallations.googleapis.com
 android.apis.google.com
-# --- weather: app not yet identified - add its domains here once known
+# --- weather: AccuWeather (Motorola stock weather app), seen in Vlad's phone query log 2026-10-02
+accuweather.com
+awxcdn.com
