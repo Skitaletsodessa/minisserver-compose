@@ -25,7 +25,7 @@ TMP = tempfile.mkdtemp(prefix="relay-unit-")
 os.environ.update({"RELAY_STATE_DIR": TMP, "RELAY_SECRET": "x" * 40, "RELAY_ALLOWLIST": os.path.join(TMP, "allow.txt"),
                    "RELAY_RATE_PER_SEC": "1000", "RELAY_BURST": "1000", "RELAY_BREAKER_THRESHOLD": "5"})
 open(os.environ["RELAY_ALLOWLIST"], "w").write(
-    "victim.test cookies\nplain.test\npriv-name.test\nmixed.test\nv6only.test\nrebind.test\n")
+    "victim.test cookies\nplain.test\nimg.test images\npriv-name.test\nmixed.test\nv6only.test\nrebind.test\n")
 import relay  # noqa: E402
 
 relay.TOTAL_TIMEOUT = 4.0
@@ -33,7 +33,7 @@ relay.TOTAL_TIMEOUT = 4.0
 # ---- local TLS victim ---------------------------------------------------------------------------------------
 cert, key = os.path.join(TMP, "c.pem"), os.path.join(TMP, "k.pem")
 subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1",
-                "-subj", "/CN=victim.test", "-addext", "subjectAltName=DNS:victim.test,DNS:plain.test,DNS:priv-name.test,DNS:mixed.test,DNS:rebind.test"],
+                "-subj", "/CN=victim.test", "-addext", "subjectAltName=DNS:victim.test,DNS:plain.test,DNS:priv-name.test,DNS:mixed.test,DNS:rebind.test,DNS:img.test"],
                check=True, capture_output=True)
 SERVER_CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 SERVER_CTX.load_cert_chain(cert, key)
@@ -59,6 +59,20 @@ class Victim(http.server.BaseHTTPRequestHandler):
         p = self.path
         if p == "/ok":
             self.reply(200, b"<html>hello</html>")
+        elif p == "/closed":                                  # nginx-style: Connection: close + Content-Length
+            body = b"<html>" + b"Z" * 400000 + b"</html>"
+            self.send_response(200); self.send_header("Content-Type", "image/jpeg"); self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close"); self.end_headers(); self.wfile.write(body); self.close_connection = True
+        elif p == "/chunked":
+            self.send_response(200); self.send_header("Content-Type", "text/html"); self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close"); self.end_headers()
+            for part in (b"<html>", b"A" * 70000, b"</html>"):
+                self.wfile.write(("%x\r\n" % len(part)).encode() + part + b"\r\n")
+            self.wfile.write(b"0\r\n\r\n"); self.close_connection = True
+        elif p == "/cookie2":
+            self.reply(200, b"<html>c2</html>", extra=[("Set-Cookie", "consent=no; Path=/"), ("Set-Cookie", "ab=9; Path=/")])
+        elif p == "/to-cookie2":
+            self.reply(302, extra=[("Location", "/cookie2"), ("Set-Cookie", "consent=yes"), ("Set-Cookie", "ab=7")])
         elif p == "/cookie":
             self.reply(200, b"<html>c</html>", extra=[("Set-Cookie", "consent=yes; Path=/; Secure"), ("Set-Cookie", "ab=7; Path=/")])
         elif p == "/big":
@@ -181,6 +195,12 @@ case("cookies: pairs returned for a 'cookies' host, no attributes", V + "cookie"
      check=lambda r: r["cookie_pairs"] == ["consent=yes", "ab=7"])
 case("no cookies returned for a host without the flag", "https://plain.test/cookie", expect_status=200,
      check=lambda r: r["cookie_pairs"] == [])
+case("Connection: close + Content-Length, 400 KB, image type on a host WITHOUT images flag is refused", "https://plain.test/closed", expect_reason="content_type_not_allowed")
+case("Connection: close + Content-Length, 400 KB (the Bazos image bug)", "https://img.test/closed", expect_status=200,
+     check=lambda r: len(r["body"]) == 400013)
+case("Connection: close + chunked body", V + "chunked", expect_status=200, check=lambda r: len(r["body"]) == 70013)
+case("cookies across a redirect: one pair per name, last value wins", V + "to-cookie2", expect_status=200,
+     check=lambda r: sorted(r["cookie_pairs"]) == ["ab=9", "consent=no"])
 case("oversize body (6 MB > 5 MB cap)", V + "big", expect_reason="body_too_large")
 case("gzip bomb (80 MB of zeros in ~80 KB)", V + "bomb", expect_reason="body_too_large")
 case("slow body (1 byte/s, 4 s deadline)", V + "slow", expect_reason="timeout_reading_body")

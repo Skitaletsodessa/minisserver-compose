@@ -353,7 +353,12 @@ def fetch_hop(host, path, flags, caller_headers, deadline):
         while True:
             if time.monotonic() > deadline:
                 raise Refuse(504, "timeout_reading_body")
-            s.settimeout(max(0.5, min(5.0, deadline - time.monotonic())))
+            if resp.isclosed():                           # a "Connection: close" response closes itself after the last byte
+                break
+            try:
+                s.settimeout(max(0.5, min(5.0, deadline - time.monotonic())))
+            except OSError:                               # socket already closed by the library at EOF: nothing left to read
+                break
             try:
                 chunk = resp.read1(16384)
             except (socket.timeout, TimeoutError):
@@ -406,7 +411,9 @@ def do_fetch(url, caller_headers):
         finally:
             g.sem.release()
         if "cookies" in flags:
-            cookies += [c.split(";", 1)[0] for c in res.get("cookies", [])]
+            for c in res.get("cookies", []):
+                pair = c.split(";", 1)[0]
+                cookies = [x for x in cookies if x.split("=", 1)[0] != pair.split("=", 1)[0]] + [pair]   # one per name, last wins
         if res["loc"] is not None:
             if hop == MAX_REDIRECTS:
                 raise Refuse(502, "too_many_redirects")
@@ -509,7 +516,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
         url = (q.get("url") or [""])[0]
         caller = (self.headers.get("X-Relay-Caller") or "-")[:24]
-        status, reason, nbytes, target = 200, "", 0, "-"
+        status, reason, nbytes, target, detail = 200, "", 0, "-", ""
         got_global = False
         try:
             st = load_state()
@@ -544,7 +551,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         except Refuse as r:
-            status, reason = r.status, r.reason
+            status, reason, detail = r.status, r.reason, str(r.detail)[:80]
             count(r.reason.split(":")[0])
             self.send_plain(r.status, r.reason)
             if r.reason.startswith("redirect_refused:private") or r.reason == "private_address":
@@ -562,7 +569,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             uq = urllib.parse.urlsplit(url)
             log(caller=caller, src=source_of(self), target=target if target != "-" else (uq.hostname or "-") + uq.path[:80],
                 query_keys=sorted(urllib.parse.parse_qs(uq.query).keys())[:12], status=status, bytes=nbytes,
-                ms=int((time.monotonic() - t0) * 1000), refused=reason or None)
+                ms=int((time.monotonic() - t0) * 1000), refused=reason or None, detail=detail or None)
 
     def do_POST(self):
         self.send_plain(405, "method_not_allowed")
