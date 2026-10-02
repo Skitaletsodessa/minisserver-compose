@@ -12,3 +12,14 @@ android.apis.google.com
 # --- weather: AccuWeather (Motorola stock weather app), seen in Vlad's phone query log 2026-10-02
 accuweather.com
 awxcdn.com
+# --- Google services the phone needs for sign-in, settings, device attestation and Family
+# Link. Added 2026-10-02 from Vlad's real query log (all six were blocked and broke the
+# Google settings screen / YouTube). Deliberately NOT included: dl.google.com,
+# edgedl.me.gvt1.com, update.googleapis.com (app/system updates), content-autofill,
+# photosdata-pa, socialuserlocation, firebase*/app-measurement (telemetry).
+www.googleapis.com
+android.googleapis.com
+play.googleapis.com
+play-fe.googleapis.com
+deviceintegritytokens-pa.googleapis.com
+kidsmanagement-pa.googleapis.com
