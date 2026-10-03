@@ -7,6 +7,12 @@ services:
     image: ghcr.io/bakito/adguardhome-sync:v0.9.3
     container_name: adguard-sync
     restart: unless-stopped
+    # Pinned on purpose: both ends of the sync are tailnet names (*.ts.net) that only Tailscale's MagicDNS can
+    # resolve. Without this the container inherits the host's /etc/resolv.conf as of the moment it is created, and at
+    # boot Docker and tailscaled start in the same second: on 2026-10-02 the container was created a second before
+    # Tailscale registered itself, kept the public resolvers, resolved the origin to Funnel's public addresses and the
+    # replica not at all - the sync was dead for 26 h. 100.100.100.100 is reachable from the bridge via tailscale0.
+    dns: [100.100.100.100]
     ports:
       - "127.0.0.1:18086:8080"
     environment:
