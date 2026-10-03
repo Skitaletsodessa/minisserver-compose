@@ -1,0 +1,3 @@
+#!/bin/sh
+# Task 24: requests per day/hour/caller/status from the persistent log (relay-report [days])
+exec docker exec relay python /app/relayctl.py report "$@"

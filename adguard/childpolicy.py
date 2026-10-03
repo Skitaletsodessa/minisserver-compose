@@ -260,32 +260,24 @@ def run(now=None):
         return notes
 
 
-def _telegram(text):
-    env = {}
-    for line in TELEGRAM_ENV.read_text().splitlines():
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip('"').strip("'")
-    data = urllib.parse.urlencode({"chat_id": env["TELEGRAM_CHAT_ID"], "text": text}).encode()
-    urllib.request.urlopen(urllib.request.Request(
-        f"https://api.telegram.org/bot{env['TELEGRAM_BOT_TOKEN']}/sendMessage", data=data), timeout=15)
-
-
 def _record_result(ok, detail=""):
-    """5 consecutive real failures -> one Telegram message; recovery -> one more. A wedged
-    policy job is dangerous (a time window could stay open past 19:00), so it must not be
-    silent - but a down AGH is adguard-watch's alert, not this one."""
+    """5 consecutive real failures -> an alert through watchnotify (first message, a REMINDER every 6 h while it lasts,
+    a recovery message with the duration). A wedged policy job is dangerous (a time window could stay open past 19:00),
+    so it must not be silent - but a down AGH is adguard-watch's alert, not this one."""
+    sys.path.insert(0, "/srv/compose/_system/lib")
+    import watchnotify  # noqa: E402  (Task 24)
     n = int(ERR_FILE.read_text()) if ERR_FILE.exists() else 0
     if ok:
         if n >= 5:
-            _telegram("minisserver child-policy: the DNS policy job works again.")
+            watchnotify.clear("child-policy-job", "minisserver child-policy: the DNS policy job works again.")
         ERR_FILE.write_text("0")
         return
     n += 1
     ERR_FILE.write_text(str(n))
-    if n == 5:
-        _telegram(f"minisserver child-policy: the children's DNS policy job has failed 5 times in a row "
-                  f"({detail}). Time windows (YouTube/Roblox) may be stuck open or closed.")
+    if n >= 5:
+        watchnotify.alert("child-policy-job",
+                          f"minisserver child-policy: the children's DNS policy job has failed {n} times in a row "
+                          f"({detail}). Time windows (YouTube/Roblox) may be stuck open or closed.")
 
 
 def main(argv=None):

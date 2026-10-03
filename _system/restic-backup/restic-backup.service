@@ -1,5 +1,6 @@
 [Unit]
 Description=Daily restic backup of the backup set + /srv/data to the local repository (/srv/vault)
+RequiresMountsFor=/srv/vault /srv/data
 OnFailure=backup-notify@%n.service
 
 [Service]

@@ -1,5 +1,6 @@
 [Unit]
 Description=Daily restic backup of the backup set to the off-site repository (Cloudflare R2)
+RequiresMountsFor=/srv/data
 After=restic-backup.service network-online.target
 Wants=network-online.target
 OnFailure=backup-notify@%n.service

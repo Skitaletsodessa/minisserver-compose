@@ -30,15 +30,12 @@ set +a
 
 USED=$(df --output=pcent "$MOUNT" | tail -1 | tr -dc '0-9')
 
+# Alerts through watchnotify (Task 24): the first message, a REMINDER every 6 h while the disk stays full, a recovery with the duration.
+NOTIFY="python3 /srv/compose/_system/lib/watchnotify.py"
+KEY="disk-space-$(echo "$MOUNT" | tr -c 'a-zA-Z0-9' '_')"
+rm -f "$STATE_FILE"                      # the old "already alerted" flag; the shared state replaced it
 if [ "$USED" -ge "$THRESHOLD" ]; then
-    if [ -f "$STATE_FILE" ]; then
-        exit 0
-    fi
-    touch "$STATE_FILE"
-    MSG="minisserver disk-space-watch: ${MOUNT} is ${USED}% full (threshold ${THRESHOLD}%). Check qBittorrent's own pause-on-low-space setting actually fired."
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=${MSG}" >/dev/null
+    $NOTIFY alert "$KEY" "minisserver disk-space-watch: ${MOUNT} is ${USED}% full (threshold ${THRESHOLD}%). Check qBittorrent's own pause-on-low-space setting actually fired."
 else
-    rm -f "$STATE_FILE"
+    $NOTIFY clear "$KEY" "minisserver disk-space-watch: ${MOUNT} is back to ${USED}% (threshold ${THRESHOLD}%)."
 fi

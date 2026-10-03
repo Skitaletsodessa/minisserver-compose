@@ -8,14 +8,18 @@
 set -euo pipefail
 THRESHOLD_HOURS=${1:-36}
 
+# Alerts go through watchnotify (Task 24): delivery is logged, a failed send is retried, a still-stale repository is
+# repeated (this job runs daily, so the reminder rides on the next run) and a recovery message closes it.
+NOTIFY="python3 /srv/compose/_system/lib/watchnotify.py"
+key_for() { printf 'backup-stale-%s' "$(printf '%s' "$1" | tr -c 'a-zA-Z0-9' '_')"; }
 send_alert() {
     local name=$1 msg=$2
-    set -a; . /srv/compose/scrutiny/.env; set +a
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=minisserver BACKUP STALE: $name
+    $NOTIFY alert "$(key_for "$name")" "minisserver BACKUP STALE: $name
 
-$msg" >/dev/null
+$msg"
+}
+clear_alert() {
+    $NOTIFY clear "$(key_for "$1")" "minisserver backup freshness: $1 has a fresh snapshot again."
 }
 
 check_repo() {
@@ -47,6 +51,8 @@ print(int((now - t).total_seconds() / 3600))
     echo "backup-freshness: $name newest 'set' snapshot: $newest (${age_h}h old, threshold ${THRESHOLD_HOURS}h)"
     if [ "$age_h" -gt "$THRESHOLD_HOURS" ]; then
         send_alert "$name" "newest snapshot is ${age_h}h old (threshold ${THRESHOLD_HOURS}h): $newest"
+    else
+        clear_alert "$name"
     fi
 }
 

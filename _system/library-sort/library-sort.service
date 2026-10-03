@@ -1,5 +1,6 @@
 [Unit]
 Description=Sort finished content from /srv/library/downloads into the Jellyfin-facing video/ structure via hardlinks
+RequiresMountsFor=/srv/library
 
 [Service]
 Type=oneshot

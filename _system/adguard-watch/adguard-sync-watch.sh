@@ -1,17 +1,17 @@
 #!/bin/bash
-# Task 21: is adguard-sync itself healthy? Every minute reads its own status endpoint: origin and every replica
-# must report status "success". 3 consecutive bad readings (container down, replica unreachable, auth failure,
-# sync error) -> one Telegram message; recovery -> one. The parity checker proves the RESULT is identical;
-# this one says early why it stops being so.
+# Task 21 / 24: is adguard-sync itself healthy? Every minute reads its own status endpoint: origin and every replica must
+# report status "success". 3 consecutive bad readings (container down, replica unreachable, auth failure, sync error) -> alert
+# through watchnotify (reminder every 6 h while it lasts, recovery with the outage duration). The parity checker proves the
+# RESULT is identical; this one says early why it stops being so.
 set -uo pipefail
-STATE_DIR=/var/lib/adguard-sync-watch
-ENV_FILE=/srv/compose/scrutiny/.env
-SYNC_ENV=/srv/compose/adguard-sync/.env
-mkdir -p "$STATE_DIR"
-set -a; . "$ENV_FILE"; . "$SYNC_ENV"; set +a
-send() { curl -s -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=$1" >/dev/null; }
-out=$(curl -s -m 10 -u "$SYNC_API_USER:$SYNC_API_PASSWORD" http://127.0.0.1:18086/api/v1/status 2>/dev/null)
+COUNT_DIR=${WATCH_COUNT_DIR:-/var/lib/adguard-sync-watch}
+SYNC_ENV=${WATCH_SYNC_ENV:-/srv/compose/adguard-sync/.env}
+SYNC_URL=${WATCH_SYNC_URL:-http://127.0.0.1:18086}
+NOTIFY="python3 /srv/compose/_system/lib/watchnotify.py"
+KEY=adguard-sync
+mkdir -p "$COUNT_DIR"
+set -a; . "$SYNC_ENV"; set +a
+out=$(curl -s -m 10 -u "$SYNC_API_USER:$SYNC_API_PASSWORD" "$SYNC_URL/api/v1/status" 2>/dev/null)
 verdict=$(printf '%s' "$out" | python3 -c '
 import json, sys
 try:
@@ -19,6 +19,8 @@ try:
 except Exception:
     print("sync API not answering"); sys.exit()
 bad = []
+if d.get("syncRunning"):                      # a pass is in progress right now: replica status reads "info", not an error
+    print(""); sys.exit()
 o = d.get("origin") or {}
 if o.get("status") != "success": bad.append("origin %s: %s" % (o.get("host"), o.get("error") or o.get("status")))
 for r in d.get("replicas") or []:
@@ -26,13 +28,13 @@ for r in d.get("replicas") or []:
 print("; ".join(bad)[:300])
 ')
 if [ -z "$verdict" ]; then
-  [ -f "$STATE_DIR/alerted" ] && { send "minisserver adguard-sync-watch: adguard-sync is healthy again (origin and replica both report success)."; rm -f "$STATE_DIR/alerted"; }
-  echo 0 > "$STATE_DIR/count"; exit 0
+  echo 0 > "$COUNT_DIR/count"
+  $NOTIFY clear "$KEY" "minisserver adguard-sync-watch: adguard-sync is healthy again (origin and replica both report success)."
+  exit 0
 fi
-c=$(cat "$STATE_DIR/count" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$STATE_DIR/count"
+c=$(( $(cat "$COUNT_DIR/count" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$COUNT_DIR/count"
 echo "sync-watch: bad ($verdict) consecutive=$c" >&2
-if [ "$c" -ge 3 ] && [ ! -f "$STATE_DIR/alerted" ]; then
-  touch "$STATE_DIR/alerted"
-  send "minisserver adguard-sync-watch: adguard-sync has been unhealthy for $c checks: $verdict. The replica may be out of date."
+if [ "$c" -ge 3 ]; then
+  $NOTIFY alert "$KEY" "minisserver adguard-sync-watch: adguard-sync has been unhealthy for $c checks: $verdict. The replica may be out of date."
 fi
 exit 0

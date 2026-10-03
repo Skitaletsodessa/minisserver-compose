@@ -6,5 +6,5 @@ Type=oneshot
 User=skit
 Environment=WATCH_TARGET=192.168.31.5
 Environment=WATCH_LABEL=replica
-Environment=WATCH_STATE_DIR=/var/lib/adguard-watch-replica
+Environment=WATCH_COUNT_DIR=/var/lib/adguard-watch-replica
 ExecStart=/srv/compose/_system/adguard-watch/adguard-watch.sh

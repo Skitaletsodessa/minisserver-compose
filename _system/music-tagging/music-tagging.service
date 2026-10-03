@@ -1,5 +1,6 @@
 [Unit]
 Description=Fill empty Album tags from MusicBrainz for any new file in /srv/library/music (Task 19)
+RequiresMountsFor=/srv/library
 OnFailure=backup-notify@%n.service
 
 [Service]

@@ -79,10 +79,29 @@ counters = {}                      # reason -> count (since start)
 events = []                        # alert events picked up by the host-side watcher (state/events.jsonl)
 
 
+LOG_KEEP_DAYS = 14
+_last_prune = [0.0]
+
+
 def log(**kw):
     kw["ts"] = datetime.now(TZ).isoformat(timespec="seconds")
-    sys.stdout.write(json.dumps(kw, ensure_ascii=False) + "\n")
+    line = json.dumps(kw, ensure_ascii=False)
+    sys.stdout.write(line + "\n")
     sys.stdout.flush()
+    if "caller" in kw:                   # request lines also go to the host (state volume): one file per day, kept 14 days.
+        try:                             # Docker's own log dies with the container (a recreate on 2026-10-03 lost two days)
+            with open(os.path.join(STATE_DIR, "requests-%s.jsonl" % kw["ts"][:10]), "a") as f:
+                f.write(line + "\n")
+            if time.time() - _last_prune[0] > 3600:
+                _last_prune[0] = time.time()
+                cutoff = time.time() - LOG_KEEP_DAYS * 86400
+                for name in os.listdir(STATE_DIR):
+                    if name.startswith("requests-") and name.endswith(".jsonl"):
+                        full = os.path.join(STATE_DIR, name)
+                        if os.path.getmtime(full) < cutoff:
+                            os.remove(full)
+        except OSError:
+            pass
 
 
 def count(reason):

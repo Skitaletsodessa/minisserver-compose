@@ -11,3 +11,6 @@ n=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst ')
 sec=$(apt-get -s upgrade 2>/dev/null | grep '^Inst ' | grep -ci 'security')
 echo "upgradable=$n security=$sec"
 apt-get -s upgrade 2>/dev/null | grep '^Inst ' | awk '{print $2}' | head -20 | tr '\n' ' '; echo
+# Task 24: has the Pi-side watchdog (adguard-watch-origin, every minute) run lately? Age of its counter file in seconds.
+f=/var/lib/adguard-watch-origin/count
+[ -f "$f" ] && echo "origin_watch_age_s=$(( $(date +%s) - $(stat -c %Y "$f") ))" || echo "origin_watch_age_s=none"

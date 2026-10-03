@@ -48,11 +48,9 @@ qbt_login() {
         "$QBT_URL/api/v2/auth/login" >/dev/null
 }
 
-telegram() {
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=$1" >/dev/null
-}
+# Alerts through watchnotify (Task 24): while torrents stay paused for lack of space the alert repeats every 6 h and the
+# recovery message states how long it lasted.
+NOTIFY="python3 /srv/compose/_system/lib/watchnotify.py"
 
 if [ "$AVAIL_GB" -lt "$PAUSE_BELOW_GB" ]; then
     if [ ! -f "$STATE_FILE" ]; then
@@ -60,14 +58,14 @@ if [ "$AVAIL_GB" -lt "$PAUSE_BELOW_GB" ]; then
         docker exec qbittorrent curl -s -b "$COOKIE_JAR" --referer "$QBT_URL" \
             -X POST "$QBT_URL/api/v2/torrents/pause" --data-urlencode "hashes=all" >/dev/null
         touch "$STATE_FILE"
-        telegram "minisserver qbt-space-guard: /srv/library has ${AVAIL_GB}GB free (below ${PAUSE_BELOW_GB}GB) - all torrents paused."
     fi
+    $NOTIFY alert qbt-space-guard "minisserver qbt-space-guard: /srv/library has ${AVAIL_GB}GB free (below ${PAUSE_BELOW_GB}GB) - all torrents paused."
 elif [ "$AVAIL_GB" -ge "$RESUME_ABOVE_GB" ]; then
     if [ -f "$STATE_FILE" ]; then
         qbt_login
         docker exec qbittorrent curl -s -b "$COOKIE_JAR" --referer "$QBT_URL" \
             -X POST "$QBT_URL/api/v2/torrents/resume" --data-urlencode "hashes=all" >/dev/null
         rm -f "$STATE_FILE"
-        telegram "minisserver qbt-space-guard: /srv/library has ${AVAIL_GB}GB free again (above ${RESUME_ABOVE_GB}GB) - torrents resumed."
     fi
+    $NOTIFY clear qbt-space-guard "minisserver qbt-space-guard: /srv/library has ${AVAIL_GB}GB free again (above ${RESUME_ABOVE_GB}GB) - torrents resumed."
 fi
