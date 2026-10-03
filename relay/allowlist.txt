@@ -6,4 +6,5 @@
 # Everything else the Worker fetches directly from Cloudflare and does NOT belong here.
 www.sreality.cz   cookies
 reality.bazos.cz
-www.bazos.cz      images
+www.bazos.cz      images rate=3 burst=6 concurrency=4   # Telegram fetches several images at once (one 429 host_concurrency on 2026-10-03); cached in R2 afterwards
+www.mmreality.cz                                       # MM Reality collector + verify-alive: 403 from Cloudflare's egress on every cron run (Worker owner, 2026-10-03)
