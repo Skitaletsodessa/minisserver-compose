@@ -125,7 +125,8 @@ def today():
 
 # ---------------------------------------------------------------- allow-list
 def load_allowlist():
-    """allowlist.txt: one rule per line:  host_or_*.suffix  [images] [cookies]   (# comments)."""
+    """allowlist.txt: one rule per line:  host_or_*.suffix  [images] [cookies] [rate=N] [burst=N] [concurrency=N]
+    (# comments). rate/burst/concurrency override the politeness defaults for that host only, within HARD_MAX."""
     rules = []
     try:
         for line in open(ALLOWLIST_FILE):
@@ -137,6 +138,24 @@ def load_allowlist():
     except OSError:
         pass
     return rules
+
+
+HARD_MAX = {"rate": 5.0, "burst": 10.0, "concurrency": 6}     # a typo in allowlist.txt must not open a flood
+
+
+def host_limits(flags):
+    """Per-host politeness: defaults from the environment, overridden by rate=/burst=/concurrency= flags, clamped."""
+    lim = {"rate": RATE_PER_SEC, "burst": BURST, "concurrency": HOST_CONCURRENCY}
+    for f in flags:
+        if "=" in f:
+            k, _, v = f.partition("=")
+            if k in lim:
+                try:
+                    lim[k] = max(0.1, min(float(v), HARD_MAX[k]))
+                except ValueError:
+                    pass
+    lim["concurrency"] = max(1, int(lim["concurrency"]))
+    return (lim["rate"], lim["burst"], lim["concurrency"])
 
 
 def match_allowlist(host):
@@ -231,9 +250,11 @@ def resolve_public(host, deadline):
 
 # ---------------------------------------------------------------- politeness: token bucket, concurrency, breaker
 class HostGate:
-    def __init__(self):
-        self.tokens, self.t = BURST, time.monotonic()
-        self.sem = threading.BoundedSemaphore(HOST_CONCURRENCY)
+    def __init__(self, limits):
+        self.limits = limits
+        self.rate, self.burst, conc = limits
+        self.tokens, self.t = self.burst, time.monotonic()
+        self.sem = threading.BoundedSemaphore(conc)
         self.lk = threading.Lock()
 
     def take(self, wait_max=3.0):
@@ -241,7 +262,7 @@ class HostGate:
         while True:
             with self.lk:
                 now = time.monotonic()
-                self.tokens = min(BURST, self.tokens + (now - self.t) * RATE_PER_SEC)
+                self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
                 self.t = now
                 if self.tokens >= 1:
                     self.tokens -= 1
@@ -255,9 +276,13 @@ _gates = {}
 _global_sem = threading.BoundedSemaphore(GLOBAL_CONCURRENCY)
 
 
-def gate(host):
+def gate(host, flags=()):
+    limits = host_limits(flags)
     with _lock:
-        return _gates.setdefault(host, HostGate())
+        g = _gates.get(host)
+        if g is None or g.limits != limits:          # first use, or the allow-list changed the limits
+            g = _gates[host] = HostGate(limits)
+        return g
 
 
 def breaker_check(host):
@@ -401,7 +426,7 @@ def do_fetch(url, caller_headers):
     for hop in range(MAX_REDIRECTS + 1):
         host, _port, path, flags = validate_url(cur)         # steps 3 again for every hop
         breaker_check(host)
-        g = gate(host)
+        g = gate(host, flags)
         if not g.sem.acquire(timeout=3):
             raise Refuse(429, "host_concurrency")
         try:

@@ -254,6 +254,20 @@ case("challenge page served as JSON counts as blocked", V + "json-html", expect_
 # private-address event written for the watcher
 results.append(('"kind": "private_address"' in ev + open(os.path.join(TMP, "events.jsonl")).read(), "private-address attempts write an alert event", "", 0))
 
+# per-host politeness overrides from allowlist.txt flags (rate=/burst=/concurrency=), clamped to HARD_MAX
+d = relay.host_limits(set())
+results.append((d == (relay.RATE_PER_SEC, relay.BURST, relay.HOST_CONCURRENCY), "limits: defaults without flags", str(d), 0))
+results.append((relay.host_limits({"images", "rate=3", "burst=6", "concurrency=4"}) == (3.0, 6.0, 4), "limits: rate=3 burst=6 concurrency=4 are applied", str(relay.host_limits({"rate=3", "burst=6", "concurrency=4"})), 0))
+results.append((relay.host_limits({"rate=100", "burst=999", "concurrency=50"}) == (5.0, 10.0, 6), "limits: absurd values are clamped to the hard maximum", str(relay.host_limits({"rate=100", "burst=999", "concurrency=50"})), 0))
+results.append((relay.host_limits({"rate=abc", "concurrency=", "nonsense=7"}) == d, "limits: garbage values are ignored", "", 0))
+g_default, g_images = relay.gate("lim-a.test", set()), relay.gate("lim-b.test", {"concurrency=4", "burst=6", "rate=3"})
+got = [g_images.sem.acquire(blocking=False) for _ in range(6)]
+dflt = [g_default.sem.acquire(blocking=False) for _ in range(4)]
+results.append((got.count(True) == 4 and dflt.count(True) == relay.HOST_CONCURRENCY, "limits: 4 parallel slots for the raised host, default for the others", f"raised={got.count(True)} default={dflt.count(True)}", 0))
+results.append((relay.gate("lim-b.test", {"concurrency=4", "burst=6", "rate=3"}) is g_images and relay.gate("lim-b.test", {"concurrency=2"}) is not g_images, "limits: gate reused while limits are unchanged, rebuilt when the allow-list changes them", "", 0))
+t0 = time.monotonic(); taken = sum(1 for _ in range(8) if g_images.take(wait_max=0.0)); 
+results.append((taken in (6, 7), "limits: burst of 6 then ~3/s (8 immediate takes -> 6)", f"{taken} of 8", 0))
+
 fails = [r for r in results if not r[0]]
 w = max(len(r[1]) for r in results)
 for ok, name, detail, secs in results:
