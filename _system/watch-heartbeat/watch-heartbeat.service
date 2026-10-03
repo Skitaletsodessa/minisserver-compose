@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily dead-man's heartbeat: every watchdog ran on schedule, N alerts active (Task 24)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/watch-heartbeat/watch-heartbeat.py

@@ -90,22 +90,9 @@ def telegram_alert(message: str, dry_run: bool):
     if not ENV_FILE.exists():
         log.error("cannot send Telegram alert: %s not found", ENV_FILE)
         return
-    creds = {}
-    for line in ENV_FILE.read_text().splitlines():
-        if "=" in line and not line.strip().startswith("#"):
-            k, _, v = line.partition("=")
-            creds[k.strip()] = v.strip()
-    token = creds.get("TELEGRAM_BOT_TOKEN")
-    chat_id = creds.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        log.error("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID missing from %s", ENV_FILE)
-        return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": chat_id, "text": f"minisserver library-sort: {message}"}).encode()
-    try:
-        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
-    except Exception as e:  # noqa: BLE001 - alerting must never crash the run
-        log.error("Telegram send failed: %s", e)
+    sys.path.insert(0, "/srv/compose/_system/lib")
+    import watchnotify  # noqa: E402  (Task 24)
+    watchnotify.send(f"minisserver library-sort: {message}")
 
 
 def target_for_movie(info, ext) -> Path:

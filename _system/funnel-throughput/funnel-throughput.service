@@ -1,0 +1,7 @@
+[Unit]
+Description=One-off Funnel throughput measurement in the evening window (Task 24 E3)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/funnel-throughput/funnel-throughput.sh

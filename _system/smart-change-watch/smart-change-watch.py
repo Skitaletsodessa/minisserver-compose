@@ -74,18 +74,9 @@ def telegram(message, dry_run):
     print("ALERT:", message)
     if dry_run:
         return
-    creds = {}
-    for line in ENV_FILE.read_text().splitlines():
-        if "=" in line and not line.strip().startswith("#"):
-            k, _, v = line.partition("=")
-            creds[k.strip()] = v.strip()
-    url = f"https://api.telegram.org/bot{creds['TELEGRAM_BOT_TOKEN']}/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": creds["TELEGRAM_CHAT_ID"],
-                                   "text": f"minisserver smart-change-watch: {message}"}).encode()
-    try:
-        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=15)
-    except Exception as e:  # noqa: BLE001 - never crash the run on a send failure
-        print("Telegram send failed:", e, file=sys.stderr)
+    sys.path.insert(0, "/srv/compose/_system/lib")
+    import watchnotify  # noqa: E402  (Task 24)
+    watchnotify.send(f"minisserver smart-change-watch: {message}")
 
 
 def main():

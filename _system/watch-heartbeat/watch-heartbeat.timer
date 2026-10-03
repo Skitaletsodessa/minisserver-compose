@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily watchdog heartbeat at 08:00
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

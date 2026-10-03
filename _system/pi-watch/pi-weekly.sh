@@ -8,6 +8,5 @@ set -a; source "$ENV_FILE"; set +a
 out=$(ssh -T -q -i /home/skit/.ssh/piserver_report -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
       -o StrictHostKeyChecking=accept-new skit@192.168.31.5 2>&1) || out="pi-weekly: could not reach the Pi: $out"
 echo "$out"
-curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=piserver weekly:
-$out" >/dev/null
+python3 /srv/compose/_system/lib/watchnotify.py send "piserver weekly:
+$out"

@@ -186,6 +186,9 @@ filtering:
   - domain: piserver.home.ivandeliver.email
     answer: 192.168.31.5
     enabled: true
+  - domain: minisserver.home.ivandeliver.email
+    answer: 192.168.31.2
+    enabled: true
   safe_fs_patterns:
   - /opt/adguardhome/work/userfilters/*
   max_http_size: 256MB

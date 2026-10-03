@@ -1,5 +1,6 @@
 [Unit]
 Description=Renew the Tailscale HTTPS cert for Caddy
+After=tailscaled.service
 
 [Service]
 Type=oneshot

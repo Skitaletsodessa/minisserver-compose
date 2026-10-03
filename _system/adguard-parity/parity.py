@@ -27,7 +27,10 @@ import time
 import urllib.parse
 import urllib.request
 
-STATE_DIR = "/var/lib/adguard-parity"
+sys.path.insert(0, "/srv/compose/_system/lib")
+import watchnotify  # noqa: E402  - the shared Telegram/reminder helper (Task 24)
+
+STATE_DIR = os.environ.get("PARITY_STATE_DIR", "/var/lib/adguard-parity")
 STATE = os.path.join(STATE_DIR, "state.json")
 OK_LOG = os.path.join(STATE_DIR, "ok.log")
 TG_ENV = "/srv/compose/scrutiny/.env"
@@ -37,7 +40,9 @@ REPLICA = ("https://piserver.tail6bf4d5.ts.net", "admin", None)
 ORIGIN_DNS, REPLICA_DNS = "192.168.31.2", "192.168.31.5"
 TOLERANCE = 0.05          # relative difference in per-list rule counts that is "just refresh timing"
 COUNT_GRACE = 3600        # seconds a count difference may persist before it alerts
-CONSECUTIVE = 2           # runs a mismatch must persist before alerting
+CONSECUTIVE = int(os.environ.get("PARITY_CONSECUTIVE", "2"))          # runs a mismatch must persist before alerting
+STALE_SECONDS = int(os.environ.get("PARITY_STALE_SECONDS", "1800"))   # a successful sync pass older than this is an alert
+CLIENTS_CONF = "/srv/compose/adguard/child-policy/clients.conf"
 
 # Intentional differences (not compared). dns_info: default_local_ptr_upstreams are computed from each host's own
 # resolvers. (use_private_ptr_resolvers is false on both since the 2026-10-02 DNS loop and IS compared.)
@@ -45,9 +50,28 @@ DNS_INFO_SKIP = {"default_local_ptr_upstreams"}
 
 DNS_PROBES = ["example.com", "doubleclick.net", "use-application-dns.net", "dnssec-failed.org",
               "parity-probe-nonexistent-name.example.com"]
-CHECK_NAMES = ["youtube.com", "www.youtube.com", "google.com", "accounts.google.com", "t.me",
-               "api.accuweather.com", "roblox.com", "doubleclick.net", "example.com"]
-CLIENTS = {"child": "192.168.31.60", "normal": "192.168.31.107"}
+# Time-aware child-policy probe (Task 24 B). The names cover every class of the schedule: opened by the 16-19 window
+# (youtube, roblox), always blocked (tiktok, google accounts), always allowed (telegram, weather). AGH's check_host with a
+# client parameter evaluates the rules AS THAT CLIENT would hit them, so the verdict flips at 16:00 / 19:00 / Sunday on
+# BOTH instances - a replica that missed a window change differs here at once, whatever its config text looks like.
+CHILD_NAMES = ["youtube.com", "www.youtube.com", "roblox.com", "www.tiktok.com", "t.me", "telegram.org",
+               "api.accuweather.com", "accounts.google.com"]
+NORMAL_NAMES = ["youtube.com", "doubleclick.net", "example.com"]
+NORMAL_CLIENT = "192.168.31.107"
+
+
+def child_clients():
+    """{nickname: ip} for every device in child-policy/clients.conf (so a new child device is probed automatically)."""
+    out = {}
+    try:
+        for line in open(CLIENTS_CONF):
+            line = line.split("#", 1)[0].strip()
+            if line:
+                ip, name, *_ = line.split()
+                out[name] = ip
+    except OSError:
+        pass
+    return out
 
 
 def read_env(path, key):
@@ -63,15 +87,6 @@ def api(inst, path):
     req.add_header("Authorization", "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode())
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
-
-
-def telegram(text):
-    token, chat = read_env(TG_ENV, "TELEGRAM_BOT_TOKEN"), read_env(TG_ENV, "TELEGRAM_CHAT_ID")
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
-    try:
-        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data), timeout=20)
-    except Exception as e:  # noqa: BLE001
-        print("telegram failed:", e, file=sys.stderr)
 
 
 def strip(obj, drop):
@@ -182,12 +197,41 @@ def compare():
         notes.append("no threat-feed probe domain found")
     for name in probes:
         eq("dns:" + name, dig(ORIGIN_DNS, name), dig(REPLICA_DNS, name))
-    # behaviour: per-client policy as AGH itself evaluates it
-    for who, ip in CLIENTS.items():
-        for name in CHECK_NAMES + ([td] if td else []):
+    # behaviour: per-client policy as AGH itself evaluates it, for EVERY child device and for a normal device
+    kids = child_clients()
+    notes.append("child devices probed: " + ", ".join(f"{n}={ip}" for n, ip in kids.items()))
+    for who, ip in kids.items():
+        for name in CHILD_NAMES:
             eq(f"policy:{who}:{name}", check_host(origin, name, ip), check_host(replica, name, ip))
+    for name in NORMAL_NAMES + ([td] if td else []):
+        eq(f"policy:normal:{name}", check_host(origin, name, NORMAL_CLIENT), check_host(replica, name, NORMAL_CLIENT))
     save_state(st)
     return problems, notes
+
+
+def last_good_sync():
+    """Epoch seconds of the newest SUCCESSFUL sync pass, from adguard-sync's own log (a failing pass logs 'Sync done' at
+    level ERROR, a good one at INFO), or None. Independent of the content comparison and of the replica's API."""
+    p = subprocess.run(["docker", "logs", "--since", "3h", "adguard-sync"], capture_output=True, text=True)
+    newest = None
+    for line in (p.stdout + p.stderr).splitlines():
+        parts = line.split("\t")
+        if len(parts) > 3 and parts[1] == "INFO" and "Sync done" in line:
+            try:
+                newest = datetime.datetime.strptime(parts[0][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp()
+            except ValueError:
+                pass
+    return newest
+
+
+def sync_stamp_problem():
+    t = last_good_sync()
+    if t is None:
+        return "no successful sync pass in the last 3 h (adguard-sync log)"
+    age = time.time() - t
+    if age > STALE_SECONDS:
+        return f"last successful sync pass was {int(age // 60)} min ago (limit {STALE_SECONDS // 60} min)"
+    return None
 
 
 def load_state():
@@ -203,24 +247,43 @@ def save_state(st):
 
 
 def main():
+    """Options for tests: --dry-run (compare and print only: no state change, no message), --inject NAME (adds a fake
+    mismatch named NAME, e.g. to see what a mismatching run prints or to exercise the alert path with WATCH_TEST=1)."""
+    dry = "--dry-run" in sys.argv
+    inject = sys.argv[sys.argv.index("--inject") + 1] if "--inject" in sys.argv else None
     os.makedirs(STATE_DIR, exist_ok=True)
     try:
         problems, notes = compare()
     except Exception as e:  # noqa: BLE001 - an unreachable instance is itself a parity failure
         problems, notes = {"unreachable": f"{type(e).__name__}: {str(e)[:160]}"}, []
+    stale = sync_stamp_problem()               # checked on its own: it must fire even when the replica API is unreachable
+    if stale:
+        problems["sync_stamp"] = stale
+    if inject:
+        problems[inject] = "injected for a test (origin=('Filtered', ['||*^$client=x']) replica=('NotFilteredNotFound', []))"
+    if dry:
+        for k, v in problems.items():
+            print(f"MISMATCH {k}: {v}  [dry run: nothing sent, nothing stored]")
+        for n in notes:
+            print("note:", n)
+        print("dry run complete:", "mismatches found" if problems else "parity OK")
+        return 0
     st = load_state()
     streak = st.get("streak", {})
     new_streak = {k: streak.get(k, 0) + 1 for k in problems}
     st["streak"] = new_streak
     alerted = set(st.get("alerted", []))
     firing = {k for k, n in new_streak.items() if n >= CONSECUTIVE}
-    fresh = sorted(firing - alerted)
-    if fresh:
-        lines = [f"- {k}: {problems[k]}" for k in fresh[:8]]
-        telegram("minisserver adguard-parity: the replica (piserver) DIFFERS from the origin in %d place(s):\n%s%s" %
-                 (len(fresh), "\n".join(lines), "\n..." if len(fresh) > 8 else ""))
-    if alerted and not firing:
-        telegram("minisserver adguard-parity: origin and replica are identical again.")
+    if firing:
+        # Through watchnotify (Task 24): delivery is logged and retried, a still-open mismatch gets a reminder every 6 h,
+        # and a NEW probe joining the set is sent at once (force).
+        lines = [f"- {k}: {problems[k]}" for k in sorted(firing)[:8]]
+        watchnotify.alert("adguard-parity",
+                          "minisserver adguard-parity: the replica (piserver) DIFFERS from the origin in %d place(s):\n%s%s" %
+                          (len(firing), "\n".join(lines), "\n..." if len(firing) > 8 else ""),
+                          force=bool(firing - alerted))
+    else:
+        watchnotify.clear("adguard-parity", "minisserver adguard-parity: origin and replica are identical again.")
     st["alerted"] = sorted(firing)
     save_state(st)
     for k, v in problems.items():

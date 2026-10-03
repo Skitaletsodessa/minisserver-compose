@@ -6,8 +6,6 @@ set -euo pipefail
 UNIT=${1:?unit}
 set -a; source /srv/compose/scrutiny/.env; set +a
 TAIL=$(journalctl -u "$UNIT" -n 8 --no-pager -o cat 2>/dev/null | cut -c1-200 || true)
-curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-    --data-urlencode "text=minisserver BACKUP FAILED: ${UNIT}
+python3 /srv/compose/_system/lib/watchnotify.py send "minisserver BACKUP FAILED: ${UNIT}
 
-${TAIL}" >/dev/null
+${TAIL}"

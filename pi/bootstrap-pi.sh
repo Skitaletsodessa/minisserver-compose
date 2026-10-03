@@ -88,6 +88,7 @@ grep -q '^dtparam=audio=on' "$cfg"       && { sed -i 's/^dtparam=audio=on/dtpara
 grep -q '^camera_auto_detect=1' "$cfg"   && { sed -i 's/^camera_auto_detect=1/camera_auto_detect=0/' "$cfg"; did "camera detect off"; }
 
 say "mutual DNS watchdog (the Pi checks the server's AdGuard)"
+put usr/local/lib/watchnotify.py 644      # shared alert helper (symlink to _system/lib in git; deploy-pi.sh dereferences it)
 put usr/local/bin/adguard-watch-origin 755
 put etc/systemd/system/adguard-watch-origin.service 644 && systemctl daemon-reload
 put etc/systemd/system/adguard-watch-origin.timer 644 && systemctl daemon-reload

@@ -44,6 +44,4 @@ MSG="minisserver disk-error-watch: kernel log matched a failure signature in the
 
 $(printf '%s' "$MATCHES" | tail -20)"
 
-curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-    --data-urlencode "text=${MSG}" >/dev/null
+python3 /srv/compose/_system/lib/watchnotify.py send "${MSG}"

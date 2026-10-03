@@ -1,0 +1,11 @@
+[Unit]
+Description=Funnel throughput, two samples on 2026-10-04 inside the 19:00-22:00 window (one-off)
+
+[Timer]
+OnCalendar=2026-10-04 20:00:00 Europe/Prague
+OnCalendar=2026-10-04 21:00:00 Europe/Prague
+RemainAfterElapse=no
+Persistent=false
+
+[Install]
+WantedBy=timers.target
