@@ -23,7 +23,7 @@ WATCHERS = [
     ("adguard-parity.service", 900), ("disk-space-watch.service", 900), ("qbt-space-guard.service", 480),
     ("library-sort.service", 900), ("disk-error-watch.service", 3000), ("smart-change-watch.service", 12 * 3600),
     ("backup-freshness-watch.service", 30 * 3600), ("restic-backup.service", 30 * 3600),
-    ("restic-backup-r2.service", 30 * 3600), ("pi-weekly.service", 8 * 24 * 3600),
+    ("restic-backup-r2.service", 30 * 3600), ("pi-weekly.service", 8 * 24 * 3600), ("immich-release-watch.service", 30 * 3600),
 ]
 PI_REPORT_KEY = "/home/skit/.ssh/piserver_report"
 

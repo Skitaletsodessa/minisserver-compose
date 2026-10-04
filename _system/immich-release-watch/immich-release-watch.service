@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily check for a new Immich release (Diun cannot list the ghcr tags reliably)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/immich-release-watch/immich-release-watch.py
