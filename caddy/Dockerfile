@@ -7,8 +7,8 @@
 # real client IP has nothing to act on at the point traffic reaches this host — Caddy itself is
 # the only place in the chain that both sees the real client IP (via X-Forwarded-For, once
 # trusted_proxies is set) and can refuse a request. See docs/report-10.md.
-FROM caddy:2.11.4-builder AS builder
+FROM caddy:2.11.6-builder AS builder
 RUN xcaddy build --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
-FROM caddy:2.11.4
+FROM caddy:2.11.6
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
