@@ -181,8 +181,10 @@ def merge_rules(existing, block):
 def desired_client(ip, name, mac):
     return {
         "name": name, "ids": [ip] + ([mac] if mac else []), "tags": [], "upstreams": [],
-        "use_global_settings": True, "filtering_enabled": True, "parental_enabled": False,
+        "use_global_settings": False, "filtering_enabled": True, "parental_enabled": False,
         # Safe Search forced; YouTube "restricted" matters during the 16-19 window.
+        # use_global_settings MUST be False: with True AGH ignores this client's own safe_search entirely (found 2026-10-05;
+        # it had been silently inactive since Task 20). Global safebrowsing/parental are off, so own settings change nothing else.
         "safe_search": {"enabled": True, "bing": True, "duckduckgo": True, "ecosia": False,
                         "google": True, "pixabay": False, "yandex": False, "youtube": True},
         # Time gating is done by the rules above, not by AGH's service block (see docstring).

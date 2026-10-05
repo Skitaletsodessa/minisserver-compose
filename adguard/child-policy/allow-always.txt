@@ -23,3 +23,5 @@ play.googleapis.com
 play-fe.googleapis.com
 deviceintegritytokens-pa.googleapis.com
 kidsmanagement-pa.googleapis.com
+# --- 2026-10-05: Lenovo tablets validate the network with https://www.google.com/generate_204; blocked, Android shows limited internet and Family Link does not sync. Safe search is forced for these clients, so this opens only Google SafeSearch.
+www.google.com
