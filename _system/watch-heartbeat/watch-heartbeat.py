@@ -40,7 +40,7 @@ def last_finish(unit):
 def pi_watch_age():
     try:
         r = subprocess.run(["ssh", "-T", "-q", "-i", PI_REPORT_KEY, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-                            "-o", "ConnectTimeout=10", "skit@192.168.31.5"], capture_output=True, text=True, timeout=60)
+                            "-o", "ConnectTimeout=10", "skit@192.168.31.5", "age"], capture_output=True, text=True, timeout=60)
         for line in r.stdout.splitlines():
             if line.startswith("origin_watch_age_s="):
                 v = line.split("=", 1)[1]
