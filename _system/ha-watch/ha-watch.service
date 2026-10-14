@@ -4,4 +4,5 @@ After=docker.service
 
 [Service]
 Type=oneshot
+User=skit
 ExecStart=/srv/compose/_system/ha-watch/ha-watch.py
