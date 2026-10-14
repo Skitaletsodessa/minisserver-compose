@@ -147,3 +147,10 @@ minisserver.tail6bf4d5.ts.net:11443 {
 
 	reverse_proxy 192.168.31.2:4533
 }
+
+minisserver.tail6bf4d5.ts.net:15443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 25: Home Assistant — tailnet only, never on the LAN, never public via Funnel.
+	reverse_proxy 127.0.0.1:8123
+}

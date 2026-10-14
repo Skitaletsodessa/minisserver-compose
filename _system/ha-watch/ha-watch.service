@@ -1,0 +1,7 @@
+[Unit]
+Description=Home Assistant liveness watchdog
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/compose/_system/ha-watch/ha-watch.py

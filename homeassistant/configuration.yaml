@@ -1,0 +1,19 @@
+# Home Assistant configuration — in git; no secrets here.
+# Secrets live in /config/secrets.yaml (git-ignored, restic-backed).
+
+default_config:
+
+http:
+  server_host: 127.0.0.1
+  server_port: 8123
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+  ip_ban_enabled: false
+
+recorder:
+  purge_keep_days: 10
+  commit_interval: 30
+
+logger:
+  default: warning

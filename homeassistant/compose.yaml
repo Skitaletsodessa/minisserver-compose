@@ -1,0 +1,22 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant@sha256:130241f28d01fa80dfa3b44f7d89781c188d8642ecab9024f079f19f9f82baa0
+    container_name: homeassistant
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 1536m
+    environment:
+      - TZ=Europe/Prague
+    volumes:
+      - /srv/apps/homeassistant:/config
+      - /srv/compose/homeassistant/configuration.yaml:/config/configuration.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s --max-time 5 http://127.0.0.1:8123/api/ | grep -q message"]
+      start_period: 90s
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - 'diun.include_tags=^\d{4}\.\d+\.\d+$'
