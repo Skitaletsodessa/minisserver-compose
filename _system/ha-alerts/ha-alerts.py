@@ -47,6 +47,9 @@ MISMATCH_SECS = 15 * 60
 DRYER_SECS    = 90 * 60
 ZERO_PWR_SECS = 15 * 60
 
+# kitchen_orchids: fake metering chip (DPS 20-25 always 0, no factory calibration)
+SKIP_ZERO_POWER = {"switch.kitchen_orchids"}
+
 
 def prague_hhmm():
     try:
@@ -124,9 +127,9 @@ def main():
             else:
                 watchnotify.clear(key_d, "HA: сушилка выключена или в норме")
 
-        # 4. Zero power while on
+        # 4. Zero power while on (skip entities with fake/broken metering)
         psensor = POWER_SENSOR.get(eid)
-        if psensor and state == "on" and age > ZERO_PWR_SECS:
+        if psensor and eid not in SKIP_ZERO_POWER and state == "on" and age > ZERO_PWR_SECS:
             p_state, p_ts = get_state(conn, psensor)
             key_z = f"ha-zero-power-{name}"
             try:
