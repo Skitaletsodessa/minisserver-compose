@@ -152,5 +152,12 @@ minisserver.tail6bf4d5.ts.net:15443 {
 	bind 100.76.61.8
 	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
 	# Task 25: Home Assistant — tailnet only, never on the LAN, never public via Funnel.
-	reverse_proxy 127.0.0.1:8123
+	# Strip X-Forwarded-For so HA does not see this as a reverse-proxy request and does not
+	# trigger the "pending HTTP config" confirmation flow (tailnet-only: real client IPs
+	# are not needed inside HA; Tailscale ACLs enforce access).
+	reverse_proxy 127.0.0.1:8123 {
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Proto
+		header_up -X-Forwarded-Host
+	}
 }
