@@ -1,0 +1,8 @@
+[Unit]
+Description=Home Assistant plug alert watchdog
+After=docker.service
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/ha-alerts/ha-alerts.py
