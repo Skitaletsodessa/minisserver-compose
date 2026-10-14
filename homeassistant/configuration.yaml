@@ -1,6 +1,10 @@
 # Home Assistant configuration — in git; no secrets here.
 # Secrets live in /config/secrets.yaml (git-ignored, restic-backed).
 
+homeassistant:
+  external_url: "https://minisserver.tail6bf4d5.ts.net:15443"
+  internal_url: "http://127.0.0.1:8123"
+
 default_config:
 
 http:
