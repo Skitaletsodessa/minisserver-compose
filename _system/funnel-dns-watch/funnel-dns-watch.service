@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Tailscale Funnel DNS is publicly resolvable (Task 25 fix)
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/funnel-dns-watch/funnel-dns-watch.sh
