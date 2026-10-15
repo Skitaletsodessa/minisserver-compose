@@ -8,6 +8,9 @@ Checks every 5 min:
  4. Switch on but power <2 W for >15 min (device off at socket)
  5. Air purifier unavailable >60 min (non-critical, slower than plugs)
  6. Air purifier filter life <10%: one message, then a reminder at most every 30 days
+ 7. Robot vacuum unavailable >60 min (non-critical)
+ 8. Robot vacuum fault (vacuum.fault != 0 or state error) for >5 min
+ 9. Robot vacuum consumable <10% (filter, mop, dust bag, brushes): one message, reminder at most every 30 days
 
 Reads HA recorder DB directly. Alerts via watchnotify.
 WATCH_TEST=1 -> print only.
@@ -66,6 +69,20 @@ PURIFIER_UNAVAIL_SECS = 60 * 60
 FILTER_LOW_PCT = 10
 FILTER_REMIND_SECS = 30 * 24 * 3600
 FILTER_STATE = "/var/lib/watch-alerts/ha-purifier-filter.json"
+
+# Xiaomi RoboVac H40 (xiaomi_miot, local). Monitoring only, nothing is ever commanded.
+VACUUMS = {
+    "ov51gl_e160": ("Пылесос H40 (спальня)", "vacuum.xiaomi_ov51gl_e160_robot_cleaner", "xiaomi_ov51gl_e160"),
+    "ov51gl_b5f6": ("Пылесос H40 (гостиная)", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "xiaomi_ov51gl_b5f6"),
+}
+VACUUM_CONSUMABLES = (
+    ("filter_life_level", "фильтр"),
+    ("mop_life_level", "моп"),
+    ("dust_bag_life_level", "мешок для пыли"),
+    ("brush_life_level", "щётка (1)"),
+    ("brush_life_level_2", "щётка (2)"),
+)
+VACUUM_FAULT_SECS = 5 * 60
 
 
 def prague_hhmm():
@@ -130,6 +147,82 @@ def check_purifiers(conn):
         elif key in fstate:
             del fstate[key]
             dirty = True
+
+    if dirty:
+        try:
+            with open(FILTER_STATE, "w") as f:
+                json.dump(fstate, f)
+        except OSError as exc:
+            print(f"ha-alerts: cannot write {FILTER_STATE}: {exc}", file=sys.stderr)
+
+
+def get_attrs(conn, entity_id):
+    row = conn.execute("""
+        SELECT a.shared_attrs
+        FROM states s
+        JOIN states_meta sm ON s.metadata_id = sm.metadata_id
+        JOIN state_attributes a ON s.attributes_id = a.attributes_id
+        WHERE sm.entity_id = ?
+        ORDER BY s.state_id DESC LIMIT 1
+    """, (entity_id,)).fetchone()
+    try:
+        return json.loads(row[0]) if row else {}
+    except ValueError:
+        return {}
+
+
+def check_vacuums(conn):
+    try:
+        with open(FILTER_STATE) as f:
+            fstate = json.load(f)
+    except (OSError, ValueError):
+        fstate = {}
+    dirty = False
+
+    for key, (label, vac, prefix) in VACUUMS.items():
+        state, changed_ts = get_state(conn, vac)
+        if state is None:
+            continue
+        age = (NOW - changed_ts) if changed_ts else 0
+
+        key_u = f"ha-vacuum-unavail-{key}"
+        if state == "unavailable" and age > PURIFIER_UNAVAIL_SECS:
+            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин")
+        else:
+            watchnotify.clear(key_u, f"HA: {label} снова доступен")
+        if state == "unavailable":
+            continue
+
+        attrs = get_attrs(conn, vac)
+        try:
+            fault = int(attrs.get("vacuum.fault") or 0)
+        except (TypeError, ValueError):
+            fault = 0
+        key_f = f"ha-vacuum-fault-{key}"
+        if (fault != 0 or state == "error") and age > VACUUM_FAULT_SECS:
+            desc = attrs.get("vacuum.status_desc") or state
+            watchnotify.alert(key_f,
+                f"HA: {label} - ошибка (код {fault}, статус «{desc}») уже {int(age//60)} мин, возможно застрял")
+        else:
+            watchnotify.clear(key_f, f"HA: {label} - ошибка снята")
+
+        for suffix, what in VACUUM_CONSUMABLES:
+            val, _ = get_state(conn, f"sensor.{prefix}_{suffix}")
+            fkey = f"{key}:{suffix}"
+            try:
+                pct = float(val)
+            except (TypeError, ValueError):
+                continue
+            if pct < FILTER_LOW_PCT:
+                last = fstate.get(fkey)
+                if last is None or NOW - last >= FILTER_REMIND_SECS:
+                    watchnotify.send(f"HA: {label} - {what} {pct:.0f}%, пора заменить")
+                    if not watchnotify.TEST:
+                        fstate[fkey] = NOW
+                        dirty = True
+            elif fkey in fstate:
+                del fstate[fkey]
+                dirty = True
 
     if dirty:
         try:
@@ -207,6 +300,7 @@ def main():
                 watchnotify.clear(key_z, f"HA: {name} потребляет нормально")
 
     check_purifiers(conn)
+    check_vacuums(conn)
 
     conn.close()
     return 0
