@@ -129,7 +129,9 @@ def main():
 
         # 4. Zero power while on (skip entities with fake/broken metering)
         psensor = POWER_SENSOR.get(eid)
-        if psensor and eid not in SKIP_ZERO_POWER and state == "on" and age > ZERO_PWR_SECS:
+        if psensor and eid in SKIP_ZERO_POWER:
+            watchnotify.clear(f"ha-zero-power-{name}", f"HA: {name} мониторинг мощности отключён (нет метрики)")
+        elif psensor and eid not in SKIP_ZERO_POWER and state == "on" and age > ZERO_PWR_SECS:
             p_state, p_ts = get_state(conn, psensor)
             key_z = f"ha-zero-power-{name}"
             try:
