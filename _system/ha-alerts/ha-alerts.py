@@ -23,6 +23,7 @@ SCHEDULE = {
     "switch.livingroom_rack_big": [(7*60, 20*60)],
     "switch.kitchen_orchids":     [(7*60, 20*60)],
     "switch.bedroom_parrot":      [(11*60, 18*60)],
+    "switch.minisserver":         [(7*60, 20*60)],
 }
 
 POWER_SENSOR = {
@@ -31,6 +32,7 @@ POWER_SENSOR = {
     "switch.livingroom_rack_big": "sensor.livingroom_rack_big_power",
     "switch.kitchen_orchids":     "sensor.kitchen_orchids_power",
     "switch.bedroom_parrot":      "sensor.bedroom_parrot_power",
+    "switch.minisserver":         "sensor.minisserver_power",
 }
 
 # kitchen_orchids grow light may draw very little; lower threshold for it
@@ -40,6 +42,7 @@ ZERO_PWR_WATTS = {
     "switch.livingroom_rack_big": 5.0,
     "switch.kitchen_orchids":     1.0,
     "switch.bedroom_parrot":      2.0,
+    "switch.minisserver":         2.0,
 }
 
 UNAVAIL_SECS  = 10 * 60

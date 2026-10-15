@@ -60,6 +60,7 @@
           - switch.living_room_rack
           - switch.livingroom_rack_big
           - switch.kitchen_orchids
+          - switch.minisserver
 
 - id: sched_plant_lights_off
   alias: 'Schedule: plant lights OFF 20:00'
@@ -74,6 +75,7 @@
           - switch.living_room_rack
           - switch.livingroom_rack_big
           - switch.kitchen_orchids
+          - switch.minisserver
 
 # ── Bedroom Parrot UV (.245): ON 11:00, OFF 18:00 ───────────────────────────
 - id: sched_parrot_uv_on
@@ -152,3 +154,12 @@
       from: "unavailable"
   action:
     - service: script.reconcile_parrot
+
+- id: reconcile_minisserver_reconnect
+  alias: 'Reconcile: minisserver on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.minisserver
+      from: "unavailable"
+  action:
+    - service: script.reconcile_plant_lights

@@ -51,6 +51,7 @@ reconcile_plant_lights:
           - switch.living_room_rack
           - switch.livingroom_rack_big
           - switch.kitchen_orchids
+          - switch.minisserver
         sequence:
           - variables:
               cur: "{{ states(repeat.item) }}"
