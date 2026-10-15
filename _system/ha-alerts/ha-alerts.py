@@ -59,6 +59,8 @@ SKIP_ZERO_POWER = {"switch.kitchen_orchids"}
 PURIFIERS = {
     "zhimi_airp_rmb1": ("Очиститель 4 Lite", "fan.zhimi_airp_rmb1",
                         "sensor.zhimi_airp_rmb1_filter_life_remaining"),
+    "zhimi_cpa4_9832": ("Очиститель 4 Compact", "fan.zhimi_cpa4_9832_air_purifier",
+                        "sensor.zhimi_cpa4_9832_filter_life_level"),
 }
 PURIFIER_UNAVAIL_SECS = 60 * 60
 FILTER_LOW_PCT = 10
