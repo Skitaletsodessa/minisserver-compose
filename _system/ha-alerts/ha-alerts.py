@@ -6,11 +6,13 @@ Checks every 5 min:
  2. State != schedule for >15 min (mismatch)
  3. Bathroom towels on >90 min (dryer runaway)
  4. Switch on but power <2 W for >15 min (device off at socket)
+ 5. Air purifier unavailable >60 min (non-critical, slower than plugs)
+ 6. Air purifier filter life <10%: one message, then a reminder at most every 30 days
 
 Reads HA recorder DB directly. Alerts via watchnotify.
 WATCH_TEST=1 -> print only.
 """
-import os, sys, time, sqlite3, datetime
+import os, sys, time, sqlite3, datetime, json
 sys.path.insert(0, "/srv/compose/_system/lib")
 import watchnotify
 
@@ -53,6 +55,16 @@ ZERO_PWR_SECS = 15 * 60
 # kitchen_orchids: fake metering chip (DPS 20-25 always 0, no factory calibration)
 SKIP_ZERO_POWER = {"switch.kitchen_orchids"}
 
+# Xiaomi air purifiers (Task 25 Phase F): monitoring only, nothing is ever switched.
+PURIFIERS = {
+    "zhimi_airp_rmb1": ("Очиститель 4 Lite", "fan.zhimi_airp_rmb1",
+                        "sensor.zhimi_airp_rmb1_filter_life_remaining"),
+}
+PURIFIER_UNAVAIL_SECS = 60 * 60
+FILTER_LOW_PCT = 10
+FILTER_REMIND_SECS = 30 * 24 * 3600
+FILTER_STATE = "/var/lib/watch-alerts/ha-purifier-filter.json"
+
 
 def prague_hhmm():
     try:
@@ -81,6 +93,48 @@ def get_state(conn, entity_id):
     """, (entity_id,))
     row = cur.fetchone()
     return (row[0], row[1]) if row else (None, None)
+
+
+def check_purifiers(conn):
+    try:
+        with open(FILTER_STATE) as f:
+            fstate = json.load(f)
+    except (OSError, ValueError):
+        fstate = {}
+    dirty = False
+
+    for key, (label, fan, filt) in PURIFIERS.items():
+        state, changed_ts = get_state(conn, fan)
+        age = (NOW - changed_ts) if changed_ts else 0
+
+        key_u = f"ha-purifier-unavail-{key}"
+        if state == "unavailable" and age > PURIFIER_UNAVAIL_SECS:
+            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин")
+        else:
+            watchnotify.clear(key_u, f"HA: {label} снова доступен")
+
+        f_state, _ = get_state(conn, filt)
+        try:
+            pct = float(f_state)
+        except (TypeError, ValueError):
+            continue
+        if pct < FILTER_LOW_PCT:
+            last = fstate.get(key)
+            if last is None or NOW - last >= FILTER_REMIND_SECS:
+                watchnotify.send(f"HA: {label} - ресурс фильтра {pct:.0f}%, пора заменить фильтр")
+                if not watchnotify.TEST:
+                    fstate[key] = NOW
+                    dirty = True
+        elif key in fstate:
+            del fstate[key]
+            dirty = True
+
+    if dirty:
+        try:
+            with open(FILTER_STATE, "w") as f:
+                json.dump(fstate, f)
+        except OSError as exc:
+            print(f"ha-alerts: cannot write {FILTER_STATE}: {exc}", file=sys.stderr)
 
 
 def main():
@@ -149,6 +203,8 @@ def main():
                         f"{int(p_age//60)} мин (нагрузка выключена?)")
             else:
                 watchnotify.clear(key_z, f"HA: {name} потребляет нормально")
+
+    check_purifiers(conn)
 
     conn.close()
     return 0
