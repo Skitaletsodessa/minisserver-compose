@@ -1,0 +1,10 @@
+--- a/custom_components/xiaomi_miot/core/utils.py
++++ b/custom_components/xiaomi_miot/core/utils.py
+@@ -316,6 +316,7 @@
+ 
+ 
+ async def async_analytics_track_event(hass: HomeAssistant, event, action, label, value=0, **kwargs):
++    return False  # local patch: upstream telemetry to hacc.miot-spec.com disabled
+     pms = {
+         'model': label,
+         'event': event,
