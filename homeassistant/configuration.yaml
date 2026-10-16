@@ -15,6 +15,11 @@ http:
 recorder:
   purge_keep_days: 10
   commit_interval: 30
+  # xiaomi_miot "Info" buttons rewrite a ~10 kB attribute dict every few seconds: 43k rows and ~345 MiB in two days
+  # (found 2026-10-16). They carry no history worth keeping; the entities themselves are untouched.
+  exclude:
+    entity_globs:
+      - button.*_info
 
 logger:
   default: warning
