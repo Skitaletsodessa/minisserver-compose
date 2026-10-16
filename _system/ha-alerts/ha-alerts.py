@@ -3,7 +3,7 @@
 
 Checks every 5 min:
  1. Plug unavailable >10 min
- 2. State != schedule for >15 min (mismatch)
+ 2. State != schedule for >15 min (mismatch); a plant light switched off by hand inside its ON window is not reported
  3. Bathroom towels on >90 min (dryer runaway)
  4. Switch on but power <2 W for >15 min (device off at socket)
  5. Air purifier unavailable >60 min (non-critical, slower than plugs)
@@ -97,6 +97,20 @@ def prague_hhmm():
     except Exception:
         now = datetime.datetime.utcnow()
     return now.hour * 60 + now.minute
+
+
+# A grow light switched OFF by hand inside its ON window is the household's decision, not a fault (Ivan, 2026-10-16).
+# Only OFF-by-hand is exempt; a light that is OFF since before the last schedule edge (HA command lost) still alerts.
+PLANT_LIGHTS = {"switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver"}
+MANUAL_MARGIN_SECS = 120
+
+
+def last_edge_ts(entity_id, t):
+    """Epoch of the most recent schedule edge (start or end of a window) of this plug; t = Prague minute of the day."""
+    edges = sorted({m for w in SCHEDULE[entity_id] for m in w})
+    past = [m for m in edges if m <= t]
+    delta = (t - max(past)) if past else (t - (max(edges) - 1440))
+    return NOW - delta * 60
 
 
 def expected(entity_id, t):
@@ -314,7 +328,9 @@ def main():
         # 2. Mismatch
         exp = expected(eid, t)
         key_m = f"ha-mismatch-{name}"
-        if state != exp and age > MISMATCH_SECS:
+        manual_off = (eid in PLANT_LIGHTS and state == "off" and exp == "on" and bool(changed_ts)
+                      and changed_ts > last_edge_ts(eid, t) + MANUAL_MARGIN_SECS)
+        if state != exp and age > MISMATCH_SECS and not manual_off:
             watchnotify.alert(key_m,
                 f"HA: {name} в состоянии '{state}', по расписанию '{exp}' "
                 f"уже {int(age//60)} мин")
