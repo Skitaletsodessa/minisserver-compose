@@ -9,7 +9,7 @@ Checks every 5 min:
  5. Air purifier unavailable >60 min (non-critical, slower than plugs)
  6. Air purifier filter life <10%: one message, then a reminder at most every 30 days
  7. Robot vacuum unavailable >60 min (non-critical)
- 8. Robot vacuum fault (vacuum.fault != 0 or state error) for >5 min
+ 8. Robot vacuum stuck: state paused or error for >10 min (vacuum.fault is a sticky last-event code, e.g. 100008 on every docking - never alert on it alone)
  9. Robot vacuum consumable <10% (filter, mop, dust bag, brushes): one message, reminder at most every 30 days
 
 Reads HA recorder DB directly. Alerts via watchnotify.
@@ -82,7 +82,8 @@ VACUUM_CONSUMABLES = (
     ("brush_life_level", "щётка (1)"),
     ("brush_life_level_2", "щётка (2)"),
 )
-VACUUM_FAULT_SECS = 5 * 60
+VACUUM_STUCK_SECS = 10 * 60
+VACUUM_STUCK_STATES = {"paused": "на паузе", "error": "в ошибке"}
 
 
 def prague_hhmm():
@@ -199,12 +200,13 @@ def check_vacuums(conn):
         except (TypeError, ValueError):
             fault = 0
         key_f = f"ha-vacuum-fault-{key}"
-        if (fault != 0 or state == "error") and age > VACUUM_FAULT_SECS:
+        if state in VACUUM_STUCK_STATES and age > VACUUM_STUCK_SECS:
             desc = attrs.get("vacuum.status_desc") or state
             watchnotify.alert(key_f,
-                f"HA: {label} - ошибка (код {fault}, статус «{desc}») уже {int(age//60)} мин, возможно застрял")
+                f"HA: {label} {VACUUM_STUCK_STATES[state]} уже {int(age//60)} мин "
+                f"(статус «{desc}», последний код {fault}), возможно застрял")
         else:
-            watchnotify.clear(key_f, f"HA: {label} - ошибка снята")
+            watchnotify.clear(key_f, f"HA: {label} снова в работе")
 
         for suffix, what in VACUUM_CONSUMABLES:
             val, _ = get_state(conn, f"sensor.{prefix}_{suffix}")
