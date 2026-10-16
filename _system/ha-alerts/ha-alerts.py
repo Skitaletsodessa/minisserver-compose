@@ -11,6 +11,7 @@ Checks every 5 min:
  7. Robot vacuum unavailable >60 min (non-critical)
  8. Robot vacuum stuck: state paused or error for >10 min (vacuum.fault is a sticky last-event code, e.g. 100008 on every docking - never alert on it alone)
  9. Robot vacuum consumable <10% (filter, mop, dust bag, brushes): one message, reminder at most every 30 days
+10. Livingroom vacuum plan started but not finished (no 'ПЛАН ВЫПОЛНЕН' logbook line) or running >4 h
 
 Reads HA recorder DB directly. Alerts via watchnotify.
 WATCH_TEST=1 -> print only.
@@ -83,6 +84,9 @@ VACUUM_CONSUMABLES = (
     ("brush_life_level_2", "щётка (2)"),
 )
 VACUUM_STUCK_SECS = 10 * 60
+
+# Plan runs started before this moment never wrote the 'ПЛАН ВЫПОЛНЕН' line: do not alert on them.
+PLAN_ALERT_FROM = 1792151514
 VACUUM_STUCK_STATES = {"paused": "на паузе", "error": "в ошибке"}
 
 
@@ -234,6 +238,51 @@ def check_vacuums(conn):
             print(f"ha-alerts: cannot write {FILTER_STATE}: {exc}", file=sys.stderr)
 
 
+def check_vacuum_plan(conn):
+    """The scheduled/manual plan script writes 'ПЛАН ВЫПОЛНЕН' to the logbook at its end; a run that stopped earlier
+    (battery, wrong mode, station fault, manual stop) leaves no such line."""
+    state, _ = get_state(conn, "script.vacuum_livingroom_plan")
+    if state is None:
+        return
+    attrs = get_attrs(conn, "script.vacuum_livingroom_plan")
+    try:
+        last = datetime.datetime.fromisoformat(str(attrs.get("last_triggered")).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return
+    if last < PLAN_ALERT_FROM:
+        return
+    run_age = NOW - last
+    key_h = "ha-vacuum-plan-hung"
+    key_f = "ha-vacuum-plan-failed"
+    if state == "on" and run_age > 4 * 3600:
+        watchnotify.alert(key_h, f"HA: сценарий пылесоса (гостиная) идёт уже {int(run_age//3600)} ч, возможно завис")
+    else:
+        watchnotify.clear(key_h, "HA: сценарий пылесоса (гостиная) больше не висит")
+    if state == "on" or run_age < 600 or run_age > 12 * 3600:
+        if run_age > 12 * 3600:
+            watchnotify.clear(key_f, "HA: прошлый сбой сценария пылесоса старше 12 ч, алерт снят")
+        return
+    done = False
+    for (ts, data) in conn.execute("""
+            SELECT e.time_fired_ts, d.shared_data FROM events e
+            JOIN event_types et ON e.event_type_id = et.event_type_id
+            JOIN event_data d ON e.data_id = d.data_id
+            WHERE et.event_type = 'logbook_entry' AND e.time_fired_ts >= ?""", (last - 5,)):
+        try:
+            j = json.loads(data)
+        except ValueError:
+            continue
+        if "Vacuum Livingroom" in j.get("name", "") and "ПЛАН ВЫПОЛНЕН" in j.get("message", ""):
+            done = True
+            break
+    if done:
+        watchnotify.clear(key_f, "HA: сценарий пылесоса (гостиная) выполнен до конца")
+    else:
+        when = datetime.datetime.fromtimestamp(last).strftime("%H:%M")
+        watchnotify.alert(key_f, f"HA: сценарий пылесоса (гостиная), запущенный в {when}, не дошёл до конца "
+                                 "(смотри уведомления HA и журнал). Пылесос мог остаться на базе с недоделанной уборкой.")
+
+
 def main():
     try:
         conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=10)
@@ -303,6 +352,7 @@ def main():
 
     check_purifiers(conn)
     check_vacuums(conn)
+    check_vacuum_plan(conn)
 
     conn.close()
     return 0
