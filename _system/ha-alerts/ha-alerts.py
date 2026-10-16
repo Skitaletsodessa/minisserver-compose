@@ -265,14 +265,27 @@ def check_vacuum_plan(conn):
         _check_one_plan(conn, script, logname, key, label)
 
 
+def script_last_start(conn, script):
+    """Start of the most recent 'on' stretch of a script entity, from its state history. The recorder does not keep a
+    script's last_triggered attribute, so the off -> on transition is the only trace of a run in the database."""
+    rows = conn.execute("""
+        SELECT s.state, s.last_updated_ts FROM states s JOIN states_meta m ON s.metadata_id = m.metadata_id
+        WHERE m.entity_id = ? ORDER BY s.state_id DESC LIMIT 600""", (script,)).fetchall()
+    start = None
+    for state, ts in rows:
+        if state == "on":
+            start = ts
+        elif start is not None:
+            break
+    return start
+
+
 def _check_one_plan(conn, script, logname, key, label):
     state, _ = get_state(conn, script)
     if state is None:
         return
-    attrs = get_attrs(conn, script)
-    try:
-        last = datetime.datetime.fromisoformat(str(attrs.get("last_triggered")).replace("Z", "+00:00")).timestamp()
-    except (TypeError, ValueError):
+    last = script_last_start(conn, script)
+    if last is None:
         return
     if last < PLAN_ALERT_FROM:
         return
