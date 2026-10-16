@@ -117,19 +117,40 @@ reconcile_parrot:
 # After every phase the robot returns to the dock by itself; "dust" = wait for the station to empty the bin
 # (status stationworking, ~11 s) and press Start Dust Arrest if it does not start by itself.
 # The room ids are literal strings in params (a templated "[10]" is turned into a list by HA and the robot ignores it).
-# Before each phase the cleaning type is set and checked, and after the start the running status is checked:
-# if the robot sweeps when mopping was expected (or the other way round) it is sent home and the script stops.
+# Before each phase the cleaning type is set and checked, and after the start the cleaning type the robot reports
+# is checked (not its status: the H40 says "sweeping" in mop mode too - found in the first run, 2026-10-16):
+# if it differs from the plan the robot is sent home and the script stops.
+# Resume after an abort: run with skip_phases = number of finished phases (Developer tools > Actions:
+#   action: script.vacuum_livingroom_plan / data: {skip_phases: 1}).
 # Aborting: stop the script (Settings > Scripts). A robot sent home by hand counts as "phase done".
 vacuum_livingroom_plan:
   alias: 'Vacuum Livingroom: vacuum + mop plan, dust emptied after vacuum phases'
   mode: single
   max_exceeded: silent
+  fields:
+    skip_phases:
+      description: 'How many first phases to skip (0 = the whole plan; 1 = start with the Koridor mop). Phases: 1 Koridor vacuum, 2 Koridor mop, 3 Bathroom vacuum, 4 Bathroom mop, 5 Living room vacuum, 6 Kitchen vacuum, 7 Kitchen mop.'
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 6
+          mode: box
   variables:
     st: sensor.xiaomi_ov51gl_b5f6_status
     bat: sensor.xiaomi_ov51gl_b5f6_battery_level
     vac: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
     area: sensor.xiaomi_ov51gl_b5f6_cleaning_area
     ctime: sensor.xiaomi_ov51gl_b5f6_cleaning_time
+    skip_n: "{{ skip_phases | default(0) | int(0) }}"
+    phases:
+      - {room: 10, kind: vacuum, dust: true}
+      - {room: 10, kind: mop, dust: false}
+      - {room: 9, kind: vacuum, dust: true}
+      - {room: 9, kind: mop, dust: false}
+      - {room: 13, kind: vacuum, dust: true}
+      - {room: 8, kind: vacuum, dust: true}
+      - {room: 8, kind: mop, dust: true}
   sequence:
     - if: "{{ states(st) not in ['charging', 'charged'] }}"
       then:
@@ -141,21 +162,14 @@ vacuum_livingroom_plan:
         - stop: 'vacuum is not docked'
           error: true
     - repeat:
-        for_each:
-          - {room: 10, kind: vacuum, dust: true}
-          - {room: 10, kind: mop, dust: false}
-          - {room: 9, kind: vacuum, dust: true}
-          - {room: 9, kind: mop, dust: false}
-          - {room: 13, kind: vacuum, dust: true}
-          - {room: 8, kind: vacuum, dust: true}
-          - {room: 8, kind: mop, dust: true}
+        for_each: "{{ phases[skip_n:] }}"
         sequence:
           - variables:
               kind: "{{ repeat.item.kind }}"
               room_name: "{{ {8: 'Кухня', 9: 'Ванная', 10: 'Коридор', 13: 'Гостиная'}[repeat.item.room] }}"
               phase: "{{ room_name }}, {{ 'уборка' if repeat.item.kind == 'vacuum' else 'протирка' }}"
               want_type: "{{ 'Sweep' if repeat.item.kind == 'vacuum' else 'Mop' }}"
-              want_status: "{{ 'sweeping' if repeat.item.kind == 'vacuum' else 'mopping' }}"
+              want_code: "{{ 1 if repeat.item.kind == 'vacuum' else 2 }}"
           # enough battery for a phase
           - if: "{{ states(bat) | float(0) < 50 }}"
             then:
@@ -251,7 +265,12 @@ vacuum_livingroom_plan:
                   message: "{{ phase }}: команда не принята, статус {{ states(st) }}."
               - stop: 'room start was not accepted'
                 error: true
-          - if: "{{ states(st) != want_status }}"
+          # the robot reports status "sweeping" in mop mode too: check the cleaning type it reports (1 Sweep, 2 Mop);
+          # that attribute refreshes with the state change, the long timeout only covers a slow poll
+          - wait_template: "{{ state_attr(vac, 'vacuum.sweep_mop_type') | int(0) == want_code }}"
+            timeout: '00:02:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
             then:
               - action: vacuum.return_to_base
                 target:
@@ -260,7 +279,7 @@ vacuum_livingroom_plan:
                 data:
                   notification_id: vacuum_livingroom
                   title: 'Пылесос (гостиная): остановлено'
-                  message: "{{ phase }}: ожидался режим {{ want_status }}, а пылесос в режиме {{ states(st) }}. Отправлен на базу."
+                  message: "{{ phase }}: ожидался тип уборки {{ want_type }}, пылесос сообщает {{ state_attr(vac, 'vacuum.sweep_mop_type') }}. Отправлен на базу."
               - stop: 'robot runs in the wrong mode'
                 error: true
           # until it is back on the dock (a manual pause or a stuck robot just waits; ha-alerts reports it)
