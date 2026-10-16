@@ -175,3 +175,32 @@
     - action: script.turn_on
       target:
         entity_id: script.vacuum_livingroom_plan
+
+# ── Robot vacuum H40 Bedroom: morning Silent vacuum 09:00, evening Turbo vacuum + mop Level3 19:00 (Ivan, 2026-10-16) ──
+- id: sched_vacuum_bedroom_morning
+  alias: 'Schedule: Bedroom vacuum morning 09:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '09:00:00'
+  action:
+    - action: script.turn_on
+      target:
+        entity_id: script.vacuum_bedroom_plan
+      data:
+        variables:
+          plan: morning
+
+- id: sched_vacuum_bedroom_evening
+  alias: 'Schedule: Bedroom vacuum + mop evening 19:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '19:00:00'
+  action:
+    - action: script.turn_on
+      target:
+        entity_id: script.vacuum_bedroom_plan
+      data:
+        variables:
+          plan: evening

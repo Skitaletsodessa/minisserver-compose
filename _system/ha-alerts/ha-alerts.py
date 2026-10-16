@@ -252,13 +252,24 @@ def check_vacuums(conn):
             print(f"ha-alerts: cannot write {FILTER_STATE}: {exc}", file=sys.stderr)
 
 
+VACUUM_PLANS = (
+    ("script.vacuum_livingroom_plan", "Vacuum Livingroom", "livingroom", "гостиная"),
+    ("script.vacuum_bedroom_plan", "Vacuum Bedroom", "bedroom", "спальня"),
+)
+
+
 def check_vacuum_plan(conn):
-    """The scheduled/manual plan script writes 'ПЛАН ВЫПОЛНЕН' to the logbook at its end; a run that stopped earlier
-    (battery, wrong mode, station fault, manual stop) leaves no such line."""
-    state, _ = get_state(conn, "script.vacuum_livingroom_plan")
+    """Each plan script writes 'ПЛАН ВЫПОЛНЕН' to the logbook at its end; a run that stopped earlier (battery, wrong
+    mode, station fault, manual stop) leaves no such line."""
+    for script, logname, key, label in VACUUM_PLANS:
+        _check_one_plan(conn, script, logname, key, label)
+
+
+def _check_one_plan(conn, script, logname, key, label):
+    state, _ = get_state(conn, script)
     if state is None:
         return
-    attrs = get_attrs(conn, "script.vacuum_livingroom_plan")
+    attrs = get_attrs(conn, script)
     try:
         last = datetime.datetime.fromisoformat(str(attrs.get("last_triggered")).replace("Z", "+00:00")).timestamp()
     except (TypeError, ValueError):
@@ -266,15 +277,15 @@ def check_vacuum_plan(conn):
     if last < PLAN_ALERT_FROM:
         return
     run_age = NOW - last
-    key_h = "ha-vacuum-plan-hung"
-    key_f = "ha-vacuum-plan-failed"
+    key_h = f"ha-vacuum-plan-hung-{key}"
+    key_f = f"ha-vacuum-plan-failed-{key}"
     if state == "on" and run_age > 4 * 3600:
-        watchnotify.alert(key_h, f"HA: сценарий пылесоса (гостиная) идёт уже {int(run_age//3600)} ч, возможно завис")
+        watchnotify.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int(run_age//3600)} ч, возможно завис")
     else:
-        watchnotify.clear(key_h, "HA: сценарий пылесоса (гостиная) больше не висит")
+        watchnotify.clear(key_h, f"HA: сценарий пылесоса ({label}) больше не висит")
     if state == "on" or run_age < 600 or run_age > 12 * 3600:
         if run_age > 12 * 3600:
-            watchnotify.clear(key_f, "HA: прошлый сбой сценария пылесоса старше 12 ч, алерт снят")
+            watchnotify.clear(key_f, f"HA: прошлый сбой сценария пылесоса ({label}) старше 12 ч, алерт снят")
         return
     done = False
     for (ts, data) in conn.execute("""
@@ -286,14 +297,14 @@ def check_vacuum_plan(conn):
             j = json.loads(data)
         except ValueError:
             continue
-        if "Vacuum Livingroom" in j.get("name", "") and "ПЛАН ВЫПОЛНЕН" in j.get("message", ""):
+        if logname in j.get("name", "") and "ПЛАН ВЫПОЛНЕН" in j.get("message", ""):
             done = True
             break
     if done:
-        watchnotify.clear(key_f, "HA: сценарий пылесоса (гостиная) выполнен до конца")
+        watchnotify.clear(key_f, f"HA: сценарий пылесоса ({label}) выполнен до конца")
     else:
         when = datetime.datetime.fromtimestamp(last).strftime("%H:%M")
-        watchnotify.alert(key_f, f"HA: сценарий пылесоса (гостиная), запущенный в {when}, не дошёл до конца "
+        watchnotify.alert(key_f, f"HA: сценарий пылесоса ({label}), запущенный в {when}, не дошёл до конца "
                                  "(смотри уведомления HA и журнал). Пылесос мог остаться на базе с недоделанной уборкой.")
 
 
