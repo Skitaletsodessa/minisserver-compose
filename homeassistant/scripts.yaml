@@ -120,6 +120,8 @@ reconcile_parrot:
 # Before each phase the cleaning type is set and checked, and after the start the cleaning type the robot reports
 # is checked (not its status: the H40 says "sweeping" in mop mode too - found in the first run, 2026-10-16):
 # if it differs from the plan the robot is sent home and the script stops.
+# Found in the first full run (2026-10-16): after a vacuum phase the station empties the bin by itself ~10 s after
+# docking (sometimes the robot goes straight from "go charging" to "stationworking"); after a mop phase it does not.
 # Resume after an abort: run with skip_phases = number of finished phases (Developer tools > Actions:
 #   action: script.vacuum_livingroom_plan / data: {skip_phases: 1}).
 # Aborting: stop the script (Settings > Scripts). A robot sent home by hand counts as "phase done".
@@ -283,7 +285,7 @@ vacuum_livingroom_plan:
               - stop: 'robot runs in the wrong mode'
                 error: true
           # until it is back on the dock (a manual pause or a stuck robot just waits; ha-alerts reports it)
-          - wait_template: "{{ states(st) in ['charging', 'charged'] or states(vac) == 'error' }}"
+          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
             timeout: '01:30:00'
             continue_on_timeout: true
           - if: "{{ not wait.completed or states(vac) == 'error' }}"
@@ -301,26 +303,28 @@ vacuum_livingroom_plan:
           # dust emptying (vacuum phases and the last mop): the station usually starts ~10 s after docking
           - if: "{{ repeat.item.dust }}"
             then:
-              - wait_template: "{{ states(st) == 'stationworking' }}"
-                timeout: '00:01:30'
-                continue_on_timeout: true
-              - if: "{{ not wait.completed }}"
+              - if: "{{ states(st) != 'stationworking' }}"
                 then:
-                  - action: button.press
-                    target:
-                      entity_id: button.xiaomi_ov51gl_b5f6_start_dust_arrest
                   - wait_template: "{{ states(st) == 'stationworking' }}"
-                    timeout: '00:02:00'
+                    timeout: '00:01:30'
                     continue_on_timeout: true
                   - if: "{{ not wait.completed }}"
                     then:
-                      - action: persistent_notification.create
-                        data:
-                          notification_id: vacuum_livingroom
-                          title: 'Пылесос (гостиная): остановлено'
-                          message: "{{ phase }}: станция не начала опорожнение даже по команде."
-                      - stop: 'station did not empty the bin'
-                        error: true
+                      - action: button.press
+                        target:
+                          entity_id: button.xiaomi_ov51gl_b5f6_start_dust_arrest
+                      - wait_template: "{{ states(st) == 'stationworking' }}"
+                        timeout: '00:02:00'
+                        continue_on_timeout: true
+                      - if: "{{ not wait.completed }}"
+                        then:
+                          - action: persistent_notification.create
+                            data:
+                              notification_id: vacuum_livingroom
+                              title: 'Пылесос (гостиная): остановлено'
+                              message: "{{ phase }}: станция не начала опорожнение даже по команде."
+                          - stop: 'station did not empty the bin'
+                            error: true
               - wait_template: "{{ states(st) in ['charging', 'charged'] }}"
                 timeout: '00:03:00'
                 continue_on_timeout: true
