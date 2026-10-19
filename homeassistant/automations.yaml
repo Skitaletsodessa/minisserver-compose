@@ -204,3 +204,18 @@
       data:
         variables:
           plan: evening
+
+# ── Portal (Task 27): the one way the host-side applier reaches Home Assistant. Static and hand-written on purpose: it contains no time and no
+# schedule, only "reload what is in generated/". local_only: only requests from this machine's own network are accepted; the webhook id is a
+# secret (secrets.yaml, not in git). script.reload first, automation.reload last: the automation reload replaces this very automation.
+- id: portal_apply_reload
+  alias: 'Portal: reload generated schedules (webhook)'
+  mode: single
+  trigger:
+    - platform: webhook
+      webhook_id: !secret portal_reload_webhook
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: script.reload
+    - service: automation.reload

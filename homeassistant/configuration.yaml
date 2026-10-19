@@ -24,5 +24,10 @@ recorder:
 logger:
   default: warning
 
-automation: !include automations.yaml
-script: !include scripts.yaml
+# Task 27 (portal-schedules): the schedules are rendered from one source of truth into generated/ by the host-side applier.
+# Hand-written items stay in automations.yaml / scripts.yaml. 'webhook:' is explicit because the applier's reload trigger is a webhook.
+webhook:
+automation manual: !include automations.yaml
+automation generated: !include_dir_merge_list generated/automations/
+script manual: !include scripts.yaml
+script generated: !include_dir_merge_named generated/scripts/

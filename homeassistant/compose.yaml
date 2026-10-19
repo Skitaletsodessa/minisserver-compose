@@ -12,6 +12,7 @@ services:
       - /srv/compose/homeassistant/configuration.yaml:/config/configuration.yaml:ro
       - /srv/compose/homeassistant/automations.yaml:/config/automations.yaml:ro
       - /srv/compose/homeassistant/scripts.yaml:/config/scripts.yaml:ro
+      - /srv/compose/homeassistant/generated:/config/generated:ro      # Task 27: written by the host-side applier, read-only for HA
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 8123"]
       start_period: 90s

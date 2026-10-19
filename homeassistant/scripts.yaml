@@ -7,6 +7,7 @@ reconcile_all_plugs:
     - service: script.reconcile_bathroom_towels
     - service: script.reconcile_plant_lights
     - service: script.reconcile_parrot
+    - service: script.sch_reconcile_all
 
 reconcile_bathroom_towels:
   alias: 'Reconcile bathroom_towels to schedule'
