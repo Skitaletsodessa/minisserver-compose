@@ -57,7 +57,6 @@
     - service: switch.turn_on
       target:
         entity_id:
-          - switch.living_room_rack
           - switch.livingroom_rack_big
           - switch.kitchen_orchids
 
@@ -71,7 +70,6 @@
     - service: switch.turn_off
       target:
         entity_id:
-          - switch.living_room_rack
           - switch.livingroom_rack_big
           - switch.kitchen_orchids
 
@@ -116,15 +114,6 @@
       from: "unavailable"
   action:
     - service: script.reconcile_bathroom_towels
-
-- id: reconcile_rack1_reconnect
-  alias: 'Reconcile: Rack1 on reconnect'
-  trigger:
-    - platform: state
-      entity_id: switch.living_room_rack
-      from: "unavailable"
-  action:
-    - service: script.reconcile_plant_lights
 
 - id: reconcile_rack2_reconnect
   alias: 'Reconcile: Rack2 on reconnect'
