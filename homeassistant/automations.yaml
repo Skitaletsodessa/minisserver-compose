@@ -57,7 +57,6 @@
     - service: switch.turn_on
       target:
         entity_id:
-          - switch.livingroom_rack_big
           - switch.kitchen_orchids
 
 - id: sched_plant_lights_off
@@ -70,7 +69,6 @@
     - service: switch.turn_off
       target:
         entity_id:
-          - switch.livingroom_rack_big
           - switch.kitchen_orchids
 
 # ── Bedroom Parrot UV (.245): ON 11:00, OFF 18:00 ───────────────────────────
@@ -114,15 +112,6 @@
       from: "unavailable"
   action:
     - service: script.reconcile_bathroom_towels
-
-- id: reconcile_rack2_reconnect
-  alias: 'Reconcile: Rack2 on reconnect'
-  trigger:
-    - platform: state
-      entity_id: switch.livingroom_rack_big
-      from: "unavailable"
-  action:
-    - service: script.reconcile_plant_lights
 
 - id: reconcile_orchids_reconnect
   alias: 'Reconcile: Orchids on reconnect'

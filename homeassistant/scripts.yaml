@@ -49,7 +49,6 @@ reconcile_plant_lights:
           {{ 'on' if (t >= 420 and t < 1200) else 'off' }}
     - repeat:
         for_each:
-          - switch.livingroom_rack_big
           - switch.kitchen_orchids
         sequence:
           - variables:
