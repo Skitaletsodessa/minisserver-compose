@@ -182,6 +182,41 @@ check("consumable < 10 % is a quiet line only (heartbeat), no message", not SENT
 db = reset(); db.put("fan.zhimi_airp_rmb1", ts(8, 0), "unavailable"); run(db, [ts(9, 5), ts(10, 0)])
 check("purifier unavailable is quiet", not SENT and any("недоступен" in x for x in quiet()), str((SENT, quiet())))
 
+print("\n== schedules come from the portal snapshot (Task 27)")
+import json as _json
+_orig = (haa.SNAPSHOT, haa.SNAPSHOT_CACHE, haa.SCHEDULE, haa.PLAN_TIMES)
+_tmp = tempfile.mkdtemp(prefix="haa-snap-")
+_snap = {"schema": 1, "entities": [
+    {"id": "d", "kind": "plug", "ha_target": "switch.bathroom_towels", "rules": [{"id": "m", "days": [1, 3], "start": "06:30", "end": "08:00"}], "skip_dates": []},
+    {"id": "p", "kind": "plug", "ha_target": "switch.bedroom_parrot", "rules": [{"id": "d", "days": [1, 2, 3, 4, 5, 6, 7], "start": "11:00", "end": "18:00"}], "skip_dates": ["2026-10-20"]},
+    {"id": "v", "kind": "vacuum_plan", "ha_target": "script.vacuum_bedroom_plan", "rules": [{"id": "a", "days": [2], "start": "09:00"}, {"id": "b", "days": [1, 2], "start": "19:00"}], "skip_dates": []}]}
+sched, plans = haa.schedules_for(_snap, datetime.date(2026, 10, 20))          # a Tuesday
+check("weekday rule: the Monday/Wednesday dryer window does not exist on Tuesday", sched["switch.bathroom_towels"] == [], str(sched))
+check("a skipped date removes the day's window", sched["switch.bedroom_parrot"] == [], str(sched))
+check("vacuum triggers of the day only (Tuesday: 09:00 and 19:00)", plans["script.vacuum_bedroom_plan"] == (540, 1140), str(plans))
+sched, plans = haa.schedules_for(_snap, datetime.date(2026, 10, 19))          # a Monday
+check("Monday: dryer window, parrot window, only the 19:00 trigger", sched["switch.bathroom_towels"] == [(390, 480)] and sched["switch.bedroom_parrot"] == [(660, 1080)]
+      and plans["script.vacuum_bedroom_plan"] == (1140,), str((sched, plans)))
+haa.SCHEDULE = {"switch.bathroom_towels": []}
+check("no window today: no recent edge, no crash", haa.last_edge("switch.bathroom_towels", 600)[1] > 10 ** 6)
+
+haa.SNAPSHOT, haa.SNAPSHOT_CACHE = os.path.join(_tmp, "missing.json"), os.path.join(_tmp, "cache.json")
+check("snapshot and cache both missing: reported unusable", haa.init_schedules() is False and haa.SCHEDULE == {})
+db = reset(); at(db, ts(12, 0))
+check("unreadable schedules: ONE tier-B message, no plug checks, no crash", len(msgs("расписания недоступны")) == 1, str(msgs()))
+at(db, ts(12, 5)); at(db, ts(12, 10))
+check("... and it does not repeat", len(msgs("расписания недоступны")) == 1, str(msgs()))
+_json.dump(_snap, open(haa.SNAPSHOT_CACHE, "w"))
+check("live snapshot missing, cache present: the cache is used", haa.init_schedules(DAY) is True and haa.SCHEDULE_STATE["source"] == "cache", str(haa.SCHEDULE_STATE))
+_json.dump(_snap, open(haa.SNAPSHOT, "w"))
+os.remove(haa.SNAPSHOT_CACHE)
+check("live snapshot present: used, and a fresh cache copy is written", haa.init_schedules(DAY) is True and haa.SCHEDULE_STATE["source"] == "live"
+      and os.path.exists(haa.SNAPSHOT_CACHE))
+open(haa.SNAPSHOT, "w").write("{garbled")
+check("garbled live snapshot falls back to the cache", haa.init_schedules(DAY) is True and haa.SCHEDULE_STATE["source"] == "cache")
+haa.SNAPSHOT, haa.SNAPSHOT_CACHE, haa.SCHEDULE, haa.PLAN_TIMES = _orig
+shutil.rmtree(_tmp, ignore_errors=True)
+
 print("\n== not covered here, by design")
 print("NOTE  HA down: ha-watch.py is untouched and uses the default tier A (immediate, repeats, recovery - see test_watchnotify_tiers.py).")
 print("NOTE  Carp light above 20 % / on after 19:00: Task 25 phase E was not implemented, there is no such rule to keep or test.")

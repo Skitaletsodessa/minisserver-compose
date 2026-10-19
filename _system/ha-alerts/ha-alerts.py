@@ -28,14 +28,71 @@ try:
 except Exception:                                   # pragma: no cover
     PRAGUE = datetime.timezone.utc
 
-SCHEDULE = {
-    "switch.bathroom_towels":     [(6*60+30, 8*60), (18*60+30, 20*60)],
-    "switch.living_room_rack":    [(7*60, 20*60)],
-    "switch.livingroom_rack_big": [(7*60, 20*60)],
-    "switch.kitchen_orchids":     [(7*60, 20*60)],
-    "switch.bedroom_parrot":      [(11*60, 18*60)],
-    "switch.minisserver":         [(7*60, 20*60)],
-}
+# ── schedules: ONE source of truth (Task 27) ──
+# The windows and the vacuum plan times come from the portal schedule service's snapshot (rewritten on every change), not from constants
+# here. The snapshot FILE, not the HTTP API: this watcher must keep working while the service is down or being updated. A copy of the last
+# good snapshot is kept in this watcher's own state directory, so a missing or garbled snapshot does not blind it. If neither is readable
+# the plug checks are skipped and a tier-B alert says so - there is deliberately no hand-written fallback copy (that is the drift this
+# replaces). The alert timings below (grace periods, ceilings after an edge) are not schedules and stay in code.
+SNAPSHOT = os.environ.get("PORTAL_SNAPSHOT", "/srv/apps/portal/schedules/out/schedules.json")
+SNAPSHOT_CACHE = os.environ.get("PORTAL_SNAPSHOT_CACHE", "/var/lib/watch-alerts/portal-schedules.cache.json")
+SCHEDULE_STATE = {"source": None, "error": None}        # filled by init_schedules()
+SCHEDULE, PLAN_TIMES = {}, {}                            # {switch entity: [(start min, end min)]}, {script entity: (start min, ...)} for TODAY
+
+
+def _read_snapshot(path):
+    with open(path, encoding="utf-8") as f:
+        snap = json.load(f)
+    if snap.get("schema") != 1 or not isinstance(snap.get("entities"), list):
+        raise ValueError("unexpected snapshot shape")
+    return snap
+
+
+def schedules_for(snap, date):
+    """The windows (plugs) and trigger minutes (vacuum plans) that apply on one local date: weekdays and skipped dates are honoured."""
+    iso, day = date.isoweekday(), date.isoformat()
+    sched, plans = {}, {}
+    for e in snap["entities"]:
+        skipped = day in e.get("skip_dates", ())
+        rules = [] if skipped else [r for r in e["rules"] if iso in r["days"]]
+        hhmm = lambda s: int(s[:2]) * 60 + int(s[3:])
+        if e["kind"] == "plug" and e.get("ha_target"):
+            sched[e["ha_target"]] = sorted((hhmm(r["start"]), hhmm(r["end"])) for r in rules)
+        elif e["kind"] == "vacuum_plan" and e.get("ha_target"):
+            plans[e["ha_target"]] = tuple(sorted(hhmm(r["start"]) for r in rules))
+    return sched, plans
+
+
+def init_schedules(date=None):
+    """(Re)load SCHEDULE / PLAN_TIMES for `date` (default: today, Prague). Returns True when a usable snapshot was found."""
+    global SCHEDULE, PLAN_TIMES
+    date = date or datetime.datetime.now(PRAGUE).date()
+    snap, source, err = None, None, None
+    for path, label in ((SNAPSHOT, "live"), (SNAPSHOT_CACHE, "cache")):
+        try:
+            snap, source = _read_snapshot(path), label
+            break
+        except (OSError, ValueError) as exc:
+            err = f"{label}: {exc.__class__.__name__}"
+    if snap is None:
+        SCHEDULE, PLAN_TIMES = {}, {}
+        SCHEDULE_STATE.update(source=None, error=err)
+        return False
+    if source == "live":
+        try:                                                    # keep the last good snapshot for the day it is missing
+            os.makedirs(os.path.dirname(SNAPSHOT_CACHE), exist_ok=True)
+            tmp = SNAPSHOT_CACHE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snap, f)
+            os.replace(tmp, SNAPSHOT_CACHE)
+        except OSError:
+            pass
+    SCHEDULE, PLAN_TIMES = schedules_for(snap, date)
+    SCHEDULE_STATE.update(source=source, error=None)
+    return True
+
+
+init_schedules()
 POWER_SENSOR = {
     "switch.bathroom_towels":     "sensor.bathroom_towels_power",
     "switch.living_room_rack":    "sensor.living_room_rack_power",
@@ -75,11 +132,11 @@ FILTER_LOW_PCT = 10
 FILTER_REMIND_SECS = 30 * 24 * 3600
 FILTER_STATE = "/var/lib/watch-alerts/ha-purifier-filter.json"
 
-VACUUMS = {                                         # key: (label, vacuum entity, sensor prefix, plan script, logbook name, plan times)
+VACUUMS = {                                         # key: (label, vacuum entity, sensor prefix, plan script, logbook name); plan times: PLAN_TIMES[script]
     "ov51gl_e160": ("Пылесос H40 (спальня)", "vacuum.xiaomi_ov51gl_e160_robot_cleaner", "xiaomi_ov51gl_e160",
-                    "script.vacuum_bedroom_plan", "Vacuum Bedroom", (9 * 60, 19 * 60)),
+                    "script.vacuum_bedroom_plan", "Vacuum Bedroom"),
     "ov51gl_b5f6": ("Пылесос H40 (гостиная)", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "xiaomi_ov51gl_b5f6",
-                    "script.vacuum_livingroom_plan", "Vacuum Livingroom", (20 * 60 + 30,)),
+                    "script.vacuum_livingroom_plan", "Vacuum Livingroom"),
 }
 VACUUM_CONSUMABLES = (("filter_life_level", "фильтр"), ("mop_life_level", "моп"), ("dust_bag_life_level", "мешок для пыли"),
                       ("brush_life_level", "щётка (1)"), ("brush_life_level_2", "щётка (2)"))
@@ -205,6 +262,8 @@ def expected(eid, t):
 def last_edge(eid, t):
     """(kind 'start'|'end', seconds since that edge) for the most recent schedule edge at Prague minute-of-day t."""
     edges = sorted({(w[0], "start") for w in SCHEDULE[eid]} | {(w[1], "end") for w in SCHEDULE[eid]})
+    if not edges:                                   # no window today (weekday rule or a skipped date): there is no recent edge
+        return "end", 10 ** 9
     past = [(m, k) for m, k in edges if m <= t]
     if past:
         m, k = past[-1]
@@ -347,7 +406,8 @@ def failed_runs(ctx, script, logname, horizon):
 
 
 def check_vacuums(ctx, N):
-    for key, (label, vac, prefix, script, logname, plan_times) in VACUUMS.items():
+    for key, (label, vac, prefix, script, logname) in VACUUMS.items():
+        plan_times = PLAN_TIMES.get(script, ())
         state, changed = ctx.state(vac)
         if state is None:
             continue
@@ -419,6 +479,10 @@ def check_vacuums(ctx, N):
 
 
 def evaluate(ctx, N):
+    if not SCHEDULE:                                # B: the schedule snapshot (and its cached copy) is unreadable - say so, do not guess
+        N.alert("ha-alerts-schedules", f"ha-alerts: расписания недоступны ({SCHEDULE_STATE['error']}); проверки розеток и планов пылесосов пропущены", tier="B")
+    else:
+        N.clear("ha-alerts-schedules", "")
     check_plugs(ctx, N)
     check_purifiers(ctx, N)
     check_vacuums(ctx, N)
