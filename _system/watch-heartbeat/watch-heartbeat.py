@@ -29,6 +29,7 @@ WATCHERS = [
     ("funnel-dns-watch.service", 600),
 ]
 PI_REPORT_KEY = "/home/skit/.ssh/piserver_report"
+HEARTBEAT_LIST_MAX = 6          # the active list is capped; the rest is summarised as "+N more"
 
 
 def last_finish(unit):
@@ -85,11 +86,22 @@ def main():
         overdue.append(f"Pi-side adguard-watch-origin (last ran {human(age)} ago)")
     else:
         ok += 1
-    active = [(k, s) for k, s, _d in watchnotify.active() if k != "watchdog-overdue"]
+    detail = [d for d in watchnotify.active_detail() if d["key"] != "watchdog-overdue"]
+    loud = [d for d in detail if not d["quiet"]]
+    quiet = [d for d in detail if d["quiet"]]
     when = time.strftime("%H:%M")
-    line = f"minisserver heartbeat {when}: {ok}/{total} watchdogs ran on schedule, {len(active)} alert(s) active."
-    if active:
-        line += "\nActive: " + "; ".join(f"{k} since {time.strftime('%d.%m %H:%M', time.localtime(s))}" for k, s in active)
+    line = (f"minisserver heartbeat {when}: {ok}/{total} watchdogs ran on schedule, {len(detail)} alert(s) active"
+            + (f" ({len(quiet)} quiet)" if quiet else "") + ".")
+    items = []
+    for d in loud:
+        items.append(f"{d['key']} since {time.strftime('%d.%m %H:%M', time.localtime(d['since']))}")
+    for d in quiet:                       # quiet alerts are printed by their text: it carries the time and the plug
+        txt = (d["text"] or d["key"]).replace("HA: ", "", 1).replace(" (нет контекста автоматизации)", "")
+        items.append("quiet: " + txt[:90])
+    if items:
+        line += "\nActive: " + "; ".join(items[:HEARTBEAT_LIST_MAX])
+        if len(items) > HEARTBEAT_LIST_MAX:
+            line += f"; +{len(items) - HEARTBEAT_LIST_MAX} more"
     if overdue:
         line += "\nOVERDUE: " + "; ".join(overdue)
     print(line)

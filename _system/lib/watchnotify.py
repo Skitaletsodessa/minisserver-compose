@@ -10,6 +10,11 @@ Behaviour:
                     WATCH_REMIND_SECONDS (default 6 h) saying how long it has been failing. A send that failed is retried on the
                     next call (the outage is only marked "delivered" after Telegram answered ok:true).
   clear(key, text)  send `text` plus the outage duration, forget the outage. A failed send goes to an outbox and is retried.
+  Severity tiers (Task 26, opt-in per alert key; the default is tier A = exactly the behaviour above):
+    alert(key, text, tier="B")  ONE message, no reminders, no recovery message; stays in the active list until cleared silently.
+    alert(key, text, tier="C")  quiet: no Telegram message at all; recorded as active (the 08:00 heartbeat prints it as quiet).
+    explicit overrides: repeat=<seconds, 0 = never>, recovery=<bool>, quiet=<bool>.
+  active_detail() lists open alerts with tier/quiet/text for the heartbeat.
   send(text)        one-off event message (no state), with delivery logging and an outbox on failure.
   Every send logs one journal line: "watchnotify: delivered message_id=N" or "watchnotify: FAILED ...". The token is never logged.
 
@@ -142,17 +147,37 @@ def send(text):
     return True
 
 
-def alert(key, text, force=False, remind=None):
-    """Call on EVERY check while the fault persists. Sends the first message, then a reminder every REMIND seconds
-    (WATCH_REMIND_SECONDS, default 6 h); `remind` overrides it for this alert, 0 = never remind (one message only)."""
+TIERS = {
+    "A": {"repeat": None, "recovery": True, "quiet": False},     # as before Task 26
+    "B": {"repeat": 0, "recovery": False, "quiet": False},
+    "C": {"repeat": 0, "recovery": False, "quiet": True},
+}
+
+
+def alert(key, text, force=False, tier="A", repeat=None, recovery=None, quiet=None):
+    """Call on EVERY check while the fault persists. Tier A (default): sends the first message, then a reminder every REMIND
+    seconds (WATCH_REMIND_SECONDS, default 6 h), and a recovery message from clear(). Tier B: one message only, no recovery.
+    Tier C: no message at all, listed as quiet. repeat/recovery/quiet override the tier for this key."""
+    opt = dict(TIERS[tier])
+    if repeat is not None:
+        opt["repeat"] = repeat
+    if recovery is not None:
+        opt["recovery"] = recovery
+    if quiet is not None:
+        opt["quiet"] = quiet
     flush()
     now = time.time()
     st = _load(key)
     if st is None:
         st = {"since": now, "last_sent": 0, "delivered": False, "reminders": 0, "text": text}
     st["text"] = text
+    st["tier"], st["recovery"], st["quiet"] = tier, opt["recovery"], opt["quiet"]
+    if opt["quiet"]:
+        st["delivered"] = True                                    # nothing is ever sent for a quiet alert
+        _save(key, st)
+        return st
     first = not st["delivered"]
-    interval = REMIND if remind is None else remind
+    interval = REMIND if opt["repeat"] is None else opt["repeat"]
     due = (not first) and interval > 0 and (now - st["last_sent"] >= interval)
     if first or due or force:
         if first or force:
@@ -175,6 +200,12 @@ def clear(key, text):
     st = _load(key)
     if st is None:
         return False
+    if st.get("quiet") or not st.get("recovery", True):          # tier B/C: no recovery message
+        try:
+            os.remove(_state_file(key))
+        except OSError:
+            pass
+        return True
     dur = _dur(time.time() - st["since"])
     msg = f"{TAG}{text}\n(outage lasted {dur}{', ' + str(st['reminders']) + ' reminder(s) sent' if st.get('reminders') else ''})"
     if not _send_raw(msg):
@@ -203,9 +234,29 @@ def active():
     return out
 
 
+def active_detail():
+    """[{key, since, delivered, tier, quiet, text}] for every open alert (quiet ones included)."""
+    out = []
+    try:
+        names = os.listdir(STATE_DIR)
+    except OSError:
+        return out
+    for n in sorted(names):
+        if n.endswith(".json"):
+            try:
+                st = json.load(open(os.path.join(STATE_DIR, n)))
+                out.append({"key": n[:-5], "since": st["since"], "delivered": st.get("delivered", False),
+                            "tier": st.get("tier", "A"), "quiet": bool(st.get("quiet")), "text": st.get("text", "")})
+            except (OSError, ValueError, KeyError):
+                pass
+    return out
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "status"
-    if cmd == "alert" and len(argv) >= 4:
+    if cmd == "alert" and len(argv) >= 4 and argv[2] == "--tier" and len(argv) >= 6:
+        alert(argv[4], " ".join(argv[5:]), tier=argv[3])
+    elif cmd == "alert" and len(argv) >= 4:
         alert(argv[2], " ".join(argv[3:]))
     elif cmd == "clear" and len(argv) >= 4:
         clear(argv[2], " ".join(argv[3:]))

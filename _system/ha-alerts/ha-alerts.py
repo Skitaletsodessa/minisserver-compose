@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
-"""Task 25 Phase D: HA plug alert watchdog.
+"""Home Assistant alert logic (Task 25 Phase D, rewritten for Task 26: severity tiers, one message per incident).
 
-Checks every 5 min:
- 1. Plug unavailable >10 min
- 2. State != schedule for >15 min (mismatch); a plant light switched off by hand inside its ON window is not reported
- 3. Bathroom towels on >90 min (dryer runaway)
- 4. Switch on but power <2 W for >15 min (device off at socket)
- 5. Air purifier unavailable >60 min (non-critical, slower than plugs)
- 6. Air purifier filter life <10%: one message, then a reminder at most every 30 days
- 7. Robot vacuum unavailable >60 min (non-critical)
- 8. Robot vacuum stuck: state paused or error for >10 min (vacuum.fault is a sticky last-event code, e.g. 100008 on every docking - never alert on it alone)
- 9. Robot vacuum consumable <10% (filter, mop, dust bag, brushes): one message, reminder at most every 30 days
-10. Livingroom vacuum plan started but not finished (no 'ПЛАН ВЫПОЛНЕН' logbook line) or running >4 h
+Runs every 5 minutes (ha-alerts.timer), reads the HA recorder database read-only, talks to Telegram only through watchnotify.
+Tiers (watchnotify): A = message, repeats, recovery message; B = ONE message, no repeat, no recovery; C = quiet, only in the
+08:00 heartbeat. A switch-on or switch-off that HA did not make is NEVER an alert by itself, in either direction.
 
-Reads HA recorder DB directly. Alerts via watchnotify.
-WATCH_TEST=1 -> print only.
+  A  towel dryer / UV lamp still ON 30 min after its scheduled OFF edge; dryer continuously ON > 3 h
+  B  plant lights ON >= 60 min after 20:00; plug unavailable > 60 min; zero power while ON for 15 min;
+     purifier filter < 10 % (once, then every 30 days); vacuum paused/error/idle-off-dock >= 30 min (one message per incident,
+     says whether a plan run was interrupted); vacuum plan not finished or running > 4 h (only if no such incident);
+     vacuum unavailable at its plan time or for 6 h (only if no incident in the previous 24 h)
+  C  any mismatch with the schedule; a switch change HA did not make ("foreign change", kept 24 h); purifier unavailable;
+     vacuum unavailable (part of an incident); vacuum consumables < 10 %
+
+All time-dependent input goes through a Ctx object, so the same rules can be replayed over the recorded history
+(replay-ha-alerts.py). Not here: HA being down (ha-watch), the carp light (Phase E was not implemented).
+WATCH_TEST=1 -> messages are prefixed [TEST] and DO go to Telegram (watchnotify); use the replay harness for dry runs.
 """
 import os, sys, time, sqlite3, datetime, json
 sys.path.insert(0, "/srv/compose/_system/lib")
 import watchnotify
 
 DB = "/srv/apps/homeassistant/home-assistant_v2.db"
-NOW = time.time()
+try:
+    from zoneinfo import ZoneInfo
+    PRAGUE = ZoneInfo("Europe/Prague")
+except Exception:                                   # pragma: no cover
+    PRAGUE = datetime.timezone.utc
 
 SCHEDULE = {
     "switch.bathroom_towels":     [(6*60+30, 8*60), (18*60+30, 20*60)],
@@ -31,7 +36,6 @@ SCHEDULE = {
     "switch.bedroom_parrot":      [(11*60, 18*60)],
     "switch.minisserver":         [(7*60, 20*60)],
 }
-
 POWER_SENSOR = {
     "switch.bathroom_towels":     "sensor.bathroom_towels_power",
     "switch.living_room_rack":    "sensor.living_room_rack_power",
@@ -40,299 +44,384 @@ POWER_SENSOR = {
     "switch.bedroom_parrot":      "sensor.bedroom_parrot_power",
     "switch.minisserver":         "sensor.minisserver_power",
 }
-
-# kitchen_orchids grow light may draw very little; lower threshold for it
 ZERO_PWR_WATTS = {
-    "switch.bathroom_towels":     2.0,
-    "switch.living_room_rack":    5.0,
-    "switch.livingroom_rack_big": 5.0,
-    "switch.kitchen_orchids":     1.0,
-    "switch.bedroom_parrot":      2.0,
-    "switch.minisserver":         2.0,
+    "switch.bathroom_towels": 2.0, "switch.living_room_rack": 5.0, "switch.livingroom_rack_big": 5.0,
+    "switch.kitchen_orchids": 1.0, "switch.bedroom_parrot": 2.0, "switch.minisserver": 2.0,
 }
+SKIP_ZERO_POWER = {"switch.kitchen_orchids"}        # fake metering chip (DPS 20-25 always 0)
+PLANT_LIGHTS = {"switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver"}
+DRYER = "switch.bathroom_towels"
 
-UNAVAIL_SECS  = 10 * 60
-MISMATCH_SECS = 15 * 60
-DRYER_SECS    = 90 * 60
+# ── policy (Task 26) ──
+UNAVAIL_PLUG_SECS = 60 * 60
 ZERO_PWR_SECS = 15 * 60
+DRYER_CEILING_SECS = 3 * 3600
+STUCK_AFTER_EDGE = {                                # entity: (seconds after the OFF edge, tier)
+    "switch.bathroom_towels": (30 * 60, "A"), "switch.bedroom_parrot": (30 * 60, "A"),
+    **{e: (60 * 60, "B") for e in PLANT_LIGHTS},
+}
+STUCK_WINDOW_MAX = 4 * 3600                         # "after its OFF edge" means within the next hours, not the next morning
+MISMATCH_GRACE = 120                                # HA's edge command takes a few seconds
+FOREIGN_NEAR = 150                                  # a change this close to a schedule edge or an HA start is HA's own
+FOREIGN_KEEP = 24 * 3600
+START_BEFORE, START_AFTER = 90, 180                 # HA restores plug states a little before its start automation fires
 
-# kitchen_orchids: fake metering chip (DPS 20-25 always 0, no factory calibration)
-SKIP_ZERO_POWER = {"switch.kitchen_orchids"}
-
-# Xiaomi air purifiers (Task 25 Phase F): monitoring only, nothing is ever switched.
 PURIFIERS = {
-    "zhimi_airp_rmb1": ("Очиститель 4 Lite", "fan.zhimi_airp_rmb1",
-                        "sensor.zhimi_airp_rmb1_filter_life_remaining"),
-    "zhimi_cpa4_9832": ("Очиститель 4 Compact", "fan.zhimi_cpa4_9832_air_purifier",
-                        "sensor.zhimi_cpa4_9832_filter_life_level"),
+    "zhimi_airp_rmb1": ("Очиститель 4 Lite", "fan.zhimi_airp_rmb1", "sensor.zhimi_airp_rmb1_filter_life_remaining"),
+    "zhimi_cpa4_9832": ("Очиститель 4 Compact", "fan.zhimi_cpa4_9832_air_purifier", "sensor.zhimi_cpa4_9832_filter_life_level"),
 }
 PURIFIER_UNAVAIL_SECS = 60 * 60
 FILTER_LOW_PCT = 10
 FILTER_REMIND_SECS = 30 * 24 * 3600
 FILTER_STATE = "/var/lib/watch-alerts/ha-purifier-filter.json"
 
-# Xiaomi RoboVac H40 (xiaomi_miot, local). Monitoring only, nothing is ever commanded.
-VACUUMS = {
-    "ov51gl_e160": ("Пылесос H40 (спальня)", "vacuum.xiaomi_ov51gl_e160_robot_cleaner", "xiaomi_ov51gl_e160"),
-    "ov51gl_b5f6": ("Пылесос H40 (гостиная)", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "xiaomi_ov51gl_b5f6"),
+VACUUMS = {                                         # key: (label, vacuum entity, sensor prefix, plan script, logbook name, plan times)
+    "ov51gl_e160": ("Пылесос H40 (спальня)", "vacuum.xiaomi_ov51gl_e160_robot_cleaner", "xiaomi_ov51gl_e160",
+                    "script.vacuum_bedroom_plan", "Vacuum Bedroom", (9 * 60, 19 * 60)),
+    "ov51gl_b5f6": ("Пылесос H40 (гостиная)", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "xiaomi_ov51gl_b5f6",
+                    "script.vacuum_livingroom_plan", "Vacuum Livingroom", (20 * 60 + 30,)),
 }
-VACUUM_CONSUMABLES = (
-    ("filter_life_level", "фильтр"),
-    ("mop_life_level", "моп"),
-    ("dust_bag_life_level", "мешок для пыли"),
-    ("brush_life_level", "щётка (1)"),
-    ("brush_life_level_2", "щётка (2)"),
-)
-VACUUM_STUCK_SECS = 10 * 60
-VACUUM_IDLE_SECS = 15 * 60
-# Reminder interval of the non-critical alerts (vacuums, purifiers, plans): the default 6 h repeated one stuck robot
-# or one dead battery four times a day (Ivan, 2026-10-19: too much noise).
-DAILY = 24 * 3600
-# A grow light that somebody switched ON early is tolerated for this long before it counts as a mismatch; one left
-# on after its window still alerts after this time (it would burn all night).
-EARLY_ON_SECS = 120 * 60
-
-# Plan runs started before this moment never wrote the 'ПЛАН ВЫПОЛНЕН' line: do not alert on them.
-PLAN_ALERT_FROM = 1792151514
-VACUUM_STUCK_STATES = {"paused": "на паузе", "error": "в ошибке"}
+VACUUM_CONSUMABLES = (("filter_life_level", "фильтр"), ("mop_life_level", "моп"), ("dust_bag_life_level", "мешок для пыли"),
+                      ("brush_life_level", "щётка (1)"), ("brush_life_level_2", "щётка (2)"))
+VACUUM_STUCK_STATES = ("paused", "error", "idle")   # idle = stopped off the dock; vacuum.fault is a sticky code and is never used
+VACUUM_STUCK_SECS = 30 * 60
+VACUUM_UNAVAIL_QUIET_SECS = 60 * 60
+VACUUM_UNAVAIL_ESCALATE_SECS = 6 * 3600
+PLAN_DUE_GRACE = 2 * 3600
+PLAN_HUNG_SECS = 4 * 3600
+PLAN_ALERT_FROM = 1792151514                        # earlier plan runs never wrote the 'ПЛАН ВЫПОЛНЕН' line
+PLAN_DONE_MARK = "ПЛАН ВЫПОЛНЕН"
 
 
-def prague_hhmm():
-    try:
-        from zoneinfo import ZoneInfo
-        now = datetime.datetime.now(ZoneInfo("Europe/Prague"))
-    except Exception:
-        now = datetime.datetime.utcnow()
-    return now.hour * 60 + now.minute
+class Ctx:
+    """The world as of `now`: live (now = the present) or replayed (now = a moment in the recorded history)."""
+    def __init__(self, conn, now=None, filter_state=None):
+        self.conn = conn
+        self.now = time.time() if now is None else now
+        self.filter_state = filter_state or FILTER_STATE
+
+    def prague(self, ts=None):
+        return datetime.datetime.fromtimestamp(self.now if ts is None else ts, PRAGUE)
+
+    def hhmm(self):
+        d = self.prague()
+        return d.hour * 60 + d.minute
+
+    def state(self, eid):
+        row = self.conn.execute("""
+            SELECT s.state, COALESCE(s.last_changed_ts, s.last_updated_ts) FROM states s
+            JOIN states_meta m ON s.metadata_id = m.metadata_id
+            WHERE m.entity_id = ? AND s.last_updated_ts <= ? ORDER BY s.last_updated_ts DESC LIMIT 1""", (eid, self.now + 1)).fetchone()
+        return (row[0], row[1]) if row else (None, None)
+
+    def attrs(self, eid):
+        row = self.conn.execute("""
+            SELECT a.shared_attrs FROM states s JOIN states_meta m ON s.metadata_id = m.metadata_id
+            JOIN state_attributes a ON s.attributes_id = a.attributes_id
+            WHERE m.entity_id = ? AND s.last_updated_ts <= ? ORDER BY s.last_updated_ts DESC LIMIT 1""", (eid, self.now + 1)).fetchone()
+        try:
+            return json.loads(row[0]) if row else {}
+        except ValueError:
+            return {}
+
+    def transitions(self, eid, since):
+        """[(ts, state)]: the state at `since`, then every change up to now."""
+        out, prev = [], None
+        init = self.conn.execute("""
+            SELECT s.state FROM states s JOIN states_meta m ON s.metadata_id = m.metadata_id
+            WHERE m.entity_id = ? AND s.last_updated_ts <= ? ORDER BY s.last_updated_ts DESC LIMIT 1""", (eid, since)).fetchone()
+        if init:
+            out.append((since, init[0])); prev = init[0]
+        for ts, st in self.conn.execute("""
+                SELECT s.last_updated_ts, s.state FROM states s JOIN states_meta m ON s.metadata_id = m.metadata_id
+                WHERE m.entity_id = ? AND s.last_updated_ts > ? AND s.last_updated_ts <= ? ORDER BY s.last_updated_ts""",
+                (eid, since, self.now + 1)):
+            if st != prev:
+                out.append((ts, st)); prev = st
+        return out
+
+    def periods(self, eid, since, states, min_secs=0):
+        """[(start, end)] where the entity stayed in one of `states` for at least min_secs (an open period ends now)."""
+        tr = self.transitions(eid, since)
+        res = []
+        for i, (ts, st) in enumerate(tr):
+            end = tr[i + 1][0] if i + 1 < len(tr) else self.now
+            if st in states and end - ts >= min_secs:
+                res.append((ts, end))
+        return res
+
+    def runs(self, script, since):
+        """[(start, end_or_None)] of a script, from its off/on history (the recorder drops last_triggered)."""
+        res, start = [], None
+        for ts, st in self.transitions(script, since):
+            if st == "on" and start is None:
+                start = ts
+            elif st != "on" and start is not None:
+                res.append((start, ts)); start = None
+        if start is not None:
+            res.append((start, None))
+        return res
+
+    def plan_done(self, logname, start, end):
+        for _ts, data in self.conn.execute("""
+                SELECT e.time_fired_ts, d.shared_data FROM events e
+                JOIN event_types et ON e.event_type_id = et.event_type_id JOIN event_data d ON e.data_id = d.data_id
+                WHERE et.event_type = 'logbook_entry' AND e.time_fired_ts >= ? AND e.time_fired_ts <= ?""",
+                (start - 5, (end if end is not None else self.now) + 30)):
+            try:
+                j = json.loads(data)
+            except ValueError:
+                continue
+            if logname in j.get("name", "") and PLAN_DONE_MARK in j.get("message", ""):
+                return True
+        return False
+
+    def ha_starts(self, since):
+        out = []
+        for ts, data in self.conn.execute("""
+                SELECT e.time_fired_ts, d.shared_data FROM events e
+                JOIN event_types et ON e.event_type_id = et.event_type_id JOIN event_data d ON e.data_id = d.data_id
+                WHERE et.event_type = 'automation_triggered' AND e.time_fired_ts > ? AND e.time_fired_ts <= ?""",
+                (since, self.now + 1)):
+            try:
+                if "on HA start" in json.loads(data).get("name", ""):
+                    out.append(ts)
+            except ValueError:
+                pass
+        return out
 
 
-# A grow light switched OFF by hand inside its ON window is the household's decision, not a fault (Ivan, 2026-10-16).
-# Only OFF-by-hand is exempt; a light that is OFF since before the last schedule edge (HA command lost) still alerts.
-PLANT_LIGHTS = {"switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver"}
-MANUAL_MARGIN_SECS = 120
+def hm(ctx, ts):
+    return ctx.prague(ts).strftime("%H:%M")
 
 
-def last_edge_ts(entity_id, t):
-    """Epoch of the most recent schedule edge (start or end of a window) of this plug; t = Prague minute of the day."""
-    edges = sorted({m for w in SCHEDULE[entity_id] for m in w})
-    past = [m for m in edges if m <= t]
-    delta = (t - max(past)) if past else (t - (max(edges) - 1440))
-    return NOW - delta * 60
-
-
-def expected(entity_id, t):
-    for (s, e) in SCHEDULE[entity_id]:
+def expected(eid, t):
+    for (s, e) in SCHEDULE[eid]:
         if s <= t < e:
             return "on"
     return "off"
 
 
-def get_state(conn, entity_id):
-    """Return (state_str, last_changed_ts) or (None, None)."""
-    cur = conn.execute("""
-        SELECT s.state, COALESCE(s.last_changed_ts, s.last_updated_ts)
-        FROM states s
-        JOIN states_meta sm ON s.metadata_id = sm.metadata_id
-        WHERE sm.entity_id = ?
-        ORDER BY s.state_id DESC LIMIT 1
-    """, (entity_id,))
-    row = cur.fetchone()
-    return (row[0], row[1]) if row else (None, None)
+def last_edge(eid, t):
+    """(kind 'start'|'end', seconds since that edge) for the most recent schedule edge at Prague minute-of-day t."""
+    edges = sorted({(w[0], "start") for w in SCHEDULE[eid]} | {(w[1], "end") for w in SCHEDULE[eid]})
+    past = [(m, k) for m, k in edges if m <= t]
+    if past:
+        m, k = past[-1]
+        return k, (t - m) * 60
+    m, k = edges[-1]
+    return k, (t - (m - 1440)) * 60
 
 
-def check_purifiers(conn):
+def near_edge(eid, ts, ctx):
+    d = ctx.prague(ts)
+    m = d.hour * 60 + d.minute + d.second / 60
+    for (s, e) in SCHEDULE[eid]:
+        for edge in (s, e):
+            if abs(m - edge) * 60 <= FOREIGN_NEAR or abs(m - edge - 1440) * 60 <= FOREIGN_NEAR or abs(m - edge + 1440) * 60 <= FOREIGN_NEAR:
+                return True
+    return False
+
+
+def check_plugs(ctx, N):
+    t = ctx.hhmm()
+    starts = ctx.ha_starts(ctx.now - FOREIGN_KEEP - 3600)
+    for item in N.active_detail():                  # foreign-change lines live for 24 h, then clear silently
+        if item["key"].startswith("ha-foreign-"):
+            try:
+                if ctx.now - int(item["key"].rsplit("-", 1)[1]) > FOREIGN_KEEP:
+                    N.clear(item["key"], "")
+            except ValueError:
+                pass
+
+    for eid in SCHEDULE:
+        name = eid.split(".", 1)[1]
+        state, changed = ctx.state(eid)
+        if state is None:
+            continue
+        age = ctx.now - (changed or ctx.now)
+
+        key_u = f"ha-unavail-{name}"                                    # B: plug unavailable > 60 min, once
+        if state == "unavailable" and age > UNAVAIL_PLUG_SECS:
+            N.alert(key_u, f"HA: розетка {name} недоступна {int(age // 60)} мин", tier="B")
+        else:
+            N.clear(key_u, "")
+        if state == "unavailable":
+            continue
+
+        # C: a change HA did not make (not at a schedule edge, not around an HA start, when states are restored): listed, never sent
+        foreign = bool(changed and state in ("on", "off") and ctx.now - changed < FOREIGN_KEEP and not near_edge(eid, changed, ctx)
+                       and not any(-START_BEFORE <= changed - s <= START_AFTER for s in starts))
+        if foreign:
+            N.alert(f"ha-foreign-{name}-{int(changed)}",
+                    f"HA: {name} {state.upper()} в {hm(ctx, changed)} не по расписанию HA (нет контекста автоматизации)", tier="C")
+
+        exp = expected(eid, t)
+        kind, since_edge = last_edge(eid, t)
+        key_m = f"ha-mismatch-{name}"                                   # C: mismatch with the schedule (a foreign change already says it)
+        if state != exp and age > MISMATCH_GRACE and since_edge >= MISMATCH_GRACE + 60 and not foreign:
+            N.alert(key_m, f"HA: {name} {state.upper()} с {hm(ctx, changed)}, по расписанию {exp.upper()}", tier="C")
+        else:
+            N.clear(key_m, "")
+
+        key_s = f"ha-stuck-on-{name}"                                   # A/B: still ON after the scheduled OFF edge
+        cfg = STUCK_AFTER_EDGE.get(eid)
+        if cfg and state == "on" and exp == "off" and kind == "end" and cfg[0] <= since_edge <= STUCK_WINDOW_MAX:
+            N.alert(key_s, f"HA: {name} всё ещё включена через {int(since_edge // 60)} мин после выключения по расписанию", tier=cfg[1])
+        else:
+            N.clear(key_s, "")
+
+        if eid == DRYER:                                                # A: hard ceiling for the dryer
+            key_d = "ha-dryer-runaway"
+            if state == "on" and age > DRYER_CEILING_SECS:
+                N.alert(key_d, f"HA: сушилка работает {int(age // 60)} мин подряд (предел 3 ч)", tier="A")
+            else:
+                N.clear(key_d, "")
+
+        psensor = POWER_SENSOR.get(eid)                                 # B: zero power while ON
+        key_z = f"ha-zero-power-{name}"
+        if psensor and eid not in SKIP_ZERO_POWER and state == "on" and age > ZERO_PWR_SECS:
+            p_state, p_ts = ctx.state(psensor)
+            try:
+                watts = float(p_state) if p_state not in (None, "unavailable", "unknown") else None
+            except ValueError:
+                watts = None
+            if watts is not None and watts < ZERO_PWR_WATTS[eid] and (ctx.now - (p_ts or ctx.now)) > ZERO_PWR_SECS:
+                N.alert(key_z, f"HA: {name} включена, но потребление {watts:.1f} Вт уже {int((ctx.now - p_ts) // 60)} мин (нагрузка выключена?)", tier="B")
+            else:
+                N.clear(key_z, "")
+        else:
+            N.clear(key_z, "")
+
+
+def check_purifiers(ctx, N):
     try:
-        with open(FILTER_STATE) as f:
-            fstate = json.load(f)
+        fstate = json.load(open(ctx.filter_state))
     except (OSError, ValueError):
         fstate = {}
     dirty = False
-
     for key, (label, fan, filt) in PURIFIERS.items():
-        state, changed_ts = get_state(conn, fan)
-        age = (NOW - changed_ts) if changed_ts else 0
-
-        key_u = f"ha-purifier-unavail-{key}"
+        state, changed = ctx.state(fan)
+        age = ctx.now - (changed or ctx.now)
+        key_u = f"ha-purifier-unavail-{key}"                            # C
         if state == "unavailable" and age > PURIFIER_UNAVAIL_SECS:
-            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин", remind=DAILY)
+            N.alert(key_u, f"HA: {label} недоступен {int(age // 60)} мин", tier="C")
         else:
-            watchnotify.clear(key_u, f"HA: {label} снова доступен")
-
-        f_state, _ = get_state(conn, filt)
+            N.clear(key_u, "")
+        f_state, _ = ctx.state(filt)                                    # B: one message, then at most every 30 days
         try:
             pct = float(f_state)
         except (TypeError, ValueError):
             continue
         if pct < FILTER_LOW_PCT:
             last = fstate.get(key)
-            if last is None or NOW - last >= FILTER_REMIND_SECS:
-                watchnotify.send(f"HA: {label} - ресурс фильтра {pct:.0f}%, пора заменить фильтр")
-                if not watchnotify.TEST:
-                    fstate[key] = NOW
-                    dirty = True
+            if last is None or ctx.now - last >= FILTER_REMIND_SECS:
+                N.send(f"HA: {label} - ресурс фильтра {pct:.0f}%, пора заменить фильтр")
+                fstate[key] = ctx.now
+                dirty = True
         elif key in fstate:
             del fstate[key]
             dirty = True
-
     if dirty:
         try:
-            with open(FILTER_STATE, "w") as f:
-                json.dump(fstate, f)
+            json.dump(fstate, open(ctx.filter_state, "w"))
         except OSError as exc:
-            print(f"ha-alerts: cannot write {FILTER_STATE}: {exc}", file=sys.stderr)
+            print(f"ha-alerts: cannot write {ctx.filter_state}: {exc}", file=sys.stderr)
 
 
-def get_attrs(conn, entity_id):
-    row = conn.execute("""
-        SELECT a.shared_attrs
-        FROM states s
-        JOIN states_meta sm ON s.metadata_id = sm.metadata_id
-        JOIN state_attributes a ON s.attributes_id = a.attributes_id
-        WHERE sm.entity_id = ?
-        ORDER BY s.state_id DESC LIMIT 1
-    """, (entity_id,)).fetchone()
-    try:
-        return json.loads(row[0]) if row else {}
-    except ValueError:
-        return {}
+def incidents(ctx, vac, since):
+    """Stretches in which the vacuum was paused / in error / stopped off the dock for at least 30 min."""
+    return ctx.periods(vac, since, VACUUM_STUCK_STATES, VACUUM_STUCK_SECS)
 
 
-def check_vacuums(conn):
-    try:
-        with open(FILTER_STATE) as f:
-            fstate = json.load(f)
-    except (OSError, ValueError):
-        fstate = {}
-    dirty = False
+def recent_runs(ctx, script, horizon):
+    """Runs of a plan script that are still running or ended within `horizon` seconds. The history is read further back
+    than that so a run that began before the horizon keeps its real start time."""
+    return [(s, e) for s, e in ctx.runs(script, ctx.now - horizon - 36 * 3600)
+            if s >= PLAN_ALERT_FROM and (e is None or ctx.now - e < horizon)]
 
-    for key, (label, vac, prefix) in VACUUMS.items():
-        state, changed_ts = get_state(conn, vac)
+
+def failed_runs(ctx, script, logname, horizon):
+    """Plan runs (started after the feature went live) that ended without the end marker."""
+    return [(s, e) for s, e in recent_runs(ctx, script, horizon) if e is not None and not ctx.plan_done(logname, s, e)]
+
+
+def check_vacuums(ctx, N):
+    for key, (label, vac, prefix, script, logname, plan_times) in VACUUMS.items():
+        state, changed = ctx.state(vac)
         if state is None:
             continue
-        age = (NOW - changed_ts) if changed_ts else 0
+        age = ctx.now - (changed or ctx.now)
+        script_state, _ = ctx.state(script)
+        recent_inc = incidents(ctx, vac, ctx.now - 24 * 3600)
+        recent_fail = failed_runs(ctx, script, logname, 24 * 3600)
 
+        # B: paused / error / stopped off the dock >= 30 min: ONE message per incident, says whether a plan was interrupted
+        key_i = f"ha-vacuum-stuck-{key}"
+        if state in VACUUM_STUCK_STATES and age >= VACUUM_STUCK_SECS:
+            where = "во время сценария уборки (он остановится по таймауту)" if script_state == "on" else "вне сценария уборки"
+            word = {"paused": "на паузе", "error": "в ошибке", "idle": "стоит вне базы"}[state]
+            N.alert(key_i, f"HA: {label} {word} уже {int(age // 60)} мин, {where}. Возможно застрял.", tier="B")
+        elif state != "unavailable":                        # unavailable keeps an open incident open (a dead battery is part of it)
+            N.clear(key_i, "")
+
+        # C -> B: unavailable. Part of an open incident when it was stuck or its plan failed in the last 24 h.
         key_u = f"ha-vacuum-unavail-{key}"
-        if state == "unavailable" and age > PURIFIER_UNAVAIL_SECS:
-            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин", remind=DAILY)
-        else:
-            watchnotify.clear(key_u, f"HA: {label} снова доступен")
         if state == "unavailable":
-            continue
-
-        key_i = f"ha-vacuum-idle-{key}"
-        if state == "idle" and age > VACUUM_IDLE_SECS:
-            bat, _ = get_state(conn, f"sensor.{prefix}_battery_level")
-            watchnotify.alert(key_i, f"HA: {label} стоит вне базы (статус Idle) уже {int(age//60)} мин, заряд {bat}%", remind=DAILY)
+            quiet_key = f"ha-vacuum-unavail-quiet-{key}"
+            if age >= VACUUM_UNAVAIL_QUIET_SECS:
+                N.alert(quiet_key, f"HA: {label} недоступен {int(age // 60)} мин", tier="C")
+            due_now = any(0 <= ((ctx.hhmm() - m) % 1440) * 60 <= PLAN_DUE_GRACE and changed is not None
+                          and changed < ctx.now - (((ctx.hhmm() - m) % 1440) * 60) for m in plan_times)
+            escalate = age >= VACUUM_UNAVAIL_ESCALATE_SECS or due_now
+            if escalate and not (recent_inc or recent_fail):
+                why = "к времени плана" if due_now and age < VACUUM_UNAVAIL_ESCALATE_SECS else "дольше 6 ч"
+                N.alert(key_u, f"HA: {label} недоступен {int(age // 60)} мин ({why}), без предшествующего инцидента", tier="B")
         else:
-            watchnotify.clear(key_i, f"HA: {label} снова на базе или в работе")
+            N.clear(key_u, "")
+            N.clear(f"ha-vacuum-unavail-quiet-{key}", "")
 
-        attrs = get_attrs(conn, vac)
-        try:
-            fault = int(attrs.get("vacuum.fault") or 0)
-        except (TypeError, ValueError):
-            fault = 0
-        key_f = f"ha-vacuum-fault-{key}"
-        if state in VACUUM_STUCK_STATES and age > VACUUM_STUCK_SECS:
-            desc = attrs.get("vacuum.status_desc") or state
-            watchnotify.alert(key_f,
-                f"HA: {label} {VACUUM_STUCK_STATES[state]} уже {int(age//60)} мин "
-                f"(статус «{desc}», последний код {fault}), возможно застрял", remind=DAILY)
+        # B: plan did not finish / > 4 h, unless an incident (stuck >= 30 min) already told Ivan about it
+        key_f, key_h = f"ha-vacuum-plan-failed-{key}", f"ha-vacuum-plan-hung-{key}"
+        runs = recent_runs(ctx, script, 12 * 3600)
+        last = runs[-1] if runs else None
+        if last:
+            start, end = last
+            had_incident = any(e >= start for _s, e in ctx.periods(vac, start - 12 * 3600, VACUUM_STUCK_STATES + ("unavailable",), VACUUM_STUCK_SECS))
+            if end is None and ctx.now - start > PLAN_HUNG_SECS and not had_incident:
+                N.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int((ctx.now - start) // 3600)} ч, возможно завис", tier="B")
+            else:
+                N.clear(key_h, "")
+            if end is not None and ctx.now - end >= 600 and not ctx.plan_done(logname, start, end):
+                if had_incident:
+                    N.alert(key_f + "-quiet", f"HA: сценарий пылесоса ({label}) от {hm(ctx, start)} не дошёл до конца (инцидент уже отправлен)", tier="C")
+                else:
+                    N.alert(key_f, f"HA: сценарий пылесоса ({label}), запущенный в {hm(ctx, start)}, не дошёл до конца (смотри уведомления HA и журнал)", tier="B")
+            else:
+                N.clear(key_f, "")
+                N.clear(key_f + "-quiet", "")
         else:
-            watchnotify.clear(key_f, f"HA: {label} снова в работе")
+            for k in (key_f, key_f + "-quiet", key_h):
+                N.clear(k, "")
 
+        # C: consumables < 10 % (heartbeat line only)
         for suffix, what in VACUUM_CONSUMABLES:
-            val, _ = get_state(conn, f"sensor.{prefix}_{suffix}")
-            fkey = f"{key}:{suffix}"
+            val, _ = ctx.state(f"sensor.{prefix}_{suffix}")
+            key_c = f"ha-consumable-{key}-{suffix}"
             try:
                 pct = float(val)
             except (TypeError, ValueError):
                 continue
             if pct < FILTER_LOW_PCT:
-                last = fstate.get(fkey)
-                if last is None or NOW - last >= FILTER_REMIND_SECS:
-                    watchnotify.send(f"HA: {label} - {what} {pct:.0f}%, пора заменить")
-                    if not watchnotify.TEST:
-                        fstate[fkey] = NOW
-                        dirty = True
-            elif fkey in fstate:
-                del fstate[fkey]
-                dirty = True
-
-    if dirty:
-        try:
-            with open(FILTER_STATE, "w") as f:
-                json.dump(fstate, f)
-        except OSError as exc:
-            print(f"ha-alerts: cannot write {FILTER_STATE}: {exc}", file=sys.stderr)
+                N.alert(key_c, f"HA: {label}: {what} {pct:.0f}%, пора заменить", tier="C")
+            else:
+                N.clear(key_c, "")
 
 
-VACUUM_PLANS = (
-    ("script.vacuum_livingroom_plan", "Vacuum Livingroom", "livingroom", "гостиная"),
-    ("script.vacuum_bedroom_plan", "Vacuum Bedroom", "bedroom", "спальня"),
-)
-
-
-def check_vacuum_plan(conn):
-    """Each plan script writes 'ПЛАН ВЫПОЛНЕН' to the logbook at its end; a run that stopped earlier (battery, wrong
-    mode, station fault, manual stop) leaves no such line."""
-    for script, logname, key, label in VACUUM_PLANS:
-        _check_one_plan(conn, script, logname, key, label)
-
-
-def script_last_start(conn, script):
-    """Start of the most recent 'on' stretch of a script entity, from its state history. The recorder does not keep a
-    script's last_triggered attribute, so the off -> on transition is the only trace of a run in the database."""
-    rows = conn.execute("""
-        SELECT s.state, s.last_updated_ts FROM states s JOIN states_meta m ON s.metadata_id = m.metadata_id
-        WHERE m.entity_id = ? ORDER BY s.state_id DESC LIMIT 600""", (script,)).fetchall()
-    start = None
-    for state, ts in rows:
-        if state == "on":
-            start = ts
-        elif start is not None:
-            break
-    return start
-
-
-def _check_one_plan(conn, script, logname, key, label):
-    state, _ = get_state(conn, script)
-    if state is None:
-        return
-    last = script_last_start(conn, script)
-    if last is None:
-        return
-    if last < PLAN_ALERT_FROM:
-        return
-    run_age = NOW - last
-    key_h = f"ha-vacuum-plan-hung-{key}"
-    key_f = f"ha-vacuum-plan-failed-{key}"
-    if state == "on" and run_age > 4 * 3600:
-        watchnotify.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int(run_age//3600)} ч, возможно завис", remind=DAILY)
-    else:
-        watchnotify.clear(key_h, f"HA: сценарий пылесоса ({label}) больше не висит")
-    if state == "on" or run_age < 600 or run_age > 12 * 3600:
-        if run_age > 12 * 3600:
-            watchnotify.clear(key_f, f"HA: прошлый сбой сценария пылесоса ({label}) старше 12 ч, алерт снят")
-        return
-    done = False
-    for (ts, data) in conn.execute("""
-            SELECT e.time_fired_ts, d.shared_data FROM events e
-            JOIN event_types et ON e.event_type_id = et.event_type_id
-            JOIN event_data d ON e.data_id = d.data_id
-            WHERE et.event_type = 'logbook_entry' AND e.time_fired_ts >= ?""", (last - 5,)):
-        try:
-            j = json.loads(data)
-        except ValueError:
-            continue
-        if logname in j.get("name", "") and "ПЛАН ВЫПОЛНЕН" in j.get("message", ""):
-            done = True
-            break
-    if done:
-        watchnotify.clear(key_f, f"HA: сценарий пылесоса ({label}) выполнен до конца")
-    else:
-        when = datetime.datetime.fromtimestamp(last).strftime("%H:%M")
-        watchnotify.alert(key_f, f"HA: сценарий пылесоса ({label}), запущенный в {when}, не дошёл до конца "
-                                 "(смотри уведомления HA и журнал). Пылесос мог остаться на базе с недоделанной уборкой.", remind=0)
+def evaluate(ctx, N):
+    check_plugs(ctx, N)
+    check_purifiers(ctx, N)
+    check_vacuums(ctx, N)
 
 
 def main():
@@ -341,74 +430,7 @@ def main():
     except Exception as exc:
         watchnotify.alert("ha-alerts-db", f"ha-alerts: не могу открыть HA DB: {exc}")
         return 1
-
-    t = prague_hhmm()
-
-    for eid in SCHEDULE:
-        name = eid.replace("switch.", "")
-        state, changed_ts = get_state(conn, eid)
-        if state is None:
-            continue
-
-        age = (NOW - changed_ts) if changed_ts else 0
-
-        # 1. Unavailable
-        key_u = f"ha-unavail-{name}"
-        if state == "unavailable" and age > UNAVAIL_SECS:
-            watchnotify.alert(key_u,
-                f"HA: розетка {name} недоступна {int(age//60)} мин")
-        else:
-            watchnotify.clear(key_u, f"HA: {name} снова доступна")
-
-        if state == "unavailable":
-            continue
-
-        # 2. Mismatch
-        exp = expected(eid, t)
-        key_m = f"ha-mismatch-{name}"
-        manual_off = (eid in PLANT_LIGHTS and state == "off" and exp == "on" and bool(changed_ts)
-                      and changed_ts > last_edge_ts(eid, t) + MANUAL_MARGIN_SECS)
-        limit = EARLY_ON_SECS if (eid in PLANT_LIGHTS and state == "on" and exp == "off") else MISMATCH_SECS
-        if state != exp and age > limit and not manual_off:
-            watchnotify.alert(key_m,
-                f"HA: {name} в состоянии '{state}', по расписанию '{exp}' "
-                f"уже {int(age//60)} мин")
-        else:
-            watchnotify.clear(key_m, f"HA: {name} в норме")
-
-        # 3. Dryer runaway
-        if eid == "switch.bathroom_towels":
-            key_d = "ha-dryer-runaway"
-            if state == "on" and age > DRYER_SECS:
-                watchnotify.alert(key_d,
-                    f"HA: сушилка работает {int(age//60)} мин подряд (норма ≤90 мин)")
-            else:
-                watchnotify.clear(key_d, "HA: сушилка выключена или в норме")
-
-        # 4. Zero power while on (skip entities with fake/broken metering)
-        psensor = POWER_SENSOR.get(eid)
-        if psensor and eid in SKIP_ZERO_POWER:
-            watchnotify.clear(f"ha-zero-power-{name}", f"HA: {name} мониторинг мощности отключён (нет метрики)")
-        elif psensor and eid not in SKIP_ZERO_POWER and state == "on" and age > ZERO_PWR_SECS:
-            p_state, p_ts = get_state(conn, psensor)
-            key_z = f"ha-zero-power-{name}"
-            try:
-                watts = float(p_state) if p_state not in (None, "unavailable", "unknown") else None
-            except ValueError:
-                watts = None
-            if watts is not None and watts < ZERO_PWR_WATTS[eid]:
-                p_age = (NOW - p_ts) if p_ts else 0
-                if p_age > ZERO_PWR_SECS:
-                    watchnotify.alert(key_z,
-                        f"HA: {name} включена, но потребление {watts:.1f} Вт уже "
-                        f"{int(p_age//60)} мин (нагрузка выключена?)")
-            else:
-                watchnotify.clear(key_z, f"HA: {name} потребляет нормально")
-
-    check_purifiers(conn)
-    check_vacuums(conn)
-    check_vacuum_plan(conn)
-
+    evaluate(Ctx(conn), watchnotify)
     conn.close()
     return 0
 
