@@ -5,7 +5,6 @@ reconcile_all_plugs:
   alias: 'Reconcile all scheduled plugs to current schedule'
   sequence:
     - service: script.reconcile_bathroom_towels
-    - service: script.reconcile_plant_lights
     - service: script.reconcile_parrot
     - service: script.sch_reconcile_all
 
@@ -39,42 +38,6 @@ reconcile_bathroom_towels:
           data:
             name: Reconcile
             message: "bathroom_towels: on → OFF (outside schedule window)"
-
-reconcile_plant_lights:
-  alias: 'Reconcile all plant lights (Rack1/Rack2/Orchids) to schedule'
-  sequence:
-    - variables:
-        t: "{{ now().hour * 60 + now().minute }}"
-        target: >
-          {{ 'on' if (t >= 420 and t < 1200) else 'off' }}
-    - repeat:
-        for_each:
-          - switch.kitchen_orchids
-        sequence:
-          - variables:
-              cur: "{{ states(repeat.item) }}"
-          - if:
-              - condition: template
-                value_template: "{{ target == 'on' and cur not in ['on', 'unavailable'] }}"
-            then:
-              - service: switch.turn_on
-                target:
-                  entity_id: "{{ repeat.item }}"
-              - service: logbook.log
-                data:
-                  name: Reconcile
-                  message: "{{ repeat.item }}: {{ cur }} → ON (schedule window)"
-          - if:
-              - condition: template
-                value_template: "{{ target == 'off' and cur == 'on' }}"
-            then:
-              - service: switch.turn_off
-                target:
-                  entity_id: "{{ repeat.item }}"
-              - service: logbook.log
-                data:
-                  name: Reconcile
-                  message: "{{ repeat.item }}: on → OFF (outside schedule window)"
 
 reconcile_parrot:
   alias: 'Reconcile bedroom_parrot to schedule'
