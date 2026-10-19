@@ -1,0 +1,9 @@
+[Unit]
+Description=portal-schedules: a new render is ready (READY marker rewritten by the service)
+
+[Path]
+PathChanged=/srv/apps/portal/schedules/out/READY
+Unit=portal-apply.service
+
+[Install]
+WantedBy=multi-user.target

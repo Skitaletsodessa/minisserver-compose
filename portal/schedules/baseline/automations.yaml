@@ -1,0 +1,206 @@
+# Task 25 Phase C — plug schedules + reconciliation. One automation per schedule edge.
+# TEST automations at bottom — REMOVE after verification (switch.living_room_rack / Rack1).
+
+# ── BathroomTowels (.240): ON 06:30, OFF 08:00, ON 18:30, OFF 20:00 ──────────
+- id: sched_bathroom_towels_on_morning
+  alias: 'Schedule: bathroom_towels ON 06:30'
+  mode: single
+  trigger:
+    - platform: time
+      at: '06:30:00'
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.bathroom_towels
+
+- id: sched_bathroom_towels_off_morning
+  alias: 'Schedule: bathroom_towels OFF 08:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '08:00:00'
+  action:
+    - service: switch.turn_off
+      target:
+        entity_id: switch.bathroom_towels
+
+- id: sched_bathroom_towels_on_evening
+  alias: 'Schedule: bathroom_towels ON 18:30'
+  mode: single
+  trigger:
+    - platform: time
+      at: '18:30:00'
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.bathroom_towels
+
+- id: sched_bathroom_towels_off_evening
+  alias: 'Schedule: bathroom_towels OFF 20:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '20:00:00'
+  action:
+    - service: switch.turn_off
+      target:
+        entity_id: switch.bathroom_towels
+
+# ── Plant lights: Rack1 (.241), Rack2 (.242), Orchids (.243): ON 07:00, OFF 20:00 ──
+- id: sched_plant_lights_on
+  alias: 'Schedule: plant lights ON 07:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '07:00:00'
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id:
+          - switch.living_room_rack
+          - switch.livingroom_rack_big
+          - switch.kitchen_orchids
+          - switch.minisserver
+
+- id: sched_plant_lights_off
+  alias: 'Schedule: plant lights OFF 20:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '20:00:00'
+  action:
+    - service: switch.turn_off
+      target:
+        entity_id:
+          - switch.living_room_rack
+          - switch.livingroom_rack_big
+          - switch.kitchen_orchids
+          - switch.minisserver
+
+# ── Bedroom Parrot UV (.245): ON 11:00, OFF 18:00 ───────────────────────────
+- id: sched_parrot_uv_on
+  alias: 'Schedule: parrot UV ON 11:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '11:00:00'
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.bedroom_parrot
+
+- id: sched_parrot_uv_off
+  alias: 'Schedule: parrot UV OFF 18:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '18:00:00'
+  action:
+    - service: switch.turn_off
+      target:
+        entity_id: switch.bedroom_parrot
+
+# ── Reconciliation: on HA start ──────────────────────────────────────────────
+- id: reconcile_all_on_start
+  alias: 'Reconcile: all plugs on HA start'
+  trigger:
+    - platform: homeassistant
+      event: start
+  action:
+    - service: script.reconcile_all_plugs
+
+# ── Reconciliation: on plug reconnect (unavailable → any state) ──────────────
+- id: reconcile_bathroom_towels_reconnect
+  alias: 'Reconcile: bathroom_towels on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.bathroom_towels
+      from: "unavailable"
+  action:
+    - service: script.reconcile_bathroom_towels
+
+- id: reconcile_rack1_reconnect
+  alias: 'Reconcile: Rack1 on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.living_room_rack
+      from: "unavailable"
+  action:
+    - service: script.reconcile_plant_lights
+
+- id: reconcile_rack2_reconnect
+  alias: 'Reconcile: Rack2 on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.livingroom_rack_big
+      from: "unavailable"
+  action:
+    - service: script.reconcile_plant_lights
+
+- id: reconcile_orchids_reconnect
+  alias: 'Reconcile: Orchids on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.kitchen_orchids
+      from: "unavailable"
+  action:
+    - service: script.reconcile_plant_lights
+
+- id: reconcile_parrot_reconnect
+  alias: 'Reconcile: Parrot UV on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.bedroom_parrot
+      from: "unavailable"
+  action:
+    - service: script.reconcile_parrot
+
+- id: reconcile_minisserver_reconnect
+  alias: 'Reconcile: minisserver on reconnect'
+  trigger:
+    - platform: state
+      entity_id: switch.minisserver
+      from: "unavailable"
+  action:
+    - service: script.reconcile_plant_lights
+
+# ── Robot vacuum H40 Livingroom: the whole plan every day at 20:30 (Ivan, 2026-10-16) ──
+- id: sched_vacuum_livingroom_plan
+  alias: 'Schedule: Livingroom vacuum plan 20:30'
+  mode: single
+  trigger:
+    - platform: time
+      at: '20:30:00'
+  action:
+    - action: script.turn_on
+      target:
+        entity_id: script.vacuum_livingroom_plan
+
+# ── Robot vacuum H40 Bedroom: morning Silent vacuum 09:00, evening Turbo vacuum + mop Level3 19:00 (Ivan, 2026-10-16) ──
+- id: sched_vacuum_bedroom_morning
+  alias: 'Schedule: Bedroom vacuum morning 09:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '09:00:00'
+  action:
+    - action: script.turn_on
+      target:
+        entity_id: script.vacuum_bedroom_plan
+      data:
+        variables:
+          plan: morning
+
+- id: sched_vacuum_bedroom_evening
+  alias: 'Schedule: Bedroom vacuum + mop evening 19:00'
+  mode: single
+  trigger:
+    - platform: time
+      at: '19:00:00'
+  action:
+    - action: script.turn_on
+      target:
+        entity_id: script.vacuum_bedroom_plan
+      data:
+        variables:
+          plan: evening

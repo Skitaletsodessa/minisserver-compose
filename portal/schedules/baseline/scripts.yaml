@@ -1,0 +1,546 @@
+# Task 25 Phase C — reconciliation scripts. Called on HA start and on plug reconnect.
+# Each script checks the current time against the schedule window and corrects the plug.
+
+reconcile_all_plugs:
+  alias: 'Reconcile all scheduled plugs to current schedule'
+  sequence:
+    - service: script.reconcile_bathroom_towels
+    - service: script.reconcile_plant_lights
+    - service: script.reconcile_parrot
+
+reconcile_bathroom_towels:
+  alias: 'Reconcile bathroom_towels to schedule'
+  sequence:
+    - variables:
+        t: "{{ now().hour * 60 + now().minute }}"
+        target: >
+          {{ 'on' if (t >= 390 and t < 480) or (t >= 1110 and t < 1200) else 'off' }}
+        cur: "{{ states('switch.bathroom_towels') }}"
+    - if:
+        - condition: template
+          value_template: "{{ target == 'on' and cur not in ['on', 'unavailable'] }}"
+      then:
+        - service: switch.turn_on
+          target:
+            entity_id: switch.bathroom_towels
+        - service: logbook.log
+          data:
+            name: Reconcile
+            message: "bathroom_towels: {{ cur }} → ON (schedule window)"
+    - if:
+        - condition: template
+          value_template: "{{ target == 'off' and cur == 'on' }}"
+      then:
+        - service: switch.turn_off
+          target:
+            entity_id: switch.bathroom_towels
+        - service: logbook.log
+          data:
+            name: Reconcile
+            message: "bathroom_towels: on → OFF (outside schedule window)"
+
+reconcile_plant_lights:
+  alias: 'Reconcile all plant lights (Rack1/Rack2/Orchids) to schedule'
+  sequence:
+    - variables:
+        t: "{{ now().hour * 60 + now().minute }}"
+        target: >
+          {{ 'on' if (t >= 420 and t < 1200) else 'off' }}
+    - repeat:
+        for_each:
+          - switch.living_room_rack
+          - switch.livingroom_rack_big
+          - switch.kitchen_orchids
+          - switch.minisserver
+        sequence:
+          - variables:
+              cur: "{{ states(repeat.item) }}"
+          - if:
+              - condition: template
+                value_template: "{{ target == 'on' and cur not in ['on', 'unavailable'] }}"
+            then:
+              - service: switch.turn_on
+                target:
+                  entity_id: "{{ repeat.item }}"
+              - service: logbook.log
+                data:
+                  name: Reconcile
+                  message: "{{ repeat.item }}: {{ cur }} → ON (schedule window)"
+          - if:
+              - condition: template
+                value_template: "{{ target == 'off' and cur == 'on' }}"
+            then:
+              - service: switch.turn_off
+                target:
+                  entity_id: "{{ repeat.item }}"
+              - service: logbook.log
+                data:
+                  name: Reconcile
+                  message: "{{ repeat.item }}: on → OFF (outside schedule window)"
+
+reconcile_parrot:
+  alias: 'Reconcile bedroom_parrot to schedule'
+  sequence:
+    - variables:
+        t: "{{ now().hour * 60 + now().minute }}"
+        target: >
+          {{ 'on' if (t >= 660 and t < 1080) else 'off' }}
+        cur: "{{ states('switch.bedroom_parrot') }}"
+    - if:
+        - condition: template
+          value_template: "{{ target == 'on' and cur not in ['on', 'unavailable'] }}"
+      then:
+        - service: switch.turn_on
+          target:
+            entity_id: switch.bedroom_parrot
+        - service: logbook.log
+          data:
+            name: Reconcile
+            message: "bedroom_parrot: {{ cur }} → ON (schedule window)"
+    - if:
+        - condition: template
+          value_template: "{{ target == 'off' and cur == 'on' }}"
+      then:
+        - service: switch.turn_off
+          target:
+            entity_id: switch.bedroom_parrot
+        - service: logbook.log
+          data:
+            name: Reconcile
+            message: "bedroom_parrot: on → OFF (outside schedule window)"
+
+# ── Robot vacuum H40 Livingroom: plan "vacuum, then mop" per room, dust emptied after the vacuum phases ──
+# Manual start only. Ivan's plan (2026-10-16):
+#   Koridor: vacuum (Turbo) -> dust -> mop (medium water);  Bathroom: vacuum -> dust -> mop;
+#   Living room: vacuum -> dust;  Kitchen: vacuum -> dust -> mop -> dust.
+# "Turbo" = mode Full Speed, "medium water" = Level2 (confirmed in the Mi Home mode screen, 2026-10-16: suction Silent/Standard/Strong/Turbo = Silent/Basic/Strong/Full Speed, water Level 1-3, path and times are left as set).
+# After every phase the robot returns to the dock by itself; "dust" = wait for the station to empty the bin
+# (status stationworking, ~11 s) and press Start Dust Arrest if it does not start by itself.
+# The room ids are literal strings in params (a templated "[10]" is turned into a list by HA and the robot ignores it).
+# Before each phase the cleaning type is set and checked, and after the start the cleaning type the robot reports
+# is checked (not its status: the H40 says "sweeping" in mop mode too - found in the first run, 2026-10-16):
+# if it differs from the plan the robot is sent home and the script stops.
+# Found in the first full run (2026-10-16): after a vacuum phase the station empties the bin by itself ~10 s after
+# docking (sometimes the robot goes straight from "go charging" to "stationworking"); after a mop phase it does not.
+# Resume after an abort: run with skip_phases = number of finished phases (Developer tools > Actions:
+#   action: script.vacuum_livingroom_plan / data: {skip_phases: 1}).
+# Aborting: stop the script (Settings > Scripts). A robot sent home by hand counts as "phase done".
+vacuum_livingroom_plan:
+  alias: 'Vacuum Livingroom: vacuum + mop plan, dust emptied after vacuum phases'
+  mode: single
+  max_exceeded: silent
+  fields:
+    skip_phases:
+      description: 'How many first phases to skip (0 = the whole plan; 1 = start with the Koridor mop). Phases: 1 Koridor vacuum, 2 Koridor mop, 3 Bathroom vacuum, 4 Bathroom mop, 5 Living room vacuum, 6 Kitchen vacuum, 7 Kitchen mop.'
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 6
+          mode: box
+  variables:
+    st: sensor.xiaomi_ov51gl_b5f6_status
+    bat: sensor.xiaomi_ov51gl_b5f6_battery_level
+    vac: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+    area: sensor.xiaomi_ov51gl_b5f6_cleaning_area
+    ctime: sensor.xiaomi_ov51gl_b5f6_cleaning_time
+    skip_n: "{{ skip_phases | default(0) | int(0) }}"
+    phases:
+      - {room: 10, kind: vacuum, dust: true}
+      - {room: 10, kind: mop, dust: false}
+      - {room: 9, kind: vacuum, dust: true}
+      - {room: 9, kind: mop, dust: false}
+      - {room: 13, kind: vacuum, dust: true}
+      - {room: 8, kind: vacuum, dust: true}
+      - {room: 8, kind: mop, dust: true}
+  sequence:
+    - if: "{{ states(st) not in ['charging', 'charged'] }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: vacuum_livingroom
+            title: 'Пылесос (гостиная): не запущено'
+            message: "Пылесос должен стоять на базе, сейчас статус {{ states(st) }}."
+        - stop: 'vacuum is not docked'
+          error: true
+    - repeat:
+        for_each: "{{ phases[skip_n:] }}"
+        sequence:
+          - variables:
+              kind: "{{ repeat.item.kind }}"
+              room_name: "{{ {8: 'Кухня', 9: 'Ванная', 10: 'Коридор', 13: 'Гостиная'}[repeat.item.room] }}"
+              phase: "{{ room_name }}, {{ 'уборка' if repeat.item.kind == 'vacuum' else 'протирка' }}"
+              want_type: "{{ 'Sweep' if repeat.item.kind == 'vacuum' else 'Mop' }}"
+              want_code: "{{ 1 if repeat.item.kind == 'vacuum' else 2 }}"
+          # enough battery for a phase
+          - if: "{{ states(bat) | float(0) < 50 }}"
+            then:
+              - wait_template: "{{ states(bat) | float(0) >= 50 }}"
+                timeout: '01:30:00'
+                continue_on_timeout: true
+              - if: "{{ not wait.completed }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: vacuum_livingroom
+                      title: 'Пылесос (гостиная): остановлено'
+                      message: "{{ phase }}: заряд {{ states(bat) }}% за 90 минут не дошёл до 50%."
+                  - stop: 'battery did not reach 50 %'
+                    error: true
+          # cleaning type, suction (vacuum phases) or water level (mop phases), then check they were applied
+          - action: select.select_option
+            target:
+              entity_id: select.xiaomi_ov51gl_b5f6_sweep_mop_type
+            data:
+              option: "{{ want_type }}"
+          - if: "{{ kind == 'vacuum' }}"
+            then:
+              - action: select.select_option
+                target:
+                  entity_id: select.xiaomi_ov51gl_b5f6_mode
+                data:
+                  option: 'Full Speed'
+            else:
+              - action: select.select_option
+                target:
+                  entity_id: select.xiaomi_ov51gl_b5f6_mop_water_output_level
+                data:
+                  option: 'Level2'
+          - wait_template: >-
+              {{ is_state('select.xiaomi_ov51gl_b5f6_sweep_mop_type', want_type)
+                 and (is_state('select.xiaomi_ov51gl_b5f6_mode', 'Full Speed') if kind == 'vacuum'
+                      else is_state('select.xiaomi_ov51gl_b5f6_mop_water_output_level', 'Level2')) }}
+            timeout: '00:00:30'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_livingroom
+                  title: 'Пылесос (гостиная): остановлено'
+                  message: "{{ phase }}: режим не применился (тип {{ states('select.xiaomi_ov51gl_b5f6_sweep_mop_type') }}, всасывание {{ states('select.xiaomi_ov51gl_b5f6_mode') }}, вода {{ states('select.xiaomi_ov51gl_b5f6_mop_water_output_level') }})."
+              - stop: 'cleaning settings were not applied'
+                error: true
+          # start exactly this room
+          - choose:
+              - conditions: "{{ repeat.item.room == 10 }}"
+                sequence:
+                  - action: xiaomi_miot.call_action
+                    data:
+                      entity_id: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+                      siid: 2
+                      aiid: 16
+                      params: ["[10]"]
+              - conditions: "{{ repeat.item.room == 9 }}"
+                sequence:
+                  - action: xiaomi_miot.call_action
+                    data:
+                      entity_id: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+                      siid: 2
+                      aiid: 16
+                      params: ["[9]"]
+              - conditions: "{{ repeat.item.room == 13 }}"
+                sequence:
+                  - action: xiaomi_miot.call_action
+                    data:
+                      entity_id: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+                      siid: 2
+                      aiid: 16
+                      params: ["[13]"]
+              - conditions: "{{ repeat.item.room == 8 }}"
+                sequence:
+                  - action: xiaomi_miot.call_action
+                    data:
+                      entity_id: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+                      siid: 2
+                      aiid: 16
+                      params: ["[8]"]
+          - wait_template: "{{ states(st) in ['sweeping', 'mopping', 'sweeping and mopping'] }}"
+            timeout: '00:03:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_livingroom
+                  title: 'Пылесос (гостиная): остановлено'
+                  message: "{{ phase }}: команда не принята, статус {{ states(st) }}."
+              - stop: 'room start was not accepted'
+                error: true
+          # the robot reports status "sweeping" in mop mode too: check the cleaning type it reports (1 Sweep, 2 Mop);
+          # that attribute refreshes with the state change, the long timeout only covers a slow poll
+          - wait_template: "{{ state_attr(vac, 'vacuum.sweep_mop_type') | int(0) == want_code }}"
+            timeout: '00:02:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
+            then:
+              - action: vacuum.return_to_base
+                target:
+                  entity_id: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_livingroom
+                  title: 'Пылесос (гостиная): остановлено'
+                  message: "{{ phase }}: ожидался тип уборки {{ want_type }}, пылесос сообщает {{ state_attr(vac, 'vacuum.sweep_mop_type') }}. Отправлен на базу."
+              - stop: 'robot runs in the wrong mode'
+                error: true
+          # until it is back on the dock (a manual pause or a stuck robot just waits; ha-alerts reports it)
+          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
+            timeout: '01:30:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed or states(vac) == 'error' }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_livingroom
+                  title: 'Пылесос (гостиная): остановлено'
+                  message: "{{ phase }}: не вернулся на базу (статус {{ states(st) }}, состояние {{ states(vac) }})."
+              - stop: 'robot did not return to the dock'
+                error: true
+          - variables:
+              area_raw: "{{ states(area) }}"
+              time_raw: "{{ states(ctime) }}"
+          # dust emptying (vacuum phases and the last mop): the station usually starts ~10 s after docking
+          - if: "{{ repeat.item.dust }}"
+            then:
+              - if: "{{ states(st) != 'stationworking' }}"
+                then:
+                  - wait_template: "{{ states(st) == 'stationworking' }}"
+                    timeout: '00:01:30'
+                    continue_on_timeout: true
+                  - if: "{{ not wait.completed }}"
+                    then:
+                      - action: button.press
+                        target:
+                          entity_id: button.xiaomi_ov51gl_b5f6_start_dust_arrest
+                      - wait_template: "{{ states(st) == 'stationworking' }}"
+                        timeout: '00:02:00'
+                        continue_on_timeout: true
+                      - if: "{{ not wait.completed }}"
+                        then:
+                          - action: persistent_notification.create
+                            data:
+                              notification_id: vacuum_livingroom
+                              title: 'Пылесос (гостиная): остановлено'
+                              message: "{{ phase }}: станция не начала опорожнение даже по команде."
+                          - stop: 'station did not empty the bin'
+                            error: true
+              - wait_template: "{{ states(st) in ['charging', 'charged'] }}"
+                timeout: '00:03:00'
+                continue_on_timeout: true
+          - action: logbook.log
+            data:
+              name: 'Vacuum Livingroom'
+              message: "{{ phase }} (id {{ repeat.item.room }}): готово{{ ', мусор сброшен' if repeat.item.dust else '' }}. Счётчик площади {{ area_raw }}, время {{ time_raw }} с."
+          - delay: '00:00:10'
+    - action: logbook.log
+      data:
+        name: 'Vacuum Livingroom'
+        message: 'ПЛАН ВЫПОЛНЕН'
+    - action: persistent_notification.create
+      data:
+        notification_id: vacuum_livingroom
+        title: 'Пылесос (гостиная): план выполнен'
+        message: 'Коридор, ванная, гостиная и кухня: уборка и протирка по плану, мусор сбрасывался после уборки.'
+
+
+# ── Robot vacuum H40 Bedroom (e160): two plans, started by the schedule at 09:00 / 19:00 or by hand ──
+# morning 09:00: Bedroom (room 3) vacuum on Silent, nothing else.
+# evening 19:00: Bedroom vacuum on Turbo (Full Speed) -> dust emptied -> Bedroom mop on Level3 (maximum water).
+# Same engine as vacuum_livingroom_plan (see its comments): cleaning type and level are set and checked before each
+# phase, the type the robot reports is checked after the start, the station empties the bin after vacuum phases
+# (button pressed only if it did not start by itself), every wait has a timeout, any failure stops the script
+# with an HA notification and ha-alerts reports a plan that did not finish.
+# Start by hand: action script.vacuum_bedroom_plan, data {plan: evening}  (optionally skip_phases: 1).
+# Room ids come from room_information (2026-10-16): 3 Bedroom, 5 Child's room, 6 Child's room 1, 7 Corridor.
+vacuum_bedroom_plan:
+  alias: 'Vacuum Bedroom: morning (Silent) / evening (Turbo + mop Level3) plan'
+  mode: single
+  max_exceeded: silent
+  fields:
+    plan:
+      description: 'morning = Silent vacuum 09:00; evening = Turbo vacuum, then mop on Level3, 19:00'
+      default: morning
+      selector:
+        select:
+          options:
+            - morning
+            - evening
+    skip_phases:
+      description: 'How many first phases to skip (0 = the whole plan)'
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 2
+          mode: box
+  variables:
+    st: sensor.xiaomi_ov51gl_e160_status
+    bat: sensor.xiaomi_ov51gl_e160_battery_level
+    vac: vacuum.xiaomi_ov51gl_e160_robot_cleaner
+    area: sensor.xiaomi_ov51gl_e160_cleaning_area
+    ctime: sensor.xiaomi_ov51gl_e160_cleaning_time
+    plan_name: "{{ plan | default('morning') }}"
+    skip_n: "{{ skip_phases | default(0) | int(0) }}"
+    plans:
+      morning:
+        - {room: 3, kind: vacuum, suction: 'Silent', water: '', dust: true}
+      evening:
+        - {room: 3, kind: vacuum, suction: 'Full Speed', water: '', dust: true}
+        - {room: 3, kind: mop, suction: '', water: 'Level3', dust: false}
+    phases: "{{ plans[plan_name] }}"
+  sequence:
+    - if: "{{ states(st) not in ['charging', 'charged'] }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: vacuum_bedroom
+            title: 'Пылесос (спальня): не запущено'
+            message: "Пылесос должен стоять на базе, сейчас статус {{ states(st) }}."
+        - stop: 'vacuum is not docked'
+          error: true
+    - repeat:
+        for_each: "{{ phases[skip_n:] }}"
+        sequence:
+          - variables:
+              kind: "{{ repeat.item.kind }}"
+              room_name: "{{ {3: 'Спальня'}[repeat.item.room] }}"
+              phase: "{{ room_name }}, {{ 'уборка' if repeat.item.kind == 'vacuum' else 'протирка' }} ({{ plan_name }})"
+              want_type: "{{ 'Sweep' if repeat.item.kind == 'vacuum' else 'Mop' }}"
+              want_code: "{{ 1 if repeat.item.kind == 'vacuum' else 2 }}"
+          - if: "{{ states(bat) | float(0) < 50 }}"
+            then:
+              - wait_template: "{{ states(bat) | float(0) >= 50 }}"
+                timeout: '01:30:00'
+                continue_on_timeout: true
+              - if: "{{ not wait.completed }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: vacuum_bedroom
+                      title: 'Пылесос (спальня): остановлено'
+                      message: "{{ phase }}: заряд {{ states(bat) }}% за 90 минут не дошёл до 50%."
+                  - stop: 'battery did not reach 50 %'
+                    error: true
+          - action: select.select_option
+            target:
+              entity_id: select.xiaomi_ov51gl_e160_sweep_mop_type
+            data:
+              option: "{{ want_type }}"
+          - if: "{{ kind == 'vacuum' }}"
+            then:
+              - action: select.select_option
+                target:
+                  entity_id: select.xiaomi_ov51gl_e160_mode
+                data:
+                  option: "{{ repeat.item.suction }}"
+            else:
+              - action: select.select_option
+                target:
+                  entity_id: select.xiaomi_ov51gl_e160_mop_water_output_level
+                data:
+                  option: "{{ repeat.item.water }}"
+          - wait_template: >-
+              {{ is_state('select.xiaomi_ov51gl_e160_sweep_mop_type', want_type)
+                 and (is_state('select.xiaomi_ov51gl_e160_mode', repeat.item.suction) if kind == 'vacuum'
+                      else is_state('select.xiaomi_ov51gl_e160_mop_water_output_level', repeat.item.water)) }}
+            timeout: '00:00:30'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_bedroom
+                  title: 'Пылесос (спальня): остановлено'
+                  message: "{{ phase }}: режим не применился (тип {{ states('select.xiaomi_ov51gl_e160_sweep_mop_type') }}, всасывание {{ states('select.xiaomi_ov51gl_e160_mode') }}, вода {{ states('select.xiaomi_ov51gl_e160_mop_water_output_level') }})."
+              - stop: 'cleaning settings were not applied'
+                error: true
+          - action: xiaomi_miot.call_action
+            data:
+              entity_id: vacuum.xiaomi_ov51gl_e160_robot_cleaner
+              siid: 2
+              aiid: 16
+              params: ["[3]"]
+          - wait_template: "{{ states(st) in ['sweeping', 'mopping', 'sweeping and mopping'] }}"
+            timeout: '00:03:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_bedroom
+                  title: 'Пылесос (спальня): остановлено'
+                  message: "{{ phase }}: команда не принята, статус {{ states(st) }}."
+              - stop: 'room start was not accepted'
+                error: true
+          - wait_template: "{{ state_attr(vac, 'vacuum.sweep_mop_type') | int(0) == want_code }}"
+            timeout: '00:02:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed }}"
+            then:
+              - action: vacuum.return_to_base
+                target:
+                  entity_id: vacuum.xiaomi_ov51gl_e160_robot_cleaner
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_bedroom
+                  title: 'Пылесос (спальня): остановлено'
+                  message: "{{ phase }}: ожидался тип уборки {{ want_type }}, пылесос сообщает {{ state_attr(vac, 'vacuum.sweep_mop_type') }}. Отправлен на базу."
+              - stop: 'robot runs in the wrong mode'
+                error: true
+          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
+            timeout: '01:30:00'
+            continue_on_timeout: true
+          - if: "{{ not wait.completed or states(vac) == 'error' }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: vacuum_bedroom
+                  title: 'Пылесос (спальня): остановлено'
+                  message: "{{ phase }}: не вернулся на базу (статус {{ states(st) }}, состояние {{ states(vac) }})."
+              - stop: 'robot did not return to the dock'
+                error: true
+          - variables:
+              area_raw: "{{ states(area) }}"
+              time_raw: "{{ states(ctime) }}"
+          - if: "{{ repeat.item.dust }}"
+            then:
+              - if: "{{ states(st) != 'stationworking' }}"
+                then:
+                  - wait_template: "{{ states(st) == 'stationworking' }}"
+                    timeout: '00:01:30'
+                    continue_on_timeout: true
+                  - if: "{{ not wait.completed }}"
+                    then:
+                      - action: button.press
+                        target:
+                          entity_id: button.xiaomi_ov51gl_e160_start_dust_arrest
+                      - wait_template: "{{ states(st) == 'stationworking' }}"
+                        timeout: '00:02:00'
+                        continue_on_timeout: true
+                      - if: "{{ not wait.completed }}"
+                        then:
+                          - action: persistent_notification.create
+                            data:
+                              notification_id: vacuum_bedroom
+                              title: 'Пылесос (спальня): остановлено'
+                              message: "{{ phase }}: станция не начала опорожнение даже по команде."
+                          - stop: 'station did not empty the bin'
+                            error: true
+              - wait_template: "{{ states(st) in ['charging', 'charged'] }}"
+                timeout: '00:03:00'
+                continue_on_timeout: true
+          - action: logbook.log
+            data:
+              name: 'Vacuum Bedroom'
+              message: "{{ phase }} (id {{ repeat.item.room }}): готово{{ ', мусор сброшен' if repeat.item.dust else '' }}. Счётчик площади {{ area_raw }}, время {{ time_raw }} с."
+          - delay: '00:00:10'
+    - action: logbook.log
+      data:
+        name: 'Vacuum Bedroom'
+        message: 'ПЛАН ВЫПОЛНЕН'
+    - action: persistent_notification.create
+      data:
+        notification_id: vacuum_bedroom
+        title: 'Пылесос (спальня): план выполнен'
+        message: "План {{ plan_name }} выполнен."

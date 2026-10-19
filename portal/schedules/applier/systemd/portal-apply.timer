@@ -1,0 +1,11 @@
+[Unit]
+Description=portal-schedules applier: pending-render retry and mismatch check, every 5 min
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

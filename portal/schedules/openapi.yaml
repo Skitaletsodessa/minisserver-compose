@@ -1,0 +1,403 @@
+openapi: 3.1.0
+info:
+  title: portal-schedules
+  version: 1.0.0
+  description: >
+    The single source of truth for schedules (Task 27, ADR 1-3). Loopback + Caddy tailnet only.
+    Every write is validated against the entity's guardrails and REJECTED (422) when it violates them - nothing is clamped.
+    Spec first: contract tests check every response of the running service against this file.
+servers:
+  - url: https://minisserver.tail6bf4d5.ts.net:16443
+security:
+  - bearer: []
+paths:
+  /v1/health:
+    get:
+      operationId: health
+      summary: Liveness (no token) or full health (with a token)
+      security: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+  /v1/entities:
+    get:
+      operationId: listEntities
+      responses:
+        "200": {description: entities, content: {application/json: {schema: {type: object, required: [entities], properties: {entities: {type: array, items: {$ref: "#/components/schemas/Entity"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/entities/{id}:
+    patch:
+      operationId: patchEntity
+      summary: Admin only. name, flags, managed (the cutover switch)
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, properties: {name: {type: string}, flags: {$ref: "#/components/schemas/Flags"}, managed: {type: boolean}}}}}
+      responses:
+        "200": {description: updated, content: {application/json: {schema: {$ref: "#/components/schemas/Entity"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/entities/{id}/guardrails:
+    put:
+      operationId: putGuardrails
+      summary: Admin only. Rejected when the current schedule would violate the new numbers
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/Guardrails"}}}
+      responses:
+        "200": {description: updated, content: {application/json: {schema: {$ref: "#/components/schemas/Entity"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/schedules:
+    get:
+      operationId: listSchedules
+      responses:
+        "200": {description: schedules, content: {application/json: {schema: {type: object, required: [schedules], properties: {schedules: {type: array, items: {$ref: "#/components/schemas/Schedule"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}:
+    get:
+      operationId: getSchedule
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "200":
+          description: the schedule; the ETag is its version
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/ScheduleWithGuardrails"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+    put:
+      operationId: putSchedule
+      summary: Replace the rules. If-Match (the ETag you read) is required.
+      parameters:
+        - {$ref: "#/components/parameters/EntityId"}
+        - {name: If-Match, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [rules], additionalProperties: false, properties: {rules: {type: array, items: {$ref: "#/components/schemas/Rule"}}}}}}
+      responses:
+        "200":
+          description: stored (changed=false when the rules were identical)
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/PutResult"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "412": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "428": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}/preview:
+    post:
+      operationId: previewSchedule
+      summary: Validate, show the diff and the next 7 days of edges; changes nothing
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [rules], properties: {rules: {type: array, items: {$ref: "#/components/schemas/Rule"}}}}}}
+      responses:
+        "200": {description: preview, content: {application/json: {schema: {$ref: "#/components/schemas/Preview"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}/undo:
+    post:
+      operationId: undoSchedule
+      summary: Revert the last rule change as a new change (guardrails apply)
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "200":
+          description: reverted
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/PutResult"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/exceptions:
+    get:
+      operationId: listExceptions
+      parameters: [{name: entity, in: query, schema: {type: string}}]
+      responses:
+        "200": {description: exceptions, content: {application/json: {schema: {type: object, required: [exceptions], properties: {exceptions: {type: array, items: {$ref: "#/components/schemas/Exception"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addException
+      summary: "skip_date (date) or override_until (until, state); override is model and API only in step a"
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/ExceptionRequest"}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {type: object, required: [id], properties: {id: {type: string}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/exceptions/{xid}:
+    delete:
+      operationId: deleteException
+      parameters: [{name: xid, in: path, required: true, schema: {type: string}}]
+      responses:
+        "204": {description: deleted}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/effective:
+    get:
+      operationId: effective
+      summary: What the schedule says at a time, and the next edge
+      parameters:
+        - {name: entity, in: query, required: true, schema: {type: string}}
+        - {name: at, in: query, schema: {type: string, format: date-time}}
+      responses:
+        "200": {description: effective state, content: {application/json: {schema: {$ref: "#/components/schemas/Effective"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/audit:
+    get:
+      operationId: audit
+      parameters:
+        - {name: entity, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500}}
+        - {name: before, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: newest first, content: {application/json: {schema: {type: object, required: [audit], properties: {audit: {type: array, items: {$ref: "#/components/schemas/AuditRow"}}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/tokens:
+    get:
+      operationId: listTokens
+      summary: Admin only. Never returns a secret
+      responses:
+        "200": {description: tokens, content: {application/json: {schema: {type: object, required: [tokens], properties: {tokens: {type: array, items: {$ref: "#/components/schemas/Token"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: createToken
+      summary: Admin only. The secret is returned ONCE
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [name, role], properties: {name: {type: string}, role: {type: string, enum: [admin, household, readonly]}, expires: {type: [string, "null"]}}}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {type: object, required: [id, name, role, token], properties: {id: {type: string}, name: {type: string}, role: {type: string}, token: {type: string}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/tokens/{id}:
+    delete:
+      operationId: revokeToken
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "204": {description: revoked}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+  parameters:
+    EntityId: {name: id, in: path, required: true, schema: {type: string}}
+  responses:
+    Error:
+      description: error
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            problems: {type: array, items: {$ref: "#/components/schemas/Problem"}}
+    Problem:
+      type: object
+      required: [code, field, message]
+      properties: {code: {type: string}, field: {type: string}, message: {type: string}}
+    Flags:
+      type: object
+      additionalProperties: false
+      properties: {household_editable: {type: boolean}}
+    Guardrails:
+      type: object
+      additionalProperties: false
+      properties:
+        max_on_minutes: {type: integer, minimum: 1, maximum: 1440}
+        max_level: {type: integer, minimum: 1, maximum: 100}
+        min_gap_minutes: {type: integer, minimum: 0, maximum: 1440}
+        allowed_from: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+        allowed_to: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+        max_triggers_per_day: {type: integer, minimum: 1, maximum: 24}
+    Entity:
+      type: object
+      required: [id, kind, name, ha_target, managed, flags, guardrails]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [plug, vacuum_plan, child_window, dimmer]}
+        name: {type: string}
+        ha_target: {type: [string, "null"]}
+        managed: {type: boolean, description: "true = rendered into the generated HA config (cutover done)"}
+        flags: {$ref: "#/components/schemas/Flags"}
+        guardrails: {$ref: "#/components/schemas/Guardrails"}
+    Rule:
+      type: object
+      required: [id, days, start]
+      additionalProperties: false
+      properties:
+        id: {type: string, pattern: "^[a-z0-9_]{1,24}$"}
+        days: {type: array, minItems: 1, uniqueItems: true, items: {type: integer, minimum: 1, maximum: 7}}
+        start: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+        end: {type: [string, "null"], pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+        level: {type: [integer, "null"]}
+        variables: {type: [object, "null"]}
+    Schedule:
+      type: object
+      required: [entity, version, tz, updated_at, rules]
+      properties:
+        entity: {type: string}
+        version: {type: integer, minimum: 1}
+        tz: {type: string}
+        updated_at: {type: string}
+        rules: {type: array, items: {$ref: "#/components/schemas/Rule"}}
+    ScheduleWithGuardrails:
+      allOf:
+        - {$ref: "#/components/schemas/Schedule"}
+        - type: object
+          required: [guardrails]
+          properties: {guardrails: {$ref: "#/components/schemas/Guardrails"}}
+    PutResult:
+      allOf:
+        - {$ref: "#/components/schemas/Schedule"}
+        - type: object
+          required: [changed]
+          properties: {changed: {type: boolean}}
+    Edge:
+      type: object
+      required: [at, action, rule]
+      properties: {at: {type: string}, action: {type: string, enum: ["on", "off", "trigger"]}, rule: {type: string}}
+    Preview:
+      type: object
+      required: [entity, current_version, valid, problems]
+      properties:
+        entity: {type: string}
+        current_version: {type: integer}
+        valid: {type: boolean}
+        problems: {type: array, items: {$ref: "#/components/schemas/Problem"}}
+        diff:
+          type: object
+          required: [added, removed, changed]
+          properties:
+            added: {type: array, items: {$ref: "#/components/schemas/Rule"}}
+            removed: {type: array, items: {$ref: "#/components/schemas/Rule"}}
+            changed: {type: array, items: {type: object, required: [before, after], properties: {before: {$ref: "#/components/schemas/Rule"}, after: {$ref: "#/components/schemas/Rule"}}}}
+        next_7_days: {type: array, items: {$ref: "#/components/schemas/Edge"}}
+    ExceptionRequest:
+      type: object
+      required: [entity_id, kind]
+      additionalProperties: false
+      properties:
+        entity_id: {type: string}
+        kind: {type: string, enum: [skip_date, override_until]}
+        date: {type: string}
+        until: {type: string}
+        state: {type: string, enum: ["on", "off"]}
+    Actor:
+      type: object
+      required: [token, name, role]
+      properties: {token: {type: string}, name: {type: string}, role: {type: string}, ip: {type: string}}
+    Exception:
+      type: object
+      required: [id, entity, kind, created_by, created_at]
+      properties:
+        id: {type: string}
+        entity: {type: string}
+        kind: {type: string}
+        date: {type: [string, "null"]}
+        until: {type: [string, "null"]}
+        state: {type: [string, "null"]}
+        created_by: {$ref: "#/components/schemas/Actor"}
+        created_at: {type: string}
+    Effective:
+      type: object
+      required: [entity, at, state, source, active_overrides, skipped_today, next_edge]
+      properties:
+        entity: {type: string}
+        at: {type: string}
+        state: {type: [string, "null"], enum: ["on", "off", null]}
+        source: {type: string, enum: [schedule, override]}
+        active_overrides: {type: array, items: {type: string}}
+        skipped_today: {type: boolean}
+        next_edge: {oneOf: [{type: "null"}, {$ref: "#/components/schemas/Edge"}]}
+    AuditRow:
+      type: object
+      required: [seq, ts, actor, action, entity, before, after]
+      properties:
+        seq: {type: integer}
+        ts: {type: string}
+        actor: {$ref: "#/components/schemas/Actor"}
+        action: {type: string}
+        entity: {type: [string, "null"]}
+        before: {}
+        after: {}
+    Token:
+      type: object
+      required: [id, name, role, created, revoked]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        role: {type: string}
+        created: {type: string}
+        expires: {type: [string, "null"]}
+        last_used: {type: [string, "null"]}
+        revoked: {type: boolean}
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [ok, degraded]}
+        version: {type: string}
+        entities: {type: integer}
+        audit_seq: {type: integer}
+        audit_chain: {type: object, required: [ok, rows], properties: {ok: {type: boolean}, rows: {type: integer}, first_bad_seq: {type: [integer, "null"]}}}
+        data_checksum: {type: [string, "null"]}
+        publish_error: {type: [string, "null"]}
+        render: {type: object, properties: {set_hash: {type: [string, "null"]}, audit_seq: {type: [integer, "null"]}}}
+        apply: {type: object}
+        in_sync: {type: boolean}

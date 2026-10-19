@@ -1,0 +1,11 @@
+[Unit]
+Description=portal-schedules applier: put the rendered schedule into Home Assistant's generated/ directory, check, reload, verify, commit
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/portal/schedules/applier/portal_apply.py
+TimeoutStartSec=900
+Nice=10

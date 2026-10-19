@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""schedctl - command line client of portal-schedules (stdlib only; run on the server).
+
+  schedctl health
+  schedctl entities
+  schedctl show ENTITY                       # rules + guardrails + ETag
+  schedctl preview ENTITY FILE.json          # validate + diff + next 7 days, changes nothing
+  schedctl put ENTITY FILE.json              # FILE = {"rules": [...]}; reads the current ETag itself
+  schedctl set-window ENTITY RULE HH:MM HH:MM    # change one rule's start/end (plug)
+  schedctl undo ENTITY
+  schedctl effective ENTITY [ISO-TIME]
+  schedctl audit [ENTITY] [LIMIT]
+  schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | add ENTITY override_until HH:MM on|off | rm ID
+  schedctl guardrails ENTITY FILE.json       # admin
+  schedctl managed ENTITY on|off             # admin: the cutover switch (rendered into HA or not)
+  schedctl token list|create NAME ROLE|revoke ID
+
+URL: $SCHEDCTL_URL (default http://127.0.0.1:16444). Token: file $SCHEDCTL_TOKEN_FILE (default ~/.config/schedctl/token, mode 600).
+The token is never printed. Exit status 0 ok, 1 refused by the service (the reasons are printed), 2 usage / transport error.
+"""
+import os
+import sys
+import json
+import urllib.request
+import urllib.error
+
+URL = os.environ.get("SCHEDCTL_URL", "http://127.0.0.1:16444").rstrip("/")
+TOKEN_FILE = os.environ.get("SCHEDCTL_TOKEN_FILE", os.path.expanduser("~/.config/schedctl/token"))
+
+
+def token():
+    try:
+        st = os.stat(TOKEN_FILE)
+        if st.st_mode & 0o077:
+            sys.exit("schedctl: %s must be mode 600" % TOKEN_FILE)
+        return open(TOKEN_FILE).read().strip()
+    except OSError as e:
+        sys.exit("schedctl: cannot read the token file (%s)" % e)
+
+
+def call(method, path, body=None, headers=None, auth=True):
+    h = dict(headers or {})
+    if auth:
+        h["Authorization"] = "Bearer " + token()
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        h["Content-Type"] = "application/json"
+    req = urllib.request.Request(URL + path, data=data, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw else None), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw), dict(e.headers)
+        except ValueError:
+            return e.code, {"error": {"code": "http", "message": raw.decode(errors="replace")[:200]}}, dict(e.headers)
+    except (urllib.error.URLError, OSError) as e:
+        sys.exit("schedctl: cannot reach %s (%s)" % (URL, e))
+
+
+def out(obj):
+    print(json.dumps(obj, indent=2, ensure_ascii=False))
+
+
+def done(status, body, ok=(200, 201, 204)):
+    if status in ok:
+        if body is not None:
+            out(body)
+        return 0
+    e = (body or {}).get("error", {})
+    print("REFUSED %s %s: %s" % (status, e.get("code", ""), e.get("message", "")), file=sys.stderr)
+    for p in e.get("problems", []):
+        print("  - [%s] %s: %s" % (p["code"], p["field"], p["message"]), file=sys.stderr)
+    return 1
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def current_etag(ent):
+    st, b, h = call("GET", "/v1/schedules/" + ent)
+    if st != 200:
+        sys.exit(done(st, b))
+    return h.get("ETag") or h.get("etag"), b
+
+
+def main(a):
+    if len(a) < 2 or a[1] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 2
+    c, rest = a[1], a[2:]
+    if c == "health":
+        st, b, _ = call("GET", "/v1/health")
+        return done(st, b)
+    if c == "entities" and not rest:
+        st, b, _ = call("GET", "/v1/entities")
+        return done(st, b)
+    if c == "show" and len(rest) == 1:
+        et, b = current_etag(rest[0])
+        out({"etag": et, **b})
+        return 0
+    if c == "preview" and len(rest) == 2:
+        st, b, _ = call("POST", "/v1/schedules/%s/preview" % rest[0], load(rest[1]))
+        return done(st, b)
+    if c == "put" and len(rest) == 2:
+        et, _ = current_etag(rest[0])
+        st, b, _ = call("PUT", "/v1/schedules/" + rest[0], load(rest[1]), {"If-Match": et})
+        return done(st, b)
+    if c == "set-window" and len(rest) == 4:
+        et, cur = current_etag(rest[0])
+        rules = cur["rules"]
+        hit = [r for r in rules if r["id"] == rest[1]]
+        if not hit:
+            sys.exit("schedctl: no rule '%s' (have: %s)" % (rest[1], ", ".join(r["id"] for r in rules)))
+        hit[0]["start"], hit[0]["end"] = rest[2], rest[3]
+        st, b, _ = call("PUT", "/v1/schedules/" + rest[0], {"rules": rules}, {"If-Match": et})
+        return done(st, b)
+    if c == "undo" and len(rest) == 1:
+        st, b, _ = call("POST", "/v1/schedules/%s/undo" % rest[0])
+        return done(st, b)
+    if c == "effective" and 1 <= len(rest) <= 2:
+        q = "/v1/effective?entity=" + rest[0] + ("&at=" + urllib.request.quote(rest[1]) if len(rest) == 2 else "")
+        st, b, _ = call("GET", q)
+        return done(st, b)
+    if c == "audit" and len(rest) <= 2:
+        q = "/v1/audit?limit=%s" % (rest[1] if len(rest) == 2 else "20") + ("&entity=" + rest[0] if rest else "")
+        st, b, _ = call("GET", q)
+        return done(st, b)
+    if c == "exception" and rest:
+        if rest[0] == "list":
+            st, b, _ = call("GET", "/v1/exceptions" + ("?entity=" + rest[1] if len(rest) > 1 else ""))
+            return done(st, b)
+        if rest[0] == "add" and len(rest) >= 4 and rest[2] == "skip_date":
+            st, b, _ = call("POST", "/v1/exceptions", {"entity_id": rest[1], "kind": "skip_date", "date": rest[3]})
+            return done(st, b)
+        if rest[0] == "add" and len(rest) == 5 and rest[2] == "override_until":
+            st, b, _ = call("POST", "/v1/exceptions", {"entity_id": rest[1], "kind": "override_until", "until": rest[3], "state": rest[4]})
+            return done(st, b)
+        if rest[0] == "rm" and len(rest) == 2:
+            st, b, _ = call("DELETE", "/v1/exceptions/" + rest[1])
+            return done(st, b)
+    if c == "guardrails" and len(rest) == 2:
+        st, b, _ = call("PUT", "/v1/entities/%s/guardrails" % rest[0], load(rest[1]))
+        return done(st, b)
+    if c == "managed" and len(rest) == 2 and rest[1] in ("on", "off"):
+        st, b, _ = call("PATCH", "/v1/entities/" + rest[0], {"managed": rest[1] == "on"})
+        return done(st, b)
+    if c == "token" and rest:
+        if rest[0] == "list":
+            st, b, _ = call("GET", "/v1/tokens")
+            return done(st, b)
+        if rest[0] == "create" and len(rest) == 3:
+            st, b, _ = call("POST", "/v1/tokens", {"name": rest[1], "role": rest[2]})
+            if st == 201:                                   # the secret is shown once, on stdout, only when asked for
+                print("created token %s (%s). Secret (shown once):" % (b["id"], b["name"]), file=sys.stderr)
+                print(b["token"])
+                return 0
+            return done(st, b)
+        if rest[0] == "revoke" and len(rest) == 2:
+            st, b, _ = call("DELETE", "/v1/tokens/" + rest[1])
+            return done(st, b)
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
