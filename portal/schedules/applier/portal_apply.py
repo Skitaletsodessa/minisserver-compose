@@ -52,7 +52,7 @@ def sha(b):
     return hashlib.sha256(b).hexdigest()
 
 
-ANSI = re.compile(chr(27) + "[[0-9;]*m")
+ANSI = re.compile(chr(27) + re.escape("[") + "[0-9;]*m")
 BAD_LINE = re.compile("^ *(ERROR|CRITICAL)([^A-Za-z]|$)|Failed config")
 
 

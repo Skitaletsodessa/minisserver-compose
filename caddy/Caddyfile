@@ -161,3 +161,11 @@ minisserver.tail6bf4d5.ts.net:15443 {
 		header_up -X-Forwarded-Host
 	}
 }
+
+minisserver.tail6bf4d5.ts.net:16443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 27: portal schedule service (the single source of truth for schedules) - tailnet only, never on the LAN, never public.
+	# The service listens on 127.0.0.1:16444; every request needs a bearer token (roles admin/household/readonly) and failed attempts are rate-limited per client IP.
+	reverse_proxy 127.0.0.1:16444
+}
