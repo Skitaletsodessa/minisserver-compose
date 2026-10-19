@@ -1,10 +1,9 @@
-# Task 25 Phase C — plug schedules + reconciliation. One automation per schedule edge.
-# TEST automations at bottom — REMOVE after verification (switch.living_room_rack / Rack1).
+# Hand-written Home Assistant automations. Since Task 27 (2026-10-19) NO SCHEDULE lives here: every plug window, fail-safe OFF,
+# reconcile-on-reconnect and vacuum-plan trigger is GENERATED from the schedule service into generated/automations/ (see
+# portal/schedules/README.md; change a schedule with `schedctl`, never by editing YAML). What stays hand-written contains no time:
+# the start-up reconcile and the reload hook the host-side applier uses. The original file is portal/schedules/baseline/automations.yaml.
 
-# ── BathroomTowels (.240): ON 06:30, OFF 08:00, ON 18:30, OFF 20:00 ──────────
-# ── Plant lights: Rack1 (.241), Rack2 (.242), Orchids (.243): ON 07:00, OFF 20:00 ──
-# ── Bedroom Parrot UV (.245): ON 11:00, OFF 18:00 ───────────────────────────
-# ── Reconciliation: on HA start ──────────────────────────────────────────────
+# ── Reconciliation: on HA start (calls script.reconcile_all_plugs -> script.sch_reconcile_all, generated) ──
 - id: reconcile_all_on_start
   alias: 'Reconcile: all plugs on HA start'
   trigger:
@@ -13,9 +12,6 @@
   action:
     - service: script.reconcile_all_plugs
 
-# ── Reconciliation: on plug reconnect (unavailable → any state) ──────────────
-# ── Robot vacuum H40 Livingroom: the whole plan every day at 20:30 (Ivan, 2026-10-16) ──
-# ── Robot vacuum H40 Bedroom: morning Silent vacuum 09:00, evening Turbo vacuum + mop Level3 19:00 (Ivan, 2026-10-16) ──
 # ── Portal (Task 27): the one way the host-side applier reaches Home Assistant. Static and hand-written on purpose: it contains no time and no
 # schedule, only "reload what is in generated/". local_only: only requests from this machine's own network are accepted; the webhook id is a
 # secret (secrets.yaml, not in git). script.reload first, automation.reload last: the automation reload replaces this very automation.

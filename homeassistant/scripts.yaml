@@ -1,5 +1,5 @@
-# Task 25 Phase C — reconciliation scripts. Called on HA start and on plug reconnect.
-# Each script checks the current time against the schedule window and corrects the plug.
+# Hand-written reconcile entry point. Since Task 27 (2026-10-19) the per-plug reconcile scripts are GENERATED (script.sch_reconcile_*, see
+# portal/schedules/README.md); this file keeps only the composition called at HA start. Vacuum plan scripts below are plan CONTENT, not schedules.
 
 reconcile_all_plugs:
   alias: 'Reconcile all scheduled plugs to current schedule'
