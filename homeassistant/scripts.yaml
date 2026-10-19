@@ -285,9 +285,19 @@ vacuum_livingroom_plan:
               - stop: 'robot runs in the wrong mode'
                 error: true
           # until it is back on the dock (a manual pause or a stuck robot just waits; ha-alerts reports it)
-          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
+          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking', 'idle'] or states(vac) == 'error' }}"
             timeout: '01:30:00'
             continue_on_timeout: true
+          # "go charging" followed by "idle" = the robot stopped off the dock (2026-10-16 it sat there until the battery died):
+          # one more return command, a few minutes to dock, otherwise the plan stops with a notification
+          - if: "{{ states(st) == 'idle' }}"
+            then:
+              - action: vacuum.return_to_base
+                target:
+                  entity_id: vacuum.xiaomi_ov51gl_b5f6_robot_cleaner
+              - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
+                timeout: '00:05:00'
+                continue_on_timeout: true
           - if: "{{ not wait.completed or states(vac) == 'error' }}"
             then:
               - action: persistent_notification.create
@@ -488,9 +498,19 @@ vacuum_bedroom_plan:
                   message: "{{ phase }}: ожидался тип уборки {{ want_type }}, пылесос сообщает {{ state_attr(vac, 'vacuum.sweep_mop_type') }}. Отправлен на базу."
               - stop: 'robot runs in the wrong mode'
                 error: true
-          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
+          - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking', 'idle'] or states(vac) == 'error' }}"
             timeout: '01:30:00'
             continue_on_timeout: true
+          # "go charging" followed by "idle" = the robot stopped off the dock (2026-10-16 it sat there until the battery died):
+          # one more return command, a few minutes to dock, otherwise the plan stops with a notification
+          - if: "{{ states(st) == 'idle' }}"
+            then:
+              - action: vacuum.return_to_base
+                target:
+                  entity_id: vacuum.xiaomi_ov51gl_e160_robot_cleaner
+              - wait_template: "{{ states(st) in ['charging', 'charged', 'stationworking'] or states(vac) == 'error' }}"
+                timeout: '00:05:00'
+                continue_on_timeout: true
           - if: "{{ not wait.completed or states(vac) == 'error' }}"
             then:
               - action: persistent_notification.create

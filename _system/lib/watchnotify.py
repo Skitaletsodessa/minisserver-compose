@@ -142,8 +142,9 @@ def send(text):
     return True
 
 
-def alert(key, text, force=False):
-    """Call on EVERY check while the fault persists. Sends the first message, then a reminder every REMIND seconds."""
+def alert(key, text, force=False, remind=None):
+    """Call on EVERY check while the fault persists. Sends the first message, then a reminder every REMIND seconds
+    (WATCH_REMIND_SECONDS, default 6 h); `remind` overrides it for this alert, 0 = never remind (one message only)."""
     flush()
     now = time.time()
     st = _load(key)
@@ -151,7 +152,8 @@ def alert(key, text, force=False):
         st = {"since": now, "last_sent": 0, "delivered": False, "reminders": 0, "text": text}
     st["text"] = text
     first = not st["delivered"]
-    due = (not first) and (now - st["last_sent"] >= REMIND)
+    interval = REMIND if remind is None else remind
+    due = (not first) and interval > 0 and (now - st["last_sent"] >= interval)
     if first or due or force:
         if first or force:
             msg = TAG + text

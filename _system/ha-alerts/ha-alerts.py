@@ -84,6 +84,13 @@ VACUUM_CONSUMABLES = (
     ("brush_life_level_2", "щётка (2)"),
 )
 VACUUM_STUCK_SECS = 10 * 60
+VACUUM_IDLE_SECS = 15 * 60
+# Reminder interval of the non-critical alerts (vacuums, purifiers, plans): the default 6 h repeated one stuck robot
+# or one dead battery four times a day (Ivan, 2026-10-19: too much noise).
+DAILY = 24 * 3600
+# A grow light that somebody switched ON early is tolerated for this long before it counts as a mismatch; one left
+# on after its window still alerts after this time (it would burn all night).
+EARLY_ON_SECS = 120 * 60
 
 # Plan runs started before this moment never wrote the 'ПЛАН ВЫПОЛНЕН' line: do not alert on them.
 PLAN_ALERT_FROM = 1792151514
@@ -147,7 +154,7 @@ def check_purifiers(conn):
 
         key_u = f"ha-purifier-unavail-{key}"
         if state == "unavailable" and age > PURIFIER_UNAVAIL_SECS:
-            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин")
+            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин", remind=DAILY)
         else:
             watchnotify.clear(key_u, f"HA: {label} снова доступен")
 
@@ -206,11 +213,18 @@ def check_vacuums(conn):
 
         key_u = f"ha-vacuum-unavail-{key}"
         if state == "unavailable" and age > PURIFIER_UNAVAIL_SECS:
-            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин")
+            watchnotify.alert(key_u, f"HA: {label} недоступен {int(age//60)} мин", remind=DAILY)
         else:
             watchnotify.clear(key_u, f"HA: {label} снова доступен")
         if state == "unavailable":
             continue
+
+        key_i = f"ha-vacuum-idle-{key}"
+        if state == "idle" and age > VACUUM_IDLE_SECS:
+            bat, _ = get_state(conn, f"sensor.{prefix}_battery_level")
+            watchnotify.alert(key_i, f"HA: {label} стоит вне базы (статус Idle) уже {int(age//60)} мин, заряд {bat}%", remind=DAILY)
+        else:
+            watchnotify.clear(key_i, f"HA: {label} снова на базе или в работе")
 
         attrs = get_attrs(conn, vac)
         try:
@@ -222,7 +236,7 @@ def check_vacuums(conn):
             desc = attrs.get("vacuum.status_desc") or state
             watchnotify.alert(key_f,
                 f"HA: {label} {VACUUM_STUCK_STATES[state]} уже {int(age//60)} мин "
-                f"(статус «{desc}», последний код {fault}), возможно застрял")
+                f"(статус «{desc}», последний код {fault}), возможно застрял", remind=DAILY)
         else:
             watchnotify.clear(key_f, f"HA: {label} снова в работе")
 
@@ -293,7 +307,7 @@ def _check_one_plan(conn, script, logname, key, label):
     key_h = f"ha-vacuum-plan-hung-{key}"
     key_f = f"ha-vacuum-plan-failed-{key}"
     if state == "on" and run_age > 4 * 3600:
-        watchnotify.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int(run_age//3600)} ч, возможно завис")
+        watchnotify.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int(run_age//3600)} ч, возможно завис", remind=DAILY)
     else:
         watchnotify.clear(key_h, f"HA: сценарий пылесоса ({label}) больше не висит")
     if state == "on" or run_age < 600 or run_age > 12 * 3600:
@@ -318,7 +332,7 @@ def _check_one_plan(conn, script, logname, key, label):
     else:
         when = datetime.datetime.fromtimestamp(last).strftime("%H:%M")
         watchnotify.alert(key_f, f"HA: сценарий пылесоса ({label}), запущенный в {when}, не дошёл до конца "
-                                 "(смотри уведомления HA и журнал). Пылесос мог остаться на базе с недоделанной уборкой.")
+                                 "(смотри уведомления HA и журнал). Пылесос мог остаться на базе с недоделанной уборкой.", remind=0)
 
 
 def main():
@@ -354,7 +368,8 @@ def main():
         key_m = f"ha-mismatch-{name}"
         manual_off = (eid in PLANT_LIGHTS and state == "off" and exp == "on" and bool(changed_ts)
                       and changed_ts > last_edge_ts(eid, t) + MANUAL_MARGIN_SECS)
-        if state != exp and age > MISMATCH_SECS and not manual_off:
+        limit = EARLY_ON_SECS if (eid in PLANT_LIGHTS and state == "on" and exp == "off") else MISMATCH_SECS
+        if state != exp and age > limit and not manual_off:
             watchnotify.alert(key_m,
                 f"HA: {name} в состоянии '{state}', по расписанию '{exp}' "
                 f"уже {int(age//60)} мин")
