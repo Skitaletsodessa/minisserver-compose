@@ -22,6 +22,7 @@ RENDERABLE_KINDS = ("plug", "vacuum_plan")
 RULE_KEYS = {"id", "days", "start", "end", "level", "variables"}
 GUARDRAIL_KEYS = ("max_on_minutes", "max_level", "min_gap_minutes", "allowed_from", "allowed_to", "max_triggers_per_day")
 FLAG_KEYS = ("household_editable",)
+CHILD_TARGETS = ("youtube", "roblox", "maps")      # what a child-policy window opens (the policy job's GATED services + the weekday Maps list)
 MAX_RULES = 12
 DST_FORBIDDEN = range(2 * 60, 4 * 60)          # 02:00 .. 03:59
 WEEK = 7 * 1440
@@ -40,9 +41,11 @@ def problem(code, field, message):
 
 # ── time helpers ──────────────────────────────────────────────────────────────
 
-def parse_hhmm(s):
+def parse_hhmm(s, allow_24=False):
     if not isinstance(s, str):
         return None
+    if allow_24 and s == "24:00":              # end of day, for child-policy windows only
+        return 1440
     m = TIME_RE.match(s)
     return int(m.group(1)) * 60 + int(m.group(2)) if m else None
 
@@ -162,10 +165,10 @@ def validate_rules(entity, rules):
             probs.append(problem("dst_ambiguous", fld + ".start", "%s is inside 02:00-03:59, which does not exist or exists twice on DST nights" % r["start"]))
             continue
         e = None
-        if kind == "plug":
-            e = parse_hhmm(r.get("end"))
+        if kind in ("plug", "child_window"):
+            e = parse_hhmm(r.get("end"), allow_24=(kind == "child_window"))
             if e is None:
-                probs.append(problem("format", fld + ".end", "a plug window needs an end, HH:MM"))
+                probs.append(problem("format", fld + ".end", "a window needs an end, HH:MM"))
                 continue
             if e in DST_FORBIDDEN:
                 probs.append(problem("dst_ambiguous", fld + ".end", "%s is inside 02:00-03:59" % r["end"]))
@@ -173,9 +176,15 @@ def validate_rules(entity, rules):
             if e <= s:
                 probs.append(problem("window", fld, "the window must end after it starts and stay inside one day (split a window across midnight into two rules)"))
                 continue
-            if r.get("variables"):
+            if kind == "plug" and r.get("variables"):
                 probs.append(problem("not_allowed", fld + ".variables", "a plug rule takes no variables"))
                 continue
+            if kind == "child_window":
+                opens = (r.get("variables") or {}).get("opens")
+                targets = opens.split(",") if isinstance(opens, str) else []
+                if not targets or any(t not in CHILD_TARGETS for t in targets):
+                    probs.append(problem("variables", fld + ".variables", "a child window needs variables.opens: a comma list of %s" % ", ".join(CHILD_TARGETS)))
+                    continue
         elif kind == "vacuum_plan":
             if r.get("end") is not None:
                 probs.append(problem("not_allowed", fld + ".end", "a vacuum trigger has no end"))
@@ -211,32 +220,35 @@ def validate_rules(entity, rules):
         if e is not None and "max_on_minutes" in g and e - s > g["max_on_minutes"]:
             probs.append(problem("max_on", fld, "the window is %d min, the guardrail max_on_minutes is %d" % (e - s, g["max_on_minutes"])))
             continue
-        good.append(normalise_rule({**r, "end": r.get("end") if kind == "plug" else None}))
-    # cross-rule checks (only on rules that are individually sound)
-    iv = []     # (abs start, abs end, rule id) over one cyclic week
+        good.append(normalise_rule({**r, "end": r.get("end") if kind in ("plug", "child_window") else None}))
+    # cross-rule checks (only on rules that are individually sound); child windows are independent per thing they open
+    groups = {}
     for r in good:
-        s = parse_hhmm(r["start"])
-        e = parse_hhmm(r["end"]) if r["end"] is not None else s
-        for d in r["days"]:
-            iv.append(((d - 1) * 1440 + s, (d - 1) * 1440 + e, r["id"]))
-    iv.sort()
+        s_ = parse_hhmm(r["start"])
+        e_ = parse_hhmm(r["end"], allow_24=True) if r["end"] is not None else s_
+        grps = (r.get("variables") or {}).get("opens", "").split(",") if kind == "child_window" else [""]
+        for grp in grps:
+            for d in r["days"]:
+                groups.setdefault(grp, []).append(((d - 1) * 1440 + s_, (d - 1) * 1440 + e_, r["id"]))
     gap = g.get("min_gap_minutes", 0)
     reported = set()
-    for i, cur in enumerate(iv):
-        j = (i + 1) % len(iv)
-        nxt = iv[j]
-        nstart = nxt[0] + (WEEK if j <= i else 0)      # j <= i: wrapped round the week
-        if nstart < cur[1]:
-            key = ("overlap",) + tuple(sorted((cur[2], nxt[2])))
-            if key not in reported:
-                reported.add(key)
-                probs.append(problem("overlap", "rules", "rules '%s' and '%s' overlap" % (cur[2], nxt[2])))
-        elif nstart - cur[1] < gap:
-            key = ("gap",) + tuple(sorted((cur[2], nxt[2])))
-            if key not in reported:
-                reported.add(key)
-                probs.append(problem("min_gap", "rules", "rules '%s' and '%s' are %d min apart, the guardrail min_gap_minutes is %d"
-                                     % (cur[2], nxt[2], nstart - cur[1], gap)))
+    for iv in groups.values():
+        iv.sort()
+        for i, cur in enumerate(iv):
+            j = (i + 1) % len(iv)
+            nxt = iv[j]
+            nstart = nxt[0] + (WEEK if j <= i else 0)      # j <= i: wrapped round the week
+            if nstart < cur[1]:
+                key = ("overlap",) + tuple(sorted((cur[2], nxt[2])))
+                if key not in reported:
+                    reported.add(key)
+                    probs.append(problem("overlap", "rules", "rules '%s' and '%s' overlap" % (cur[2], nxt[2])))
+            elif nstart - cur[1] < gap:
+                key = ("gap",) + tuple(sorted((cur[2], nxt[2])))
+                if key not in reported:
+                    reported.add(key)
+                    probs.append(problem("min_gap", "rules", "rules '%s' and '%s' are %d min apart, the guardrail min_gap_minutes is %d"
+                                         % (cur[2], nxt[2], nstart - cur[1], gap)))
     if "max_triggers_per_day" in g:
         per_day = {}
         for r in good:

@@ -342,6 +342,43 @@ class App:
             return Response(status_code=204)
         return self._guard(go)
 
+    # ── child policy (Phase E): modelled + imported read-only; rendering is a pure preview, AdGuard is never contacted ──
+    async def child_policy_get(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        return JSONResponse(self.store.child_policy(with_lists=who["role"] != "household"))
+
+    async def child_policy_import(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        return self._guard(lambda: JSONResponse(self.store.import_child_policy(who, data)))
+
+    async def child_policy_render(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        if who["role"] == "household":
+            return err(403, "forbidden", "role 'household' may not read the domain lists")
+        data, e = await self.body(request)
+        if e:
+            return e
+        from . import child_render
+        try:
+            at = self._parse_at((data or {}).get("at"))
+            sd = data["service_domains"]
+            ov = data.get("overrides", [])
+            if at is None or any(not isinstance(sd.get(k), list) for k in ("telegram", "youtube", "roblox")) or not isinstance(ov, list):
+                raise ValueError
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return err(400, "bad_body", "an object with service_domains {telegram, youtube, roblox: [domains]} and optional at, overrides is required")
+        lines = child_render.render_block(self.store.child_policy(), sd, at.astimezone(model.TZ), ov)
+        return JSONResponse({"at": at.astimezone(model.TZ).isoformat(), "lines": lines})
+
     # ── background: audit the applier's results, retry a failed publication ──
     async def background(self):
         last_key = None
@@ -378,6 +415,9 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
         Route("/v1/exceptions/{id}", a.exception_delete, methods=["DELETE"]),
         Route("/v1/effective", a.effective, methods=["GET"]),
         Route("/v1/audit", a.audit, methods=["GET"]),
+        Route("/v1/child-policy", a.child_policy_get, methods=["GET"]),
+        Route("/v1/child-policy/import", a.child_policy_import, methods=["PUT"]),
+        Route("/v1/child-policy/render", a.child_policy_render, methods=["POST"]),
         Route("/v1/tokens", a.tokens_list, methods=["GET"]),
         Route("/v1/tokens", a.token_create, methods=["POST"]),
         Route("/v1/tokens/{id}", a.token_revoke, methods=["DELETE"]),
