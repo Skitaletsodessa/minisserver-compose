@@ -27,6 +27,8 @@ WATCHERS = [
     ("ha-watch.service", 900),
     ("ha-alerts.service", 900),
     ("funnel-dns-watch.service", 600),
+    ("portal-watch.service", 900),
+    ("portal-apply.service", 900),
 ]
 PI_REPORT_KEY = "/home/skit/.ssh/piserver_report"
 HEARTBEAT_LIST_MAX = 6          # the active list is capped; the rest is summarised as "+N more"

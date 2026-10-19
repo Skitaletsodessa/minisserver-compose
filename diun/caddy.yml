@@ -8,3 +8,11 @@
   max_tags: 5
   include_tags:
     - ^\d+\.\d+\.\d+$
+# Task 27: the portal-schedules image (portal-schedules:local) is built FROM python:3.13-slim-trixie, pinned by digest in
+# portal/schedules/Dockerfile. Same reason as caddy above: a local build tag cannot be resolved against a registry.
+- name: python
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - ^3\.13\.\d+-slim-trixie$
