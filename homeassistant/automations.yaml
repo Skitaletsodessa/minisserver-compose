@@ -48,28 +48,6 @@
 
 # ── Plant lights: Rack1 (.241), Rack2 (.242), Orchids (.243): ON 07:00, OFF 20:00 ──
 # ── Bedroom Parrot UV (.245): ON 11:00, OFF 18:00 ───────────────────────────
-- id: sched_parrot_uv_on
-  alias: 'Schedule: parrot UV ON 11:00'
-  mode: single
-  trigger:
-    - platform: time
-      at: '11:00:00'
-  action:
-    - service: switch.turn_on
-      target:
-        entity_id: switch.bedroom_parrot
-
-- id: sched_parrot_uv_off
-  alias: 'Schedule: parrot UV OFF 18:00'
-  mode: single
-  trigger:
-    - platform: time
-      at: '18:00:00'
-  action:
-    - service: switch.turn_off
-      target:
-        entity_id: switch.bedroom_parrot
-
 # ── Reconciliation: on HA start ──────────────────────────────────────────────
 - id: reconcile_all_on_start
   alias: 'Reconcile: all plugs on HA start'
@@ -88,15 +66,6 @@
       from: "unavailable"
   action:
     - service: script.reconcile_bathroom_towels
-
-- id: reconcile_parrot_reconnect
-  alias: 'Reconcile: Parrot UV on reconnect'
-  trigger:
-    - platform: state
-      entity_id: switch.bedroom_parrot
-      from: "unavailable"
-  action:
-    - service: script.reconcile_parrot
 
 # ── Robot vacuum H40 Livingroom: the whole plan every day at 20:30 (Ivan, 2026-10-16) ──
 - id: sched_vacuum_livingroom_plan
