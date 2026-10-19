@@ -22,6 +22,7 @@ from sched import model, render as renderer          # noqa: E402
 import parity_edges as pe                           # noqa: E402
 
 DB = "/srv/apps/homeassistant/home-assistant_v2.db"
+BASELINE = "/srv/compose/portal/schedules/baseline"
 
 
 def main():
@@ -33,8 +34,13 @@ def main():
     since = dt.datetime.fromisoformat(args.since).replace(tzinfo=model.TZ)
     until = dt.datetime.now(model.TZ) - dt.timedelta(minutes=2) if args.until == "now" else dt.datetime.fromisoformat(args.until).replace(tzinfo=model.TZ)
 
-    old_autos = pe.load_ha(os.path.join(args.old, "automations.yaml"))
-    by_name = {a["alias"]: a for a in old_autos if a.get("id", "").startswith("sched_")}
+    # firings can come from the original hand-written automations (baseline), from what is still hand-written, or from the generated ones
+    by_name = {}
+    for path in (os.path.join(BASELINE, "automations.yaml"), os.path.join(args.old, "automations.yaml")):
+        by_name.update({a["alias"]: a for a in pe.load_ha(path) if a.get("id", "").startswith("sched_")})
+    gen_dir = os.path.join(args.old, "generated", "automations")
+    if os.path.isdir(gen_dir):
+        by_name.update({a["alias"]: a for a in pe.load_dir_list(gen_dir) if a.get("id", "").startswith("sch_")})
 
     conn = sqlite3.connect("file:%s?mode=ro" % DB, uri=True, timeout=30)
     rows = conn.execute("""SELECT e.time_fired_ts, d.shared_data FROM events e JOIN event_types t ON e.event_type_id = t.event_type_id
@@ -44,7 +50,7 @@ def main():
     actual, unknown = set(), []
     for ts, d in rows:
         j = json.loads(d)
-        if j.get("source") != "time" or not j["name"].startswith("Schedule:"):
+        if j.get("source") != "time" or not j["name"].startswith(("Schedule:", "Sch ")):
             continue
         a = by_name.get(j["name"])
         if a is None:
