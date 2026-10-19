@@ -4,39 +4,7 @@
 reconcile_all_plugs:
   alias: 'Reconcile all scheduled plugs to current schedule'
   sequence:
-    - service: script.reconcile_bathroom_towels
     - service: script.sch_reconcile_all
-
-reconcile_bathroom_towels:
-  alias: 'Reconcile bathroom_towels to schedule'
-  sequence:
-    - variables:
-        t: "{{ now().hour * 60 + now().minute }}"
-        target: >
-          {{ 'on' if (t >= 390 and t < 480) or (t >= 1110 and t < 1200) else 'off' }}
-        cur: "{{ states('switch.bathroom_towels') }}"
-    - if:
-        - condition: template
-          value_template: "{{ target == 'on' and cur not in ['on', 'unavailable'] }}"
-      then:
-        - service: switch.turn_on
-          target:
-            entity_id: switch.bathroom_towels
-        - service: logbook.log
-          data:
-            name: Reconcile
-            message: "bathroom_towels: {{ cur }} → ON (schedule window)"
-    - if:
-        - condition: template
-          value_template: "{{ target == 'off' and cur == 'on' }}"
-      then:
-        - service: switch.turn_off
-          target:
-            entity_id: switch.bathroom_towels
-        - service: logbook.log
-          data:
-            name: Reconcile
-            message: "bathroom_towels: on → OFF (outside schedule window)"
 
 # ── Robot vacuum H40 Livingroom: plan "vacuum, then mop" per room, dust emptied after the vacuum phases ──
 # Manual start only. Ivan's plan (2026-10-16):
