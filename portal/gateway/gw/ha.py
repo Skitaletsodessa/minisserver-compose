@@ -100,10 +100,16 @@ class HA:
         return None
 
     async def refresh_all(self):
-        ok = 0
+        ok, failed = 0, 0
         for eid in sorted(self.watch):
-            if await self.refresh(eid):
+            r = await self.refresh(eid)
+            if r:
                 ok += 1
+                failed = 0
+            elif r is None:                    # no answer at all (not a 404): after two in a row HA is unreachable - do not spend 5 s on each of the other entities
+                failed += 1
+                if failed >= 2:
+                    break
         return ok
 
     def stale(self):
@@ -144,7 +150,7 @@ class HA:
     async def _ws_once(self):
         import websockets
         ws_url = self.url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
-        async with websockets.connect(ws_url, max_size=4 * 1024 * 1024, open_timeout=8, ping_interval=20, ping_timeout=20) as ws:
+        async with websockets.connect(ws_url, max_size=4 * 1024 * 1024, open_timeout=8, ping_interval=10, ping_timeout=10) as ws:
             msg = json.loads(await asyncio.wait_for(ws.recv(), 8))
             if msg.get("type") != "auth_required":
                 raise ConnectionError("unexpected greeting")

@@ -30,6 +30,7 @@ WATCHERS = [
     ("portal-watch.service", 900),
     ("portal-apply.service", 900),
     ("listener-watch.service", 900),
+    ("gateway-watch.service", 900),
 ]
 PI_REPORT_KEY = "/home/skit/.ssh/piserver_report"
 HEARTBEAT_LIST_MAX = 6          # the active list is capped; the rest is summarised as "+N more"

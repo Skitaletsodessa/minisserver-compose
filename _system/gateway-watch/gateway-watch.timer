@@ -1,0 +1,11 @@
+[Unit]
+Description=portal gateway watchdog - every 5 min
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
