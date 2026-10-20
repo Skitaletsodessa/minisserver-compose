@@ -76,6 +76,7 @@
   }
 
   // ── home: vacuums ──────────────────────────────────────────────────────────
+  var vacReload = null;
   function onVacuum(btn) {
     var card = btn.closest("[data-vacuum]");
     var id = card.dataset.vacuum;
@@ -83,7 +84,8 @@
     var path = act === "vac-start" ? "/v1/vacuums/" + id + "/scenarios/" + btn.dataset.scenario + "/start" : "/v1/vacuums/" + id + (act === "vac-pause" ? "/pause" : "/dock");
     btn.disabled = true;
     api("POST", path).then(function (r) {
-      if (r.ok && r.json.outcome === "confirmed") { note(card, T("confirmed"), false); }
+      if (r.ok && act === "vac-pause" && r.json.action === "dock") { note(card, T("plan_cancelled"), true); }
+      else if (r.ok && r.json.outcome === "confirmed") { note(card, T("confirmed"), false); }
       else if (r.ok) { note(card, T("unconfirmed", { s: JSON.stringify(r.json.observed) }), true); }
       else { note(card, errText(r.json && r.json.error), true); }
       setTimeout(function () { location.reload(); }, 1500);
@@ -228,7 +230,7 @@
   if (page === "home") {
     listen({
       device: function (d) { refreshDevice(d.id); },
-      vacuum: function () { /* the vacuum card is re-read on the next load; keep the DOM simple */ },
+      vacuum: function () { clearTimeout(vacReload); vacReload = setTimeout(function () { location.reload(); }, 1500); },   // the buttons depend on the robot state (Pause only while it cleans)
       link: function (d) { var bn = q("#ha-banner"); if (bn) { bn.hidden = d.ha !== "down"; } if (d.ha === "down") { qa("[data-device]").forEach(function (c) { refreshDevice(c.dataset.device); }); } }
     });
   } else if (page === "services") {
