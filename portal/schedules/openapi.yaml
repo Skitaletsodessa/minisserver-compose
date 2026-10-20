@@ -238,6 +238,111 @@ paths:
         "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+  /v1/child:
+    get:
+      operationId: listChildren
+      summary: "The children's devices (Task 29): windows, guardrails, exceptions, per-child domain lists and the computed status of each"
+      responses:
+        "200": {description: children, content: {application/json: {schema: {type: object, required: [children], properties: {children: {type: array, items: {$ref: "#/components/schemas/ChildDeviceFull"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/snapshot:
+    get:
+      operationId: getChildSnapshot
+      summary: "The snapshot the host policy job executes from (also written atomically to out/child-policy.json with a checksum on every change)"
+      responses:
+        "200": {description: snapshot, content: {application/json: {schema: {$ref: "#/components/schemas/ChildSnapshot"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/cutover:
+    put:
+      operationId: setChildCutover
+      summary: "Admin only. Marks the child policy as cut over (the model is the source; a re-import is refused) or rolls that back. Written by tools/child_cutover.py"
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [done], additionalProperties: false, properties: {done: {type: boolean}, note: {type: string}}}}}
+      responses:
+        "200": {description: state, content: {application/json: {schema: {type: object, required: [cutover], properties: {cutover: {type: [object, "null"]}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/{id}:
+    get:
+      operationId: getChildDevice
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "200": {description: the device, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDeviceFull"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/{id}/exceptions:
+    post:
+      operationId: addChildException
+      summary: "A time-boxed exception: target youtube|roblox|maps|all, minutes XOR until_end_of_day. Guardrails: max_exception_minutes, exception_latest_end, all_latest_end (rejected with reasons, never clamped). Replaces an active exception of the same target"
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [target], additionalProperties: false, properties: {target: {type: string, enum: [youtube, roblox, maps, all]}, minutes: {type: integer, minimum: 1}, until_end_of_day: {type: boolean}}}}}
+      responses:
+        "201": {description: granted, content: {application/json: {schema: {$ref: "#/components/schemas/ChildExceptionRec"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/{id}/exceptions/{xid}:
+    delete:
+      operationId: cancelChildException
+      parameters: [{$ref: "#/components/parameters/EntityId"}, {name: xid, in: path, required: true, schema: {type: string}}]
+      responses:
+        "204": {description: cancelled}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/{id}/domains:
+    post:
+      operationId: addChildDomain
+      summary: "Adds a plain domain to this child's allow or deny list. Deny beats allow; adding to one removes it from the other; a deny that would block an always-on host is refused (422 invariant)"
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [kind, domain], additionalProperties: false, properties: {kind: {type: string, enum: [allow, deny]}, domain: {type: string}}}}}
+      responses:
+        "200": {description: lists after the change, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDomains"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: removeChildDomain
+      parameters: [{$ref: "#/components/parameters/EntityId"}, {name: kind, in: query, required: true, schema: {type: string, enum: [allow, deny]}}, {name: domain, in: query, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: lists after the change, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDomains"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/{id}/domains/undo:
+    post:
+      operationId: undoChildDomain
+      summary: Restores the lists as they were before the last domain change of this child, as a new change
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "200": {description: lists after the undo, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDomains"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/effective:
     get:
       operationId: effective
@@ -274,12 +379,13 @@ paths:
   /v1/child-policy/import:
     put:
       operationId: importChildPolicy
-      summary: Admin only. Replaces the MODELLED policy; AdGuard and the running policy job are never touched
+      summary: "Admin only. Replaces the MODELLED policy (devices, windows, lists, still-active exceptions); AdGuard is never touched. dry_run=1 validates and reports without storing. Refused (403) after the cutover"
+      parameters: [{name: dry_run, in: query, schema: {type: string, enum: ["1", "true", "0"]}}]
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: "#/components/schemas/ChildPolicyImport"}}}
       responses:
-        "200": {description: imported, content: {application/json: {schema: {type: object, required: [devices, lists, sha256], properties: {devices: {type: array, items: {type: string}}, lists: {type: object}, always_services: {type: array, items: {type: string}}, sha256: {type: string}}}}}}
+        "200": {description: imported, content: {application/json: {schema: {type: object, required: [devices, lists, sha256], properties: {devices: {type: array, items: {type: string}}, lists: {type: object}, per_child_lists: {type: object}, exceptions_migrated: {type: integer}, dry_run: {type: boolean}, always_services: {type: array, items: {type: string}}, sha256: {type: string}}}}}}
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
@@ -361,7 +467,7 @@ components:
     Flags:
       type: object
       additionalProperties: false
-      properties: {household_editable: {type: boolean}}
+      properties: {household_editable: {type: boolean}, guardrails_proposed: {type: boolean, description: "child policy: the guardrail numbers are proposals Ivan has not confirmed yet"}}
     Guardrails:
       type: object
       additionalProperties: false
@@ -372,6 +478,10 @@ components:
         allowed_from: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
         allowed_to: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
         max_triggers_per_day: {type: integer, minimum: 1, maximum: 24}
+        max_open_minutes_per_day: {type: integer, minimum: 1, maximum: 1440}
+        max_exception_minutes: {type: integer, minimum: 1, maximum: 1440}
+        exception_latest_end: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+        all_latest_end: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
     Entity:
       type: object
       required: [id, kind, name, ha_target, managed, flags, guardrails]
@@ -406,6 +516,7 @@ components:
       properties:
         devices: {type: array, items: {$ref: "#/components/schemas/ChildDevice"}}
         lists: {type: object}
+        exceptions: {type: array, description: "the still-active exceptions of the old runtime file: {client (ip), target, expires, created}", items: {type: object}}
         always_services: {type: array, items: {type: string}}
     Rule:
       type: object
@@ -459,6 +570,7 @@ components:
             removed: {type: array, items: {$ref: "#/components/schemas/Rule"}}
             changed: {type: array, items: {type: object, required: [before, after], properties: {before: {$ref: "#/components/schemas/Rule"}, after: {$ref: "#/components/schemas/Rule"}}}}
         next_7_days: {type: array, items: {$ref: "#/components/schemas/Edge"}}
+        open_next_7_days: {type: array, description: "child_window entities: what the windows open over the next 7 days", items: {type: object, required: [from, to, opens], properties: {from: {type: string}, to: {type: string}, opens: {type: array, items: {type: string}}}}}
     ExceptionRequest:
       type: object
       required: [entity_id, kind]
@@ -499,6 +611,63 @@ components:
         started_by: {type: string}
         remaining_s: {type: integer}
         armed: {type: boolean, description: "Home Assistant has loaded a rendered set that contains this run: its end is enforced by HA itself"}
+    ChildExceptionRec:
+      type: object
+      required: [id, entity, target, created_at, expires_at, expires_ts, status, created_by, remaining_s]
+      properties:
+        id: {type: string}
+        entity: {type: string}
+        target: {type: string, enum: [youtube, roblox, maps, all]}
+        created_at: {type: string}
+        expires_at: {type: string}
+        expires_ts: {type: integer}
+        status: {type: string}
+        created_by: {type: string}
+        remaining_s: {type: integer}
+    ChildDomains:
+      type: object
+      required: [allow, deny]
+      properties:
+        allow: {type: array, items: {type: string}}
+        deny: {type: array, items: {type: string}}
+    ChildModelStatus:
+      type: object
+      required: [state, open_services, open_until, opens_at, exceptions]
+      properties:
+        state: {type: string, enum: [open, closed, restricted]}
+        open_services: {type: array, items: {type: string}}
+        open_until: {type: [string, "null"]}
+        opens_at: {type: [string, "null"]}
+        exceptions: {type: array, items: {$ref: "#/components/schemas/ChildExceptionRec"}}
+    ChildDeviceFull:
+      type: object
+      required: [id, name, ip, mac, version, tz, rules, guardrails, flags, exceptions, domains, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        ip: {type: [string, "null"]}
+        mac: {type: [string, "null"]}
+        version: {type: integer}
+        tz: {type: string}
+        updated_at: {type: string}
+        rules: {type: array, items: {type: object}}
+        guardrails: {$ref: "#/components/schemas/Guardrails"}
+        flags: {$ref: "#/components/schemas/Flags"}
+        exceptions: {type: array, items: {$ref: "#/components/schemas/ChildExceptionRec"}}
+        domains: {$ref: "#/components/schemas/ChildDomains"}
+        status: {$ref: "#/components/schemas/ChildModelStatus"}
+    ChildSnapshot:
+      type: object
+      required: [schema, checksum, devices, lists, always_services]
+      properties:
+        schema: {type: integer}
+        checksum: {type: string}
+        generated_at: {type: string}
+        audit_seq: {type: integer}
+        guardrails_proposed: {type: boolean}
+        always_services: {type: array, items: {type: string}}
+        lists: {type: object}
+        devices: {type: array, items: {type: object}}
     Effective:
       type: object
       required: [entity, at, state, source, active_overrides, skipped_today, next_edge]
@@ -546,4 +715,5 @@ components:
         publish_error: {type: [string, "null"]}
         render: {type: object, properties: {set_hash: {type: [string, "null"]}, audit_seq: {type: [integer, "null"]}}}
         apply: {type: object}
+        child_policy: {type: object, description: "the child-policy snapshot (checksum, devices, cutover) and what the host job last applied"}
         in_sync: {type: boolean}

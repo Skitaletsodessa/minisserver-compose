@@ -20,9 +20,12 @@ HA_TARGET_RE = re.compile(r"^(switch|script)\.[a-z0-9_]+$")
 KINDS = ("plug", "vacuum_plan", "child_window", "dimmer")
 RENDERABLE_KINDS = ("plug", "vacuum_plan")
 RULE_KEYS = {"id", "days", "start", "end", "level", "variables"}
-GUARDRAIL_KEYS = ("max_on_minutes", "max_level", "min_gap_minutes", "allowed_from", "allowed_to", "max_triggers_per_day")
-FLAG_KEYS = ("household_editable",)
+GUARDRAIL_KEYS = ("max_on_minutes", "max_level", "min_gap_minutes", "allowed_from", "allowed_to", "max_triggers_per_day",
+                  "max_open_minutes_per_day", "max_exception_minutes", "exception_latest_end", "all_latest_end")      # the last four: child policy (Task 29)
+FLAG_KEYS = ("household_editable", "guardrails_proposed")
 CHILD_TARGETS = ("youtube", "roblox", "maps")      # what a child-policy window opens (the policy job's GATED services + the weekday Maps list)
+GATED_TARGETS = ("youtube", "roblox")                # the services a window/exception opens that the guardrails bound
+EXCEPTION_TARGETS = CHILD_TARGETS + ("all",)         # "all" = lift the catch-all for the device
 MAX_RULES = 12
 DST_FORBIDDEN = range(2 * 60, 4 * 60)          # 02:00 .. 03:59
 WEEK = 7 * 1440
@@ -84,7 +87,9 @@ def validate_guardrails(kind, g):
     intval("max_level", 1, 100)
     intval("min_gap_minutes", 0, 1440)
     intval("max_triggers_per_day", 1, 24)
-    for k in ("allowed_from", "allowed_to"):
+    intval("max_open_minutes_per_day", 1, 1440)
+    intval("max_exception_minutes", 1, 1440)
+    for k in ("allowed_from", "allowed_to", "exception_latest_end", "all_latest_end"):
         if k in g and g[k] is not None:
             v = parse_hhmm(g[k])
             if v is None:
@@ -206,6 +211,9 @@ def validate_rules(entity, rules):
             if lvl > g["max_level"]:
                 probs.append(problem("max_level", fld + ".level", "level %d exceeds the guardrail max_level %d" % (lvl, g["max_level"])))
                 continue
+        if kind == "child_window":                  # the child guardrails bound only what opens YouTube/Roblox: checked below, per day
+            good.append(normalise_rule({**r, "end": r.get("end")}))
+            continue
         # guardrails per rule
         lo = parse_hhmm(g["allowed_from"]) if "allowed_from" in g else None
         hi = parse_hhmm(g["allowed_to"]) if "allowed_to" in g else None
@@ -257,6 +265,35 @@ def validate_rules(entity, rules):
         worst = max(per_day.values(), default=0)
         if worst > g["max_triggers_per_day"]:
             probs.append(problem("max_triggers", "rules", "%d triggers on one day, the guardrail max_triggers_per_day is %d" % (worst, g["max_triggers_per_day"])))
+    if kind == "child_window" and any(k in g for k in ("allowed_from", "allowed_to", "max_open_minutes_per_day")):
+        # Task 29: what the windows may open. Only the gated services (YouTube, Roblox) are bounded; the Maps weekday list is not an "open window" in this sense.
+        lo = parse_hhmm(g["allowed_from"]) if "allowed_from" in g else 0
+        hi = parse_hhmm(g["allowed_to"]) if "allowed_to" in g else 1440
+        per_day = {}
+        for r in good:
+            if not set(r["variables"]["opens"].split(",")) & set(GATED_TARGETS):
+                continue
+            s_, e_ = parse_hhmm(r["start"]), parse_hhmm(r["end"], allow_24=True)
+            if s_ < lo:
+                probs.append(problem("allowed_range", "rule '%s'.start" % r["id"], "%s is before the allowed range start %s" % (r["start"], fmt_hhmm(lo))))
+            if e_ > hi:
+                probs.append(problem("allowed_range", "rule '%s'.end" % r["id"], "%s is after the allowed range end %s" % (r["end"], fmt_hhmm(hi))))
+            for d in r["days"]:
+                per_day.setdefault(d, []).append((s_, e_))
+        mx = g.get("max_open_minutes_per_day")
+        if mx is not None:
+            for d, iv in sorted(per_day.items()):
+                total, cur_s, cur_e = 0, None, None
+                for s_, e_ in sorted(iv):
+                    if cur_e is None or s_ > cur_e:
+                        total += (cur_e - cur_s) if cur_e is not None else 0
+                        cur_s, cur_e = s_, e_
+                    else:
+                        cur_e = max(cur_e, e_)
+                total += (cur_e - cur_s) if cur_e is not None else 0
+                if total > mx:
+                    probs.append(problem("max_open", "rules", "on weekday %d YouTube/Roblox would be open %d min, the guardrail max_open_minutes_per_day is %d" % (d, total, mx)))
+                    break
     return sorted(good, key=lambda r: (parse_hhmm(r["start"]), r["id"])), probs
 
 
@@ -456,3 +493,83 @@ def validate_run(entity, rules, skips, minutes, started_at, previous_end=None, r
         probs.append(problem("window_overlap", "minutes", "the run %s-%s overlaps the scheduled window %s; start after it or shorten the run"
                              % (fmt_hhmm(ls.hour * 60 + ls.minute), fmt_hhmm(le.hour * 60 + le.minute), ", ".join(sorted(set(over))))))
     return (None if probs else ends_at), probs
+
+
+# ── the children's policy (Task 29 Part 2): exceptions, open intervals, status ───────────────────────────────────────────
+def validate_child_exception(entity, target, minutes, until_eod, now):
+    """A time-boxed exception of one child device. Returns (expires_at aware datetime, problems). Rejected with reasons, never clamped.
+    minutes XOR until_end_of_day; the length and the latest end come from the device's guardrails ('all' has its own latest end); an exception never
+    crosses midnight."""
+    probs = []
+    g = entity.get("guardrails", {})
+    if target not in EXCEPTION_TARGETS:
+        return None, [problem("target", "target", "target must be one of %s" % ", ".join(EXCEPTION_TARGETS))]
+    if until_eod and minutes is not None:
+        return None, [problem("both", "minutes", "give either minutes or until_end_of_day, not both")]
+    if not until_eod and (isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 1):
+        return None, [problem("range", "minutes", "minutes must be a whole number of minutes, 1 or more")]
+    now = now.astimezone(TZ).replace(microsecond=0)
+    latest_key = "all_latest_end" if target == "all" else "exception_latest_end"
+    latest = parse_hhmm(g[latest_key]) if latest_key in g else 1439
+    latest_dt = now.replace(hour=latest // 60, minute=latest % 60, second=0)
+    if until_eod:
+        end = latest_dt
+        if end <= now + dt.timedelta(seconds=60):
+            return None, [problem("too_late", "until_end_of_day", "it is too late today: the latest end for this exception is %s" % fmt_hhmm(latest))]
+        return end, []
+    end = now + dt.timedelta(minutes=minutes)
+    mx = g.get("max_exception_minutes")
+    if mx is not None and minutes > mx:
+        probs.append(problem("max_exception", "minutes", "an exception may last at most %d min, you asked for %d" % (mx, minutes)))
+    if end.date() != now.date():
+        probs.append(problem("midnight", "minutes", "an exception must end on the day it starts"))
+    elif end > latest_dt:
+        probs.append(problem("latest_end", "minutes", "it would end at %s, the latest end for this exception is %s" % (end.strftime("%H:%M"), fmt_hhmm(latest))))
+    return (None if probs else end), probs
+
+
+def child_open_intervals(rules, start, end):
+    """The windows over [start, end): list of (from, to, [targets]) as aware datetimes, sorted. Exceptions are not included (they are runtime)."""
+    out = []
+    d = start.astimezone(TZ).date() - dt.timedelta(days=1)
+    last = end.astimezone(TZ).date()
+    while d <= last:
+        for r in rules:
+            if d.isoweekday() not in r["days"]:
+                continue
+            s = parse_hhmm(r["start"])
+            e = parse_hhmm(r["end"], allow_24=True)
+            f = dt.datetime(d.year, d.month, d.day, tzinfo=TZ) + dt.timedelta(minutes=s)
+            t = dt.datetime(d.year, d.month, d.day, tzinfo=TZ) + dt.timedelta(minutes=e)
+            if t > start and f < end:
+                out.append((max(f, start), min(t, end), sorted(r["variables"]["opens"].split(","))))
+        d += dt.timedelta(days=1)
+    return sorted(out, key=lambda x: (x[0], x[1], x[2]))
+
+
+def child_status(rules, exceptions, now):
+    """State of one child device at `now` from its windows and its ACTIVE exceptions [{target, expires_at}]: {state, open_services, open_until, opens_at}.
+    open = YouTube and Roblox (or everything) open; restricted = exactly one of them; closed = only the always-on baseline."""
+    now = now.astimezone(TZ)
+    opened, ends = set(), []
+    for f, t, targets in child_open_intervals(rules, now, now + dt.timedelta(days=2)):          # a span long enough that the end of the current window is not clipped
+        if f <= now < t:
+            opened |= set(targets)
+            if set(targets) & set(GATED_TARGETS):
+                ends.append(t)
+    for x in exceptions:
+        exp = dt.datetime.fromisoformat(x["expires_at"])
+        if exp > now:
+            opened |= {x["target"]}
+            if x["target"] in GATED_TARGETS or x["target"] == "all":
+                ends.append(exp)
+    gated = set(GATED_TARGETS) if "all" in opened else opened & set(GATED_TARGETS)
+    state = "open" if gated == set(GATED_TARGETS) else ("restricted" if gated else "closed")
+    opens_at = None
+    if state != "open":
+        for f, t, targets in child_open_intervals(rules, now, now + dt.timedelta(days=8)):
+            if f > now and set(targets) & set(GATED_TARGETS):
+                opens_at = f.isoformat(timespec="seconds")
+                break
+    return {"state": state, "open_services": sorted(opened), "open_until": (max(ends).isoformat(timespec="seconds") if ends and state != "closed" else None),
+            "opens_at": opens_at}

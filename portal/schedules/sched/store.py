@@ -13,6 +13,7 @@ import hashlib
 import threading
 import datetime as dt
 from . import model, render
+from .child_store import ChildMixin
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -32,6 +33,12 @@ CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT
 CREATE TABLE IF NOT EXISTS runs(
   id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES entities(id), started_at TEXT NOT NULL, ends_at TEXT NOT NULL,
   minutes_total INTEGER NOT NULL, status TEXT NOT NULL, ended_at TEXT, by_actor TEXT NOT NULL, rev_seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS child_exceptions(
+  id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES entities(id), target TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  created_by TEXT NOT NULL, status TEXT NOT NULL, ended_at TEXT);
+CREATE TABLE IF NOT EXISTS child_domains(
+  entity_id TEXT NOT NULL REFERENCES entities(id), kind TEXT NOT NULL, domain TEXT NOT NULL, added_by TEXT NOT NULL, added_at TEXT NOT NULL,
+  PRIMARY KEY(entity_id, kind, domain));
 CREATE TABLE IF NOT EXISTS tokens(
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL, sha256 TEXT NOT NULL, created TEXT NOT NULL,
   expires TEXT, last_used TEXT, revoked INTEGER NOT NULL DEFAULT 0);
@@ -78,7 +85,7 @@ def atomic_write(path, text):
     os.replace(tmp, path)
 
 
-class Store:
+class Store(ChildMixin):
     def __init__(self, data_dir, clock=now_iso):
         self.dir = data_dir
         self.out = os.path.join(data_dir, "out")
@@ -96,6 +103,7 @@ class Store:
         if "meta" not in [r["name"] for r in self.db.execute("PRAGMA table_info(entities)")]:      # Task 27 Phase E: device facts (ip, mac)
             self.db.execute("ALTER TABLE entities ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
         self.publish_error = None
+        self.child_publish_error = None
 
 
     # ── transactions and audit ────────────────────────────────────────────────
@@ -382,6 +390,7 @@ class Store:
                         "data_checksum": snap["checksum"]}
                 atomic_write(os.path.join(self.out, "render.json"), json.dumps(meta, indent=1, sort_keys=True) + "\n")
                 atomic_write(os.path.join(self.out, "READY"), "%d %s\n" % (snap["audit_seq"], rd["set_hash"]))
+                self._publish_child()
             self.publish_error = None
         except Exception as ex:             # pragma: no cover - exercised by a test with an unwritable dir
             self.publish_error = "%s: %s" % (type(ex).__name__, ex)
@@ -425,8 +434,6 @@ class Store:
             self._mirror_audit(r["seq"])
 
     def _check_editor(self, actor, ent):
-        if ent["kind"] == "child_window":
-            raise Forbidden("the child policy is imported read-only in step (a); it is edited in step (c)")
         if actor["role"] == "admin":
             return
         if actor["role"] == "household" and ent["flags"].get("household_editable"):
@@ -531,6 +538,8 @@ class Store:
         today = today or dt.datetime.now(model.TZ).date()
         with self._tx():
             ent = self.entity(eid)
+            if ent["kind"] == "child_window":
+                raise Forbidden("a child device has its own exceptions: POST /v1/child/{id}/exceptions")
             self._check_editor(actor, ent)
             ex, probs = model.validate_exception(ent, body, today)
             if probs:
@@ -627,70 +636,3 @@ class Store:
             self.db.execute("INSERT INTO meta(key,value) VALUES('last_apply_audited',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (canon(key),))
         self._mirror_audit(seq)
 
-    # ── child policy: modelled and imported READ-ONLY (Phase E; AdGuard is never touched from here) ──
-    def import_child_policy(self, actor, payload):
-        """Replaces the modelled child policy with `payload` (admin only): devices (+ their windows), domain lists, always-on services.
-        Nothing is written to AdGuard; the running policy job is untouched. Cutover is step (c)."""
-        from . import child_render
-        if actor["role"] != "admin":
-            raise Forbidden("importing the child policy is admin-only")
-        probs = []
-        if not isinstance(payload, dict) or not isinstance(payload.get("devices"), list) or not payload["devices"]:
-            raise model.ValidationError([model.problem("type", "devices", "devices must be a non-empty list")])
-        lists, lp = child_render.validate_lists(payload.get("lists", {}))
-        probs += lp
-        svc = payload.get("always_services", [])
-        if not isinstance(svc, list) or any(s not in ("telegram",) for s in svc):
-            probs.append(model.problem("value", "always_services", "always_services may only name 'telegram'"))
-        devices, seen = [], set()
-        for d in payload["devices"]:
-            dp = child_render.validate_device(d)
-            probs += dp
-            if dp:
-                continue
-            eid = d["id"]
-            if not model.ENTITY_ID_RE.match(eid) or eid in seen:
-                probs.append(model.problem("format", "devices", "bad or duplicate device id %r" % eid))
-                continue
-            seen.add(eid)
-            rules, rp = model.validate_rules({"id": eid, "kind": "child_window", "guardrails": {}}, d.get("rules", []))
-            probs += [{**p, "message": "%s: %s" % (eid, p["message"])} for p in rp]
-            devices.append({"id": eid, "name": d["name"], "ip": d["ip"], "mac": (d.get("mac") or "").lower(), "rules": rules})
-        if probs:
-            raise model.ValidationError(probs)
-        with self._tx():
-            before = {"devices": [e["id"] for e in self.entities() if e["kind"] == "child_window"]}
-            self.db.execute("DELETE FROM exceptions WHERE entity_id IN (SELECT id FROM entities WHERE kind='child_window')")
-            self.db.execute("DELETE FROM schedules WHERE entity_id IN (SELECT id FROM entities WHERE kind='child_window')")
-            self.db.execute("DELETE FROM entities WHERE kind='child_window'")
-            pos = (self.db.execute("SELECT COALESCE(MAX(position), 0) m FROM entities").fetchone()["m"]) + 1
-            for i, d in enumerate(devices):
-                if self.db.execute("SELECT 1 FROM entities WHERE id=?", (d["id"],)).fetchone():
-                    raise model.ValidationError([model.problem("duplicate", "devices", "id %s clashes with a non-child entity" % d["id"])])
-                self.db.execute("INSERT INTO entities(id,kind,name,ha_target,managed,flags,guardrails,position,meta) VALUES (?,?,?,?,?,?,?,?,?)",
-                                (d["id"], "child_window", d["name"], None, 0, canon({}), canon({}), pos + i, canon({"ip": d["ip"], "mac": d["mac"]})))
-                self.db.execute("INSERT INTO schedules(entity_id,version,tz,rules,updated_at) VALUES (?,?,?,?,?)",
-                                (d["id"], 1, model.TZ_NAME, canon(d["rules"]), self.clock()))
-            self.db.execute("INSERT INTO meta(key,value) VALUES('child_lists',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                            (canon({"lists": lists, "always_services": sorted(svc)}),))
-            summary = {"devices": [d["id"] for d in devices], "lists": {k: len(v) for k, v in lists.items()},
-                       "always_services": sorted(svc), "sha256": hashlib.sha256(canon({"d": devices, "l": lists, "s": svc}).encode()).hexdigest()[:16]}
-            seq = self._audit(actor, "import_child_policy", None, before, summary)
-        self._mirror_audit(seq)
-        self.publish()
-        return summary
-
-    def child_policy(self, with_lists=True):
-        """The modelled policy in the shape child_render.render_block takes."""
-        devices = []
-        for e in self.entities():
-            if e["kind"] == "child_window":
-                devices.append({"id": e["id"], "name": e["name"], "ip": e["meta"].get("ip"), "mac": e["meta"].get("mac"),
-                                "rules": self.schedule(e["id"])["rules"]})
-        with self.lock:
-            r = self.db.execute("SELECT value FROM meta WHERE key='child_lists'").fetchone()
-        stored = json.loads(r["value"]) if r else {"lists": {n: [] for n in ("allow_always", "allow_weekdays", "allow_extra", "deny_extra")}, "always_services": []}
-        out = {"devices": devices, "always_services": stored["always_services"]}
-        if with_lists:
-            out["lists"] = stored["lists"]
-        return out

@@ -41,11 +41,13 @@ def render_block(policy, service_domains, now, overrides=()):
         base |= set(service_domains[svc])
     maps = set(lists["allow_weekdays"])
     gated = {t: set(service_domains[t]) for t in GATED}
-    extra_allow = set(lists["allow_extra"])
-    deny = sorted(set(lists["deny_extra"]))
+    extra_allow_global = set(lists.get("allow_extra") or [])
+    deny_global = set(lists.get("deny_extra") or [])
     lines = [BEGIN]
     for dev in policy["devices"]:
         ip = dev["ip"]
+        deny = sorted(deny_global | set(dev.get("deny_extra") or []))                  # Task 29: per-child lists (the house-wide extra lists are legacy and empty after the import)
+        extra_allow = extra_allow_global | set(dev.get("allow_extra") or [])
         targets = {o["target"] for o in overrides if o["client"] == ip}
         deny_rules = ["||%s^$client=%s" % (d, ip) for d in deny]
         if "all" in targets:

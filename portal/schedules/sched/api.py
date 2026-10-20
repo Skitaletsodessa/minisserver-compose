@@ -137,14 +137,22 @@ class App:
         rendered, applied = ready.get("set_hash"), status.get("set_hash")
         in_sync = bool(rendered) and rendered == applied and status.get("result") == "applied" and status.get("loaded_ok") is True
         return JSONResponse({
-            "status": "ok" if ok and not self.store.publish_error else "degraded", "version": VERSION,
+            "status": "ok" if ok and not self.store.publish_error and not self.store.child_publish_error else "degraded", "version": VERSION,
             "entities": len(self.store.entities()), "audit_seq": self.store.audit_seq(),
             "audit_chain": {"ok": ok, "rows": rows, "first_bad_seq": bad},
             "data_checksum": ready.get("data_checksum"), "publish_error": self.store.publish_error,
             "render": {"set_hash": rendered, "audit_seq": ready.get("audit_seq")},
             "apply": {"result": status.get("result"), "set_hash": applied, "audit_seq": status.get("seq"), "at": status.get("at"),
                       "detail": status.get("detail"), "loaded_ok": status.get("loaded_ok"), "verified_at": status.get("verified_at")},
+            "child_policy": self._child_health(),
             "in_sync": in_sync})
+
+    def _child_health(self):
+        """The snapshot the host policy job executes from, and what the job last reported (child-apply-status.json, written by the job)."""
+        snap = self._read_json(os.path.join(self.store.out, "child-policy.json")) or {}
+        return {"checksum": snap.get("checksum"), "generated_at": snap.get("generated_at"), "publish_error": self.store.child_publish_error,
+                "devices": len(snap.get("devices") or []), "cutover": self.store.child_cutover_done(),
+                "applied": self._read_json(os.path.join(self.store.dir, "child-apply-status.json"))}
 
     def read_apply_status(self):
         return self._read_json(self.apply_status_path) or {}
@@ -246,8 +254,12 @@ class App:
                                "changed": [{"before": old_ids[i], "after": r} for i, r in new_ids.items() if i in old_ids and old_ids[i] != r]}
                 skips = model.skip_dates(self.store._exceptions_for_model(eid))
                 start = dt.datetime.now(model.TZ)
-                out["next_7_days"] = [{"at": t.isoformat(), "action": a, "rule": rid}
-                                      for (t, a, rid) in model.edges_between(ent["kind"], new, start, start + dt.timedelta(days=7), skips)]
+                if ent["kind"] == "child_window":
+                    out["open_next_7_days"] = [{"from": f.isoformat(timespec="seconds"), "to": t.isoformat(timespec="seconds"), "opens": o}
+                                               for (f, t, o) in model.child_open_intervals(new, start, start + dt.timedelta(days=7))]
+                else:
+                    out["next_7_days"] = [{"at": t.isoformat(), "action": a, "rule": rid}
+                                          for (t, a, rid) in model.edges_between(ent["kind"], new, start, start + dt.timedelta(days=7), skips)]
             return JSONResponse(out)
         return self._guard(go)
 
@@ -348,6 +360,90 @@ class App:
         wd = request.query_params.get("withdraw") in ("1", "true")
         return self._guard(lambda: JSONResponse(self._run_view(self.store.cancel_run(who, request.path_params["id"], withdraw=wd))))
 
+    # ── the children's policy (Task 29 Part 2): per-device windows are edited through /v1/schedules/{id}; exceptions, domain lists and the snapshot are here ──
+    async def child_list(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        return JSONResponse({"children": [self.store.child_detail(d["id"]) for d in self.store.child_devices()]})
+
+    async def child_get(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        return self._guard(lambda: JSONResponse(self.store.child_detail(request.path_params["id"])))
+
+    async def child_snapshot_get(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        return JSONResponse(self.store.child_snapshot())
+
+    async def child_exception_add(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if not isinstance(data, dict) or set(data) - {"target", "minutes", "until_end_of_day"} or not isinstance(data.get("target"), str):
+            return err(400, "bad_body", "an object with target and minutes OR until_end_of_day is required")
+        if data.get("until_end_of_day") is not None and not isinstance(data["until_end_of_day"], bool):
+            return err(400, "bad_body", "until_end_of_day must be true or false")
+        return self._guard(lambda: JSONResponse(self.store.add_child_exception(who, request.path_params["id"], data["target"], data.get("minutes"),
+                                                                                  bool(data.get("until_end_of_day"))), status_code=201))
+
+    async def child_exception_cancel(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+
+        def go():
+            self.store.cancel_child_exception(who, request.path_params["id"], request.path_params["xid"])
+            return Response(status_code=204)
+        return self._guard(go)
+
+    async def child_domain_add(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if not isinstance(data, dict) or set(data) - {"kind", "domain"} or not isinstance(data.get("kind"), str):
+            return err(400, "bad_body", "an object with kind (allow|deny) and domain is required")
+        return self._guard(lambda: JSONResponse(self.store.change_child_domain(who, request.path_params["id"], data["kind"], data.get("domain"), True)))
+
+    async def child_domain_remove(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        kind, domain = request.query_params.get("kind"), request.query_params.get("domain")
+        if kind not in ("allow", "deny") or not domain:
+            return err(400, "bad_query", "kind (allow|deny) and domain are required")
+        return self._guard(lambda: JSONResponse(self.store.change_child_domain(who, request.path_params["id"], kind, domain, False)))
+
+    async def child_domain_undo(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        return self._guard(lambda: JSONResponse(self.store.undo_child_domain(who, request.path_params["id"])))
+
+    async def child_cutover(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if not isinstance(data, dict) or not isinstance(data.get("done"), bool) or set(data) - {"done", "note"}:
+            return err(400, "bad_body", "an object with done (true|false) and an optional note is required")
+
+        def go():
+            self.store.set_child_cutover(who, data["done"], str(data.get("note") or "")[:200])
+            return JSONResponse({"cutover": self.store.child_cutover_done()})
+        return self._guard(go)
+
     async def effective(self, request):
         who, e = self.authenticate(request, "readonly")
         if e:
@@ -422,7 +518,8 @@ class App:
         data, e = await self.body(request)
         if e:
             return e
-        return self._guard(lambda: JSONResponse(self.store.import_child_policy(who, data)))
+        dry = request.query_params.get("dry_run") in ("1", "true")
+        return self._guard(lambda: JSONResponse(self.store.import_child_policy(who, data, dry_run=dry)))
 
     async def child_policy_render(self, request):
         who, e = self.authenticate(request, "readonly")
@@ -458,6 +555,7 @@ class App:
                         self.store.record_apply({"token": "-", "name": "applier", "role": "admin"}, st)
                     last_key = key
                 self.store.expire_runs()            # a finished run stops being rendered, so its end-of-run automation does not pile up in HA
+                self.store.expire_child_exceptions()
                 if self.store.publish_error:
                     self.store.publish()
             except Exception:           # pragma: no cover - the loop must not die
@@ -485,6 +583,15 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
         Route("/v1/runs/{id}", a.run_get, methods=["GET"]),
         Route("/v1/runs/{id}", a.run_cancel, methods=["DELETE"]),
         Route("/v1/runs/{id}/extend", a.run_extend, methods=["POST"]),
+        Route("/v1/child", a.child_list, methods=["GET"]),
+        Route("/v1/child/snapshot", a.child_snapshot_get, methods=["GET"]),
+        Route("/v1/child/cutover", a.child_cutover, methods=["PUT"]),
+        Route("/v1/child/{id}", a.child_get, methods=["GET"]),
+        Route("/v1/child/{id}/exceptions", a.child_exception_add, methods=["POST"]),
+        Route("/v1/child/{id}/exceptions/{xid}", a.child_exception_cancel, methods=["DELETE"]),
+        Route("/v1/child/{id}/domains", a.child_domain_add, methods=["POST"]),
+        Route("/v1/child/{id}/domains", a.child_domain_remove, methods=["DELETE"]),
+        Route("/v1/child/{id}/domains/undo", a.child_domain_undo, methods=["POST"]),
         Route("/v1/effective", a.effective, methods=["GET"]),
         Route("/v1/audit", a.audit, methods=["GET"]),
         Route("/v1/child-policy", a.child_policy_get, methods=["GET"]),

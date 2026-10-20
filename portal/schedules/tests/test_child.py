@@ -9,9 +9,10 @@ from tests.helpers import Env, SYSTEM
 MON_SAT = [1, 2, 3, 4, 5, 6]
 RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}},
          {"id": "maps", "days": MON_SAT, "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]
+from sched.child_invariants import REQUIRED_ALWAYS  # noqa: E402
 PAYLOAD = {"devices": [{"id": "child_a", "name": "a-phone", "ip": "192.168.31.60", "mac": "20:36:D0:14:8D:5A", "rules": RULES},
                        {"id": "child_b", "name": "b-tablet", "ip": "192.168.31.61", "mac": "", "rules": RULES}],
-           "lists": {"allow_always": ["example.org", "time.example.net"], "allow_weekdays": ["maps.example.com"], "allow_extra": [], "deny_extra": ["bad.example.org"]},
+           "lists": {"allow_always": sorted(REQUIRED_ALWAYS) + ["example.org", "time.example.net"], "allow_weekdays": ["maps.example.com"], "allow_extra": [], "deny_extra": ["bad.example.org"]},
            "always_services": ["telegram"]}
 SD = {"telegram": ["t.me", "telegram.org"], "youtube": ["youtube.com", "ytimg.com"], "roblox": ["roblox.com"]}
 
@@ -34,7 +35,8 @@ class Import(unittest.TestCase):
         g = self.e.req("GET", "/v1/child-policy").json()
         self.assertEqual([d["ip"] for d in g["devices"]], ["192.168.31.60", "192.168.31.61"])
         self.assertEqual(g["devices"][0]["mac"], "20:36:d0:14:8d:5a")
-        self.assertEqual(g["lists"]["deny_extra"], ["bad.example.org"])
+        self.assertEqual(g["lists"]["deny_extra"], [])                                      # Task 29: the extra lists are per child now (the legacy house-wide ones are copied into each device)
+        self.assertEqual(g["devices"][0]["deny_extra"], ["bad.example.org"])
         ents = {x["id"]: x for x in self.e.req("GET", "/v1/entities").json()["entities"]}
         self.assertEqual(ents["child_a"]["kind"], "child_window")
         self.assertFalse(ents["child_a"]["managed"])
@@ -48,12 +50,14 @@ class Import(unittest.TestCase):
         self.assertIn("lists", self.e.req("GET", "/v1/child-policy", role="readonly").json())
         self.assertEqual(self.e.req("POST", "/v1/child-policy/render", role="household", json={"service_domains": SD}).status_code, 403)
 
-    def test_it_is_read_only_in_step_a(self):
+    def test_child_entities_are_editable_by_role_but_not_as_plugs(self):
+        """Task 29: windows are edited through the schedule endpoints (guardrails apply); PATCH managed and generic skip_date exceptions are not for children."""
         self.put(PAYLOAD)
         g = self.e.req("GET", "/v1/schedules/child_a")
-        self.assertEqual(self.e.req("PUT", "/v1/schedules/child_a", headers={"If-Match": g.headers["ETag"]}, json={"rules": RULES[:1]}).status_code, 403)
+        self.assertEqual(self.e.req("PUT", "/v1/schedules/child_a", headers={"If-Match": g.headers["ETag"]}, json={"rules": RULES[:1]}).status_code, 200)
         self.assertEqual(self.e.req("PATCH", "/v1/entities/child_a", json={"managed": True}).status_code, 422)
         self.assertEqual(self.e.req("POST", "/v1/exceptions", json={"entity_id": "child_a", "kind": "skip_date", "date": "2099-01-01"}).status_code, 403)
+
 
     def test_child_entities_never_reach_the_rendered_ha_config(self):
         import json
