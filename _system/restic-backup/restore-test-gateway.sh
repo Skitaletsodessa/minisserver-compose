@@ -38,8 +38,9 @@ done
 echo "4. open the restored database with the gateway's own code (same image as the live gateway, no network)"
 mkdir -m 700 "$WORK/data"; cp "$DB" "$WORK/data/gateway.db"; chown -R 1000:1000 "$WORK/data"
 mkdir -m 700 "$WORK/probe"; [ -s "$PROBE_TOKEN_FILE" ] && cp "$PROBE_TOKEN_FILE" "$WORK/probe/token"; chown -R 1000:1000 "$WORK/probe"
-LIVE_IMG=$(docker inspect portal-gateway --format '{{.Image}}')
-echo "   image: $(docker image inspect "$LIVE_IMG" --format '{{.Id}}' | cut -c1-19) (the live gateway's image)"
+LIVE_IMG=$(docker inspect portal-gateway --format "{{.Config.Image}}")          # the tag the live container was created from (compose: portal-gateway:local)
+RUN_ID=$(docker inspect portal-gateway --format "{{.Image}}" | cut -c1-19); TAG_ID=$(docker image inspect "$LIVE_IMG" --format "{{.Id}}" | cut -c1-19)
+echo "   image: $LIVE_IMG ($TAG_ID); the running container was created from $RUN_ID$([ "$RUN_ID" = "$TAG_ID" ] && echo " = same" || echo " - DIFFERENT: the image was rebuilt since the last recreate")"
 docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true -u 1000:1000 --memory 128m \
     -e GW_DATA=/data -e PYTHONDONTWRITEBYTECODE=1 -v "$WORK/data:/data" -v "$WORK/probe:/probe:ro" --entrypoint python "$LIVE_IMG" - <<'PYEOF'
 import os, sys
