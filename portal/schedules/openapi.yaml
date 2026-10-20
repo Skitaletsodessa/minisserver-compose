@@ -209,8 +209,8 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
     delete:
       operationId: cancelRun
-      summary: Ends the run now (status cancelled). The caller switches the plug off; the end-of-run automation is withdrawn from HA
-      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      summary: "Ends the run now (status cancelled; with withdraw=1 status withdrawn, i.e. accepted but the plug was never switched on, so it does not count for the gap between runs). The caller switches the plug off; the end-of-run automation is withdrawn from HA"
+      parameters: [{$ref: "#/components/parameters/EntityId"}, {name: withdraw, in: query, schema: {type: string, enum: ["1", "true", "0"]}}]
       responses:
         "200": {description: the cancelled run, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
         "401": {$ref: "#/components/responses/Error"}
@@ -491,7 +491,7 @@ components:
       properties:
         id: {type: string}
         entity: {type: string}
-        status: {type: string, enum: [active, ended, cancelled]}
+        status: {type: string, enum: [active, ended, cancelled, withdrawn]}
         started_at: {type: string}
         ends_at: {type: string, description: "a whole minute; HA switches the plug off there"}
         ended_at: {type: [string, "null"]}

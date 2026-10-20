@@ -158,6 +158,17 @@ class RunApi(unittest.TestCase):
         self.assertEqual(second.status_code, 201, second.text)
         self.assertIn("run_expire", [a["action"] for a in self.e.req("GET", "/v1/audit?entity=bathroom_towels&limit=6").json()["audit"]])
 
+    def test_a_withdrawn_run_does_not_count_for_the_gap_and_is_not_an_alert_window(self):
+        first = self.start().json()
+        r = self.e.req("DELETE", "/v1/runs/%s?withdraw=1" % first["id"], role="household")
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "withdrawn"))
+        self.assertIn("run_withdraw", [a["action"] for a in self.e.req("GET", "/v1/audit?entity=bathroom_towels&limit=3").json()["audit"]])
+        again = self.start()                                          # a cancelled run would have blocked this for 30 min (min_gap)
+        self.assertEqual(again.status_code, 201, again.text)
+        snap = self.e.store.snapshot()
+        ent = [x for x in snap["entities"] if x["id"] == "bathroom_towels"][0]
+        self.assertEqual(ent["recent_runs"], [])                      # the plug was never on: no window for ha-alerts
+
     def test_armed_follows_the_applier(self):
         run = self.start().json()
         self.assertFalse(self.e.req("GET", "/v1/runs/" + run["id"]).json()["armed"])

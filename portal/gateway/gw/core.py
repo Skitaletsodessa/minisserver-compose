@@ -311,7 +311,7 @@ class Core:
         armed = await self._wait_armed(run["id"], role)
         if not armed:
             try:
-                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"], role, acting)
+                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"] + "?withdraw=1", role, acting)
             except GwError:
                 pass
             self.db.audit("run_start", target=did, after={"minutes": minutes, "run": run["id"], "outcome": "not_armed"}, ok=False, **actor)
@@ -320,7 +320,7 @@ class Core:
             await self.ha.call("switch", "turn_on", eid)
         except GwError as e:
             try:
-                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"], role, acting)
+                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"] + "?withdraw=1", role, acting)
             except GwError:
                 pass
             self.db.audit("run_start", target=did, after={"minutes": minutes, "run": run["id"], "outcome": "failed", "error": e.code}, ok=False, **actor)

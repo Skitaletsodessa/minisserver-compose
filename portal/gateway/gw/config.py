@@ -89,5 +89,5 @@ SERVICE_SEED = [
 # "Включить на…" and a plain ON is refused; OFF is always allowed. Presets are filtered by the plug's max_on_minutes guardrail.
 RUN_PRESETS = {"dryer": [30, 60, 120], "uv": [60, 120, 240], "lamp": [30, 60, 120, 240]}
 RUN_EXTEND_MIN = 30
-RUN_ARM_WAIT_S = 30.0         # how long the gateway waits for HA to load the run's end before it switches the plug on (else: nothing is switched on)
+RUN_ARM_WAIT_S = 60.0         # how long the gateway waits for HA to load the run end (the applier needs 10-35 s, longer right after another change) before it switches nothing on
 RUN_ARM_POLL_S = 1.0

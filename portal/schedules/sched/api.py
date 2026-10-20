@@ -345,7 +345,8 @@ class App:
         who, e = self.authenticate(request, "household")
         if e:
             return e
-        return self._guard(lambda: JSONResponse(self._run_view(self.store.cancel_run(who, request.path_params["id"]))))
+        wd = request.query_params.get("withdraw") in ("1", "true")
+        return self._guard(lambda: JSONResponse(self._run_view(self.store.cancel_run(who, request.path_params["id"], withdraw=wd))))
 
     async def effective(self, request):
         who, e = self.authenticate(request, "readonly")

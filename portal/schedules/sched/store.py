@@ -216,7 +216,7 @@ class Store:
             runs = [{k: x[k] for k in ("id", "started_at", "ends_at", "ended_at", "start_ts", "end_ts", "effective_end_ts", "started_by", "status")}
                     for x in self.runs(e["id"], since_ts=int(self._now().timestamp()) - 36 * 3600)] if e["kind"] == "plug" else []
             ents.append({**e, "tz": s["tz"], "version": s["version"], "rules": s["rules"], "skip_dates": skips,
-                         "runs": [x for x in runs if x["status"] == "active"], "recent_runs": [x for x in runs if x["status"] != "active"]})
+                         "runs": [x for x in runs if x["status"] == "active"], "recent_runs": [x for x in runs if x["status"] not in ("active", "withdrawn")]})
         return {"schema": 1, "audit_seq": self.audit_seq(), "entities": ents}
 
     # ── timed runs (Task 29 Part 1) ───────────────────────────────────────────
@@ -282,7 +282,7 @@ class Store:
             act = [x for x in self.runs(eid, active_only=True)]
             if act:
                 raise RunConflict("run_active", "a timed run is already active for this plug; extend or end it", act[0])
-            past = [x for x in self.runs(eid) if x["status"] != "active"]
+            past = [x for x in self.runs(eid) if x["status"] not in ("active", "withdrawn")]
             prev_end = max((dt.datetime.fromtimestamp(x["effective_end_ts"], model.TZ) for x in past), default=None)
             sch = self.schedule(eid)
             skips = model.skip_dates(self._exceptions_for_model(eid))
@@ -324,7 +324,9 @@ class Store:
         self.publish()
         return self.run(rid)
 
-    def cancel_run(self, actor, rid):
+    def cancel_run(self, actor, rid, withdraw=False):
+        """withdraw=True: the run was accepted but the plug was never switched on (the end could not be armed, or the switch-on failed). It is closed as
+        `withdrawn`: it does not count for the gap between runs and is not a window for the alert watcher."""
         with self._tx():
             r = self.run(rid)
             ent = self.entity(r["entity"])
@@ -332,8 +334,8 @@ class Store:
             now = self._now().replace(microsecond=0)
             if r["status"] != "active" or r["end_ts"] <= now.timestamp():
                 raise RunConflict("run_not_active", "this run has already ended", r)
-            seq = self._audit(actor, "run_cancel", r["entity"], {"id": rid, "ends_at": r["ends_at"]}, {"id": rid, "ended_at": now.isoformat(timespec="seconds")})
-            self.db.execute("UPDATE runs SET status='cancelled', ended_at=?, rev_seq=? WHERE id=?", (now.isoformat(timespec="seconds"), seq, rid))
+            seq = self._audit(actor, "run_withdraw" if withdraw else "run_cancel", r["entity"], {"id": rid, "ends_at": r["ends_at"]}, {"id": rid, "ended_at": now.isoformat(timespec="seconds")})
+            self.db.execute("UPDATE runs SET status=?, ended_at=?, rev_seq=? WHERE id=?", ("withdrawn" if withdraw else "cancelled", now.isoformat(timespec="seconds"), seq, rid))
         self._mirror_audit(seq)
         self.publish()
         return self.run(rid)

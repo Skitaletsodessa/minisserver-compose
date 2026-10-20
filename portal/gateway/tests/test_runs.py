@@ -170,6 +170,7 @@ class Runs(BaseCase):
         self.assertEqual((r.status_code, r.json()["error"]["code"]), (503, "run_not_armed"))
         self.assertEqual(self.e.ha.calls, [], "the plug must NOT be switched on when its end could not be armed")
         self.assertEqual(self.service_runs(), [], "the run is withdrawn")
+        self.assertEqual(self.e.sched.store.runs()[-1]["status"], "withdrawn")
         self.assertEqual(self.e.db.audit_rows(1)[0]["after"]["outcome"], "not_armed")
 
     def test_ha_refusing_the_switch_after_arming_withdraws_the_run(self):
