@@ -5,18 +5,31 @@
   child-override open <youtube|roblox|maps|all> <30m|2h|eod> [--client 192.168.31.60]
   child-override close [youtube|roblox|maps|all] [--client 192.168.31.60]
 
-`eod` = until the end of today (Prague time). With one child device configured, --client
-is optional. The web page (child-ui) does the same thing.
+`eod` = until the latest permitted end of that target today (the device's guardrail: 22:00, 21:00 for `all`).
+
+Since the cutover (child-policy/source.conf = snapshot) this is a THIN CLIENT of the schedule service (POST /v1/child/{id}/exceptions): the exception is data of
+the service (guardrails, audit, undo, backup) and the host job picks it up from the snapshot. It works only while the service is up - if it is down the old
+file /var/lib/child-override/overrides.json is NOT consulted any more (there is one source). Before the cutover (source.conf = files) it writes the old
+file exactly as it always did. Token: ~/.config/schedctl/token (mode 600), never printed.
 """
 import argparse
 import datetime
+import json
+import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import childpolicy  # noqa: E402
+import childsnapshot  # noqa: E402
 import overrides  # noqa: E402
+
+SERVICE = os.environ.get("SCHEDCTL_URL", "http://127.0.0.1:16444")
+TOKEN_FILE = os.environ.get("SCHEDCTL_TOKEN_FILE", os.path.expanduser("~/.config/schedctl/token"))
+TARGETS = ("youtube", "roblox", "maps", "all")
 
 
 def parse_duration(s):
@@ -29,8 +42,7 @@ def parse_duration(s):
     return n * (60 if m.group(2) == "h" else 1)
 
 
-def pick_client(arg):
-    clients = childpolicy.load_clients()
+def pick_client(arg, clients):
     ips = [c[0] for c in clients]
     if arg:
         if arg not in ips:
@@ -41,14 +53,42 @@ def pick_client(arg):
     raise SystemExit(f"several clients configured, pass --client ({', '.join(ips)})")
 
 
-def show():
-    rows = overrides.active()
-    if not rows:
-        print("no active exceptions")
-    now = datetime.datetime.now(overrides.TZ)
-    for e in rows:
-        left = datetime.datetime.fromisoformat(e["expires"]) - now
-        print(f"{e['client']}  {e['target']:8}  until {e['expires']}  ({int(left.total_seconds() // 60)} min left)")
+def service(method, path, body=None):
+    try:
+        tok = open(TOKEN_FILE).read().strip()
+    except OSError as e:
+        raise SystemExit(f"child-override: cannot read the service token ({e.__class__.__name__})")
+    req = urllib.request.Request(SERVICE + path, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                 headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw.strip() else None)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read())
+        except ValueError:
+            return e.code, None
+    except (urllib.error.URLError, OSError):
+        raise SystemExit("child-override: the schedule service is not reachable. Since the cutover exceptions are granted through it (the old file is not used any more).")
+
+
+def device_for(ip):
+    st, b = service("GET", "/v1/child")
+    if st != 200:
+        raise SystemExit(f"child-override: the service answered {st}")
+    for d in b["children"]:
+        if d["ip"] == ip:
+            return d
+    raise SystemExit(f"child-override: the service has no child device with ip {ip}")
+
+
+def refused(st, b):
+    e = (b or {}).get("error", {})
+    print(f"REFUSED {st} {e.get('code', '')}: {e.get('message', '')}", file=sys.stderr)
+    for p in e.get("problems", []):
+        print(f"  - [{p['code']}] {p['message']}", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def main():
@@ -56,23 +96,59 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list")
     o = sub.add_parser("open")
-    o.add_argument("target", choices=list(overrides.TARGETS))
+    o.add_argument("target", choices=list(TARGETS))
     o.add_argument("duration")
     o.add_argument("--client")
     c = sub.add_parser("close")
-    c.add_argument("target", nargs="?", choices=list(overrides.TARGETS))
+    c.add_argument("target", nargs="?", choices=list(TARGETS))
     c.add_argument("--client")
     a = ap.parse_args()
+    snapshot = childsnapshot.mode() == "snapshot"
 
     if a.cmd == "list":
-        show()
+        now = datetime.datetime.now(overrides.TZ)
+        if snapshot:
+            st, b = service("GET", "/v1/child")
+            rows = [(d["ip"], x["target"], x["expires_at"]) for d in b["children"] for x in d["exceptions"]] if st == 200 else refused(st, b)
+        else:
+            rows = [(e["client"], e["target"], e["expires"]) for e in overrides.active()]
+        if not rows:
+            print("no active exceptions")
+        for ip, target, exp in rows:
+            left = datetime.datetime.fromisoformat(exp) - now
+            print(f"{ip}  {target:8}  until {exp}  ({int(left.total_seconds() // 60)} min left)")
         return
-    if a.cmd == "open":
-        exp = overrides.add(pick_client(a.client), a.target, parse_duration(a.duration))
-        print(f"opened {a.target} until {exp.strftime('%a %H:%M')}")
+    if snapshot:
+        st, b = service("GET", "/v1/child")
+        if st != 200:
+            refused(st, b)
+        clients = [(d["ip"], d["name"], d["mac"] or "") for d in b["children"]]
+        if a.cmd == "open":
+            ip = pick_client(a.client, clients)
+            d = device_for(ip)
+            minutes = parse_duration(a.duration)
+            body = {"target": a.target, **({"until_end_of_day": True} if minutes is None else {"minutes": minutes})}
+            st, r = service("POST", f"/v1/child/{d['id']}/exceptions", body)
+            if st != 201:
+                refused(st, r)
+            print(f"opened {a.target} until {datetime.datetime.fromisoformat(r['expires_at']).strftime('%a %H:%M')}")
+        else:
+            n = 0
+            for d in b["children"]:
+                if a.client and d["ip"] != a.client:
+                    continue
+                for x in d["exceptions"]:
+                    if a.target is None or x["target"] == a.target:
+                        st, r = service("DELETE", f"/v1/child/{d['id']}/exceptions/{x['id']}")
+                        n += 1 if st == 204 else 0
+            print(f"closed {n} exception(s)")
     else:
-        n = overrides.remove(pick_client(a.client) if a.client else None, a.target)
-        print(f"closed {n} exception(s)")
+        if a.cmd == "open":
+            exp = overrides.add(pick_client(a.client, childpolicy.load_clients()), a.target, parse_duration(a.duration))
+            print(f"opened {a.target} until {exp.strftime('%a %H:%M')}")
+        else:
+            n = overrides.remove(pick_client(a.client, childpolicy.load_clients()) if a.client else None, a.target)
+            print(f"closed {n} exception(s)")
     for note in childpolicy.run():
         print(note)
 

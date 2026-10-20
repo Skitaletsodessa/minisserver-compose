@@ -39,6 +39,7 @@ from zoneinfo import ZoneInfo
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 import overrides  # noqa: E402
+import childsnapshot  # noqa: E402
 
 POLICY = HERE / "child-policy"
 API = "http://127.0.0.1:3000/control"
@@ -241,25 +242,68 @@ def run(now=None):
     overrides.STATE_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOCK, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
-        clients = load_clients()
         api = Api()
         api.call("GET", "/status")
         notes = []
-        block = render_block(api, [(c[0], c[1]) for c in clients], now, overrides.active(now))
+        source = childsnapshot.mode()
+        info = {"source": source}
+        if source == "snapshot":
+            # Task 29: the schedule service's snapshot is the source (invariants verified, last good copy when the file is unusable). The service itself
+            # is not needed at any minute of this: windows and exception expiry are evaluated here, by the clock.
+            loaded = childsnapshot.load()
+            snap = loaded["snap"]
+            if snap is None:
+                childsnapshot.write_status(ok=False, source="snapshot", error="no usable snapshot: %s" % loaded["live_problem"])
+                raise RuntimeError("no usable child-policy snapshot (%s); AdGuard's rules were left as they are" % loaded["live_problem"])
+            sd = {t: service_domains(api, [t]) for t in ("telegram",) + tuple(GATED)}
+            block, ignored = childsnapshot.render(sd, snap, now)
+            clients = childsnapshot.clients_from(snap)
+            info.update(snapshot_source=loaded["source"], snapshot_checksum=snap["checksum"], live_problem=loaded["live_problem"], ignored_denies=ignored)
+        else:
+            clients = load_clients()
+            block = render_block(api, [(c[0], c[1]) for c in clients], now, overrides.active(now))
+            _shadow_compare(api, now, block)
         current = api.call("GET", "/filtering/status").get("user_rules") or []
         merged = merge_rules(current, block)
+        changed = False
         if merged != current:
             api.call("POST", "/filtering/set_rules", {"rules": merged})
+            changed = True
             sunday, in_window = schedule_state(now)
-            notes.append(f"rules updated ({len(block) - 2} managed lines; sunday={sunday} "
+            notes.append(f"rules updated ({len(block) - 2} managed lines; source={source}; sunday={sunday} "
                          f"yt/roblox_window_open={in_window})")
         for ip, name, mac in clients:
             r = ensure_client(api, ip, name, mac)
             if r:
+                changed = True
                 notes.append(f"client {name} ({ip}): {r}")
+        childsnapshot.write_status(ok=True, rules_hash=childsnapshot.rules_hash(block), managed_lines=len(block) - 2, changed=changed, **info)
         if notes:
             trigger_sync()
         return notes
+
+
+def _shadow_compare(api, now, files_block):
+    """Phase H shadow run: render the SAME moment from the schedule service's snapshot with the SAME exceptions and compare byte for byte. Never changes what
+    is enforced and never raises (a broken snapshot is itself a finding, recorded)."""
+    try:
+        loaded = childsnapshot.load()
+        if loaded["snap"] is None:
+            childsnapshot.shadow_record(False, now, "no usable snapshot: %s" % loaded["live_problem"])
+            return
+        sd = {t: service_domains(api, [t]) for t in ("telegram",) + tuple(GATED)}
+        snap_block, _ign = childsnapshot.render(sd, loaded["snap"], now, overrides=[{"client": e["client"], "target": e["target"]} for e in overrides.active(now)])
+        same = snap_block == files_block
+        detail = None
+        if not same:
+            import difflib
+            detail = "\n".join(list(difflib.unified_diff(files_block, snap_block, "files", "snapshot", lineterm="", n=0))[:12])
+        childsnapshot.shadow_record(same, now, detail, loaded["snap"]["checksum"])
+    except Exception as e:  # noqa: BLE001
+        try:
+            childsnapshot.shadow_record(False, now, "shadow comparison failed: %r" % (e,))
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _record_result(ok, detail=""):
