@@ -1,0 +1,8 @@
+[Unit]
+Description=Regenerate the children's domain-list text files from the schedule service's snapshot and commit them (Task 29, only while source.conf = snapshot)
+After=network.target
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/adguard/generate-child-lists.py

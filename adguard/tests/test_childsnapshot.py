@@ -25,6 +25,7 @@ os.environ["CHILD_APPLY_STATUS"] = os.path.join(TMP, "child-apply-status.json")
 os.environ["CHILD_SOURCE_FILE"] = os.path.join(TMP, "source.conf")
 
 import childsnapshot  # noqa: E402
+import jobenv  # noqa: E402
 import childpolicy  # noqa: E402
 import overrides  # noqa: E402
 from sched import store as storemod, model, child_invariants  # noqa: E402
@@ -75,6 +76,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         shutil.rmtree(TMP, ignore_errors=True)
         os.makedirs(os.path.join(TMP, "out"))
+        jobenv.bind(TMP)
         self.store = storemod.Store(os.path.join(TMP, "svc"))
         self.store.seed(os.path.join(PORTAL, "seed", "initial.json"), SYSTEM)
         self.assertTrue(self.store.import_child_policy(SYSTEM, payload()))

@@ -253,7 +253,7 @@ def run(now=None):
             loaded = childsnapshot.load()
             snap = loaded["snap"]
             if snap is None:
-                childsnapshot.write_status(ok=False, source="snapshot", error="no usable snapshot: %s" % loaded["live_problem"])
+                childsnapshot.write_status(ok=False, source="snapshot", error="no usable snapshot: %s" % loaded["live_problem"], at=now.isoformat(timespec="seconds"))
                 raise RuntimeError("no usable child-policy snapshot (%s); AdGuard's rules were left as they are" % loaded["live_problem"])
             sd = {t: service_domains(api, [t]) for t in ("telegram",) + tuple(GATED)}
             block, ignored = childsnapshot.render(sd, snap, now)
@@ -277,7 +277,7 @@ def run(now=None):
             if r:
                 changed = True
                 notes.append(f"client {name} ({ip}): {r}")
-        childsnapshot.write_status(ok=True, rules_hash=childsnapshot.rules_hash(block), managed_lines=len(block) - 2, changed=changed, **info)
+        childsnapshot.write_status(ok=True, rules_hash=childsnapshot.rules_hash(block), managed_lines=len(block) - 2, changed=changed, at=now.isoformat(timespec="seconds"), **info)
         if notes:
             trigger_sync()
         return notes

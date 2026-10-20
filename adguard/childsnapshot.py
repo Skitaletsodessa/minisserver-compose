@@ -123,7 +123,8 @@ def render(service_domains, snap, now, overrides=None):
 
 def write_status(**fields):
     """child-apply-status.json: read by the service (/v1/health) and the gateway. Atomic, best effort (a failure here must never break the job)."""
-    body = {"at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), **fields}
+    body = {"at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+    body.update(fields)                                              # a caller may pass `at` (the job passes its own clock: tests and --now)
     try:
         tmp = STATUS.with_suffix(".tmp")
         tmp.write_text(json.dumps(body, indent=1, sort_keys=True) + "\n", encoding="utf-8")

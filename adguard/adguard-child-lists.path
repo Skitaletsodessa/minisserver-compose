@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch the children's policy snapshot (written by the schedule service on every change); installed always, ENABLED by child-cutover.py at the cutover
+
+[Path]
+PathChanged=/srv/apps/portal/schedules/out/child-policy.json
+Unit=adguard-child-lists.service
+
+[Install]
+WantedBy=multi-user.target
