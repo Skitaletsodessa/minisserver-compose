@@ -1,0 +1,8 @@
+[Unit]
+Description=listener-watch: every non-loopback listening socket must be on the allow-list
+After=network.target
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/_system/listener-watch/listener-watch.py
