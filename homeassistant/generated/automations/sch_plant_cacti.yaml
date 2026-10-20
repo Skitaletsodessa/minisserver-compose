@@ -11,12 +11,14 @@
       target:
         entity_id: "switch.minisserver"
 - id: "sch_plant_cacti_day_off"
-  alias: "Sch plant_cacti day OFF 20:00 [sch 2ed9c460]"
+  alias: "Sch plant_cacti day OFF 20:00 [sch b5a56e5f]"
   mode: "single"
   trigger:
     - platform: "time"
       at: "20:00:00"
-  condition: []
+  condition:
+    - condition: "template"
+      value_template: "{{ not ((1792522093 <= now().timestamp() < 1792522380)) }}"
   action:
     - service: "switch.turn_off"
       target:
@@ -49,3 +51,25 @@
       from: "unavailable"
   action:
     - service: "script.sch_reconcile_plant_cacti"
+- id: "sch_plant_cacti_runend_rf245d9e3db"
+  alias: "Sch plant_cacti run end 20:53 [sch 1b78f168]"
+  mode: "single"
+  trigger:
+    - platform: "time_pattern"
+      minutes: "/1"
+  condition:
+    - condition: "template"
+      value_template: "{{ 1792522380 <= now().timestamp() < 1792523580 }}"
+    - condition: "state"
+      entity_id: "switch.minisserver"
+      state: "on"
+    - condition: "template"
+      value_template: "{{ states.switch.minisserver.last_changed.timestamp() <= 1792522380 }}"
+  action:
+    - service: "switch.turn_off"
+      target:
+        entity_id: "switch.minisserver"
+    - service: "logbook.log"
+      data:
+        name: "Sch run end"
+        message: "switch.minisserver: timed run ended, switched OFF"
