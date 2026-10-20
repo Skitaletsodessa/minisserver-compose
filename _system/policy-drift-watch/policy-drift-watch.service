@@ -1,0 +1,8 @@
+[Unit]
+Description=Children's DNS policy drift watchdog (AdGuard rules vs the single source; the policy job alive) - Task 29
+After=docker.service
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/_system/policy-drift-watch/policy-drift-watch.py

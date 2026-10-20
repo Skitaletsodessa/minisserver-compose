@@ -1,0 +1,11 @@
+[Unit]
+Description=Children's DNS policy drift watchdog - every 2 min
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+RandomizedDelaySec=10
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
