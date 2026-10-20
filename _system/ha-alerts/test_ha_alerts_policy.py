@@ -243,6 +243,55 @@ check("garbled live snapshot falls back to the cache", haa.init_schedules(DAY) i
 haa.SNAPSHOT, haa.SNAPSHOT_CACHE, haa.SCHEDULE, haa.PLAN_TIMES = _orig
 shutil.rmtree(_tmp, ignore_errors=True)
 
+print("\n== timed runs (Task 29 Part 1): a run is a deliberate window; after its end the ceilings apply from the end")
+_runs_orig = (haa.SCHEDULE, haa.PLAN_TIMES)
+def _run_snap(runs, recent=()):
+    return {"schema": 1, "entities": [{"id": "bathroom_towels", "kind": "plug", "ha_target": "switch.bathroom_towels", "managed": True,
+             "rules": [{"id": "morning", "days": [1, 2, 3, 4, 5, 6, 7], "start": "06:30", "end": "08:00"}, {"id": "evening", "days": [1, 2, 3, 4, 5, 6, 7], "start": "18:30", "end": "20:00"}],
+             "skip_dates": [], "runs": runs, "recent_runs": list(recent)}]}
+def _run(h0, m0, h1, m1, cancelled_at=None):
+    s, e = ts(h0, m0), ts(h1, m1)
+    return {"id": "r1", "start_ts": int(s), "end_ts": int(e), "effective_end_ts": int(cancelled_at if cancelled_at else e), "status": "active"}
+P = "switch.bathroom_towels"
+def with_runs(runs, recent=()):
+    haa.SCHEDULE, haa.PLAN_TIMES = haa.schedules_for(_run_snap(runs, recent), DAY)
+with_runs([_run(12, 0, 12, 30)])
+check("the run appears as a window of its own next to the schedule windows", haa.SCHEDULE[P] == [(390, 480), (720, 750), (1110, 1200)], str(haa.SCHEDULE[P]))
+with_runs([_run(12, 0, 12, 30)])
+check("the run window is added for its own date only", haa.SCHEDULE[P] == [(390, 480), (720, 750), (1110, 1200)])
+haa.SCHEDULE, haa.PLAN_TIMES = haa.schedules_for(_run_snap([_run(12, 0, 12, 30)]), DAY + datetime.timedelta(days=1))
+check("...and not on another date", haa.SCHEDULE[P] == [(390, 480), (1110, 1200)], str(haa.SCHEDULE))
+
+with_runs([_run(12, 0, 12, 30)])
+db = reset(); db.put(P, ts(0, day_off=-2), "off"); db.put(P, ts(12, 0, 15), "on"); db.put(P, ts(12, 30, 5), "off")
+run(db, every(ts(11, 55), ts(14, 0)))
+check("a legal run (ON 12:00:15, OFF 12:30:05 by HA): zero messages", not SENT, str(SENT))
+check("...and no quiet foreign/mismatch lines either (it is deliberate)", not quiet(), str(quiet()))
+
+with_runs([_run(12, 0, 12, 30)])
+db = reset(); db.put(P, ts(0, day_off=-2), "off"); db.put(P, ts(12, 0, 15), "on")
+run(db, every(ts(11, 55), ts(12, 55)))
+check("run over but the plug still ON 25 min after its end: silent so far", not msgs(), str(msgs()))
+run(db, [ts(13, 0), ts(13, 5)])
+check("plug still ON 30 min after the RUN's end: the tier-A ceiling fires, counted from the end of the run", len(msgs("bathroom_towels")) == 1 and "после выключения по расписанию" in msgs()[0], str(msgs()))
+
+with_runs([], recent=[{**_run(12, 0, 12, 30), "status": "cancelled", "effective_end_ts": int(ts(12, 10))}])
+db = reset(); db.put(P, ts(0, day_off=-2), "off"); db.put(P, ts(12, 0, 15), "on"); db.put(P, ts(12, 10, 5), "off")
+run(db, every(ts(11, 55), ts(14, 0)))
+check("a cancelled run ends where it was cancelled (ON 12:00, OFF 12:10:05): silent, nothing quiet", not SENT and not quiet(), str((SENT, quiet())))
+
+with_runs([_run(12, 0, 12, 30)])
+db = reset(); db.put(P, ts(0, day_off=-2), "off"); db.put(P, ts(17, 0, 20), "on"); db.put(P, ts(17, 20, 5), "off")
+run(db, every(ts(16, 55), ts(17, 40)))
+check("an ON at 17:00 with NO run is still a foreign change: listed quietly, no message", not SENT and any("ON в 17:00" in x for x in quiet()), str((SENT, quiet())))
+
+with_runs([_run(12, 0, 12, 30)])
+db = reset(); db.put(P, ts(0, day_off=-2), "off"); db.put(P, ts(12, 0, 15), "on"); db.put(P, ts(12, 40), "on")
+db = reset(); db.put(P, ts(0, day_off=-2), "off")
+run(db, every(ts(12, 5), ts(12, 20)))
+check("run accepted but the plug never switched ON for 5-20 min: only a quiet mismatch line, no message", not SENT, str(SENT))
+haa.SCHEDULE, haa.PLAN_TIMES = _runs_orig
+
 print("\n== not covered here, by design")
 print("NOTE  HA down: ha-watch.py is untouched and uses the default tier A (immediate, repeats, recovery - see test_watchnotify_tiers.py).")
 print("NOTE  Carp light above 20 % / on after 19:00: Task 25 phase E was not implemented, there is no such rule to keep or test.")

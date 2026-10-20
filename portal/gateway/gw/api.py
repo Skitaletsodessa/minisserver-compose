@@ -247,6 +247,54 @@ class App:
             raise GwError(404, "not_found", "no such device", {"id": did})
         return JSONResponse(await self.core.device_view(p, did))
 
+    # timed runs (Task 29 Part 1)
+    @staticmethod
+    def _minutes_body(raw):
+        b = jload(raw)
+        m = b.get("minutes")
+        if isinstance(m, bool) or not isinstance(m, int) or set(b) - {"minutes"}:
+            raise GwError(400, "bad_body", "{\"minutes\": <whole number>} is required")
+        return m
+
+    async def device_run_start(self, request):
+        p = self.authenticate(request)
+        did = request.path_params["id"]
+        raw = await request.body()
+        minutes = self._minutes_body(raw)
+
+        async def go():
+            return 200, await self.core.start_run(p, did, minutes)
+        st, body = await self.idem(request, p, "run.start:" + did, go, body_bytes=raw)
+        return JSONResponse(body, status_code=st)
+
+    async def device_run_extend(self, request):
+        p = self.authenticate(request)
+        did = request.path_params["id"]
+        raw = await request.body()
+        minutes = self._minutes_body(raw)
+
+        async def go():
+            return 200, await self.core.extend_run(p, did, minutes)
+        st, body = await self.idem(request, p, "run.extend:" + did, go, body_bytes=raw)
+        return JSONResponse(body, status_code=st)
+
+    async def device_run_end(self, request):
+        p = self.authenticate(request)
+        did = request.path_params["id"]
+
+        async def go():
+            return 200, await self.core.end_run(p, did)
+        st, body = await self.idem(request, p, "run.end:" + did, go)
+        return JSONResponse(body, status_code=st)
+
+    async def device_patch(self, request):
+        p = self.authenticate(request)
+        self.need(p, "admin")
+        did = request.path_params["id"]
+        raw = await request.body()
+        b = jload(raw)
+        return JSONResponse(await self.core.patch_device(p, did, b))
+
     async def device_switch(self, request):
         p = self.authenticate(request)
         did = request.path_params["id"]
@@ -487,6 +535,10 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/phones/{id}", a.phone_revoke, methods=["DELETE"]),
         Route("/v1/devices", a.devices_list, methods=["GET"]),
         Route("/v1/devices/{id}", a.device_get, methods=["GET"]),
+        Route("/v1/devices/{id}", a.device_patch, methods=["PATCH"]),
+        Route("/v1/devices/{id}/run", a.device_run_start, methods=["POST"]),
+        Route("/v1/devices/{id}/run", a.device_run_end, methods=["DELETE"]),
+        Route("/v1/devices/{id}/run/extend", a.device_run_extend, methods=["POST"]),
         Route("/v1/devices/{id}/switch", a.device_switch, methods=["POST"]),
         Route("/v1/vacuums", a.vacuums_list, methods=["GET"]),
         Route("/v1/vacuums/{id}/scenarios/{scenario}/start", a.vac_start, methods=["POST"]),

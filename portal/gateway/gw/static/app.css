@@ -73,3 +73,8 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
 .days label { flex-direction: row; align-items: center; margin: 0; padding: 0 10px; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; gap: 6px; }
 .times { display: flex; gap: 12px; flex-wrap: wrap; }
 #preview-list { padding-left: 1.2em; }
+
+/* timed runs (Task 29) */
+.run-line { margin: 8px 0 4px; font-weight: 600; }
+.presets { margin-top: 8px; }
+.presets button { min-height: 44px; }

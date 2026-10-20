@@ -69,6 +69,8 @@ class DB:
         self.c.executescript(SCHEMA)
         if "display_name" not in [r["name"] for r in self.c.execute("PRAGMA table_info(device_meta)")]:      # added after the first deployment
             self.c.execute("ALTER TABLE device_meta ADD COLUMN display_name TEXT")
+        if "switch_mode" not in [r["name"] for r in self.c.execute("PRAGMA table_info(device_meta)")]:        # Task 29: timed or plain On button (NULL = take the seed default)
+            self.c.execute("ALTER TABLE device_meta ADD COLUMN switch_mode TEXT")
         self.jsonl = os.path.join(data_dir, "audit.jsonl")
 
     def tx(self):

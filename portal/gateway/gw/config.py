@@ -39,12 +39,12 @@ HA_ALLOWED_SERVICES = {"switch": {"turn_on", "turn_off"}, "script": {"turn_on", 
 
 # plug meta that HA/the schedule service do not carry: kind, power sensor (None = no trustworthy meter), switchable by the household
 DEVICE_SEED = {
-    "bathroom_towels": {"name": "Полотенцесушитель", "kind": "dryer", "power_sensor": "sensor.bathroom_towels_power", "household_switchable": 1},
+    "bathroom_towels": {"name": "Полотенцесушитель", "switch_mode": "timed", "kind": "dryer", "power_sensor": "sensor.bathroom_towels_power", "household_switchable": 1},
     "plant_rack1":     {"name": "Свет для растений — стеллаж 1", "kind": "lamp",  "power_sensor": "sensor.living_room_rack_power", "household_switchable": 1},
     "plant_rack2":     {"name": "Свет для растений — стеллаж 2", "kind": "lamp",  "power_sensor": "sensor.livingroom_rack_big_power", "household_switchable": 1},
     "plant_orchids":   {"name": "Свет для орхидей", "kind": "lamp",  "power_sensor": None, "household_switchable": 1},          # fake meter (always 0): no value shown
     "plant_cacti":     {"name": "Свет для кактусов (фитолампа)", "kind": "lamp",  "power_sensor": "sensor.minisserver_power", "household_switchable": 1},
-    "parrot_uv":       {"name": "УФ-лампа для попугая", "kind": "uv",    "power_sensor": "sensor.bedroom_parrot_power", "household_switchable": 1},
+    "parrot_uv":       {"name": "УФ-лампа для попугая", "switch_mode": "timed", "kind": "uv",    "power_sensor": "sensor.bedroom_parrot_power", "household_switchable": 1},
 }
 
 # robots and OUR scenarios = the existing HA scripts (never new automations)
@@ -83,3 +83,11 @@ SERVICE_SEED = [
     ("scrutiny",  "Scrutiny (диски)",    "scrutiny",       BASE,            "http:http://127.0.0.1:8080/api/health",               "admin"),
     ("child_ui",  "Родительский контроль (старая страница)", "shield", BASE + ":14443", "http:http://127.0.0.1:8099/",           "admin"),
 ]
+
+# ── timed runs (Task 29 Part 1) ──
+# switch_mode per device (editable data, seed default timed for the dryer and the UV lamp, plain for the plant lights): `timed` = the On button becomes
+# "Включить на…" and a plain ON is refused; OFF is always allowed. Presets are filtered by the plug's max_on_minutes guardrail.
+RUN_PRESETS = {"dryer": [30, 60, 120], "uv": [60, 120, 240], "lamp": [30, 60, 120, 240]}
+RUN_EXTEND_MIN = 30
+RUN_ARM_WAIT_S = 30.0         # how long the gateway waits for HA to load the run's end before it switches the plug on (else: nothing is switched on)
+RUN_ARM_POLL_S = 1.0

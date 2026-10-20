@@ -48,6 +48,17 @@ def _read_snapshot(path):
     return snap
 
 
+def _merge_windows(wins):
+    """Sorted windows with overlapping or touching ones joined (a run next to a schedule window is one stretch of 'expected ON')."""
+    out = []
+    for s, e in sorted(wins):
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
 def schedules_for(snap, date):
     """The windows (plugs) and trigger minutes (vacuum plans) that apply on one local date: weekdays and skipped dates are honoured."""
     iso, day = date.isoweekday(), date.isoformat()
@@ -57,7 +68,19 @@ def schedules_for(snap, date):
         rules = [] if skipped else [r for r in e["rules"] if iso in r["days"]]
         hhmm = lambda s: int(s[:2]) * 60 + int(s[3:])
         if e["kind"] == "plug" and e.get("ha_target"):
-            sched[e["ha_target"]] = sorted((hhmm(r["start"]), hhmm(r["end"])) for r in rules)
+            wins = [(hhmm(r["start"]), hhmm(r["end"])) for r in rules]
+            # Task 29 Part 1: a timed run is a deliberate window of its own (active runs and the ones that ended in the last 36 h). It ends at the
+            # earlier of its end and its cancellation, so "ON after the end" is judged from the run's real end, like after a schedule window.
+            for run in list(e.get("runs", ())) + list(e.get("recent_runs", ())):
+                st = datetime.datetime.fromtimestamp(run["start_ts"], PRAGUE)
+                if st.date() != date:
+                    continue
+                en = datetime.datetime.fromtimestamp(run.get("effective_end_ts", run["end_ts"]), PRAGUE)
+                s_min = st.hour * 60 + st.minute
+                e_min = min(1440, en.hour * 60 + en.minute + (1 if en.second else 0)) if en.date() == date else 1440
+                if e_min > s_min:
+                    wins.append((s_min, e_min))
+            sched[e["ha_target"]] = _merge_windows(wins)
         elif e["kind"] == "vacuum_plan" and e.get("ha_target"):
             plans[e["ha_target"]] = tuple(sorted(hhmm(r["start"]) for r in rules))
     return sched, plans

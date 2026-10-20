@@ -34,7 +34,9 @@ class Core:
     def seed(self):
         if not self.db.q1("SELECT 1 FROM device_meta LIMIT 1"):
             for did, m in config.DEVICE_SEED.items():
-                self.db.x("INSERT INTO device_meta(device_id,kind,power_sensor,household_switchable,display_name) VALUES (?,?,?,?,?)", (did, m["kind"], m["power_sensor"], m["household_switchable"], m.get("name")))
+                self.db.x("INSERT INTO device_meta(device_id,kind,power_sensor,household_switchable,display_name,switch_mode) VALUES (?,?,?,?,?,?)", (did, m["kind"], m["power_sensor"], m["household_switchable"], m.get("name"), m.get("switch_mode", "plain")))
+        for did, m in config.DEVICE_SEED.items():                  # Task 29: a database from before switch modes existed gets the seed default, once (NULL only, never an edit)
+            self.db.x("UPDATE device_meta SET switch_mode=? WHERE device_id=? AND switch_mode IS NULL", (m.get("switch_mode", "plain"), did))
         for did, m in config.DEVICE_SEED.items():                  # databases created before display names existed: fill the empty ones only (never overwrite an edit)
             if m.get("name"):
                 self.db.x("UPDATE device_meta SET display_name=? WHERE device_id=? AND display_name IS NULL", (m["name"], did))
@@ -63,6 +65,7 @@ class Core:
                 meta = self.db.q1("SELECT * FROM device_meta WHERE device_id=?", (e["id"],))
                 self.devices[e["id"]] = {"entity": e, "kind": meta["kind"] if meta else "plug", "power_sensor": meta["power_sensor"] if meta else None,
                                          "name": (meta["display_name"] if meta else None) or e["name"],
+                                         "switch_mode": (meta["switch_mode"] if meta else None) or "plain",
                                          "switchable": bool(meta["household_switchable"]) if meta else False}
                 watch.add(e["ha_target"])
                 ctl.add(e["ha_target"])
@@ -150,10 +153,17 @@ class Core:
             except ValueError:
                 power = None
         can_sw = self.can_switch(principal, d) and state in PRESENT and not self.ha.stale()
+        run = self._run_view((await self.sched.active_runs()).get(did))
+        if run and state == "on":
+            source, manual_until = "run", None
+        mx = e.get("guardrails", {}).get("max_on_minutes")
+        presets = self.run_presets(did)
         return {"id": did, "name": d["name"], "kind": d["kind"], "icon": self.icon_for(e["name"], did), "state": state,
                 "state_age_s": round(self.clock() - c["changed"], 1) if c and c["changed"] else None, "stale": stale, "source": source,
                 "manual_until": manual_until, "next_edge": next_edge, "can_switch": can_sw, "can_edit_schedule": self.can_edit_schedule(principal, e),
-                "schedule_id": did, "power_w": power, "guardrails": e.get("guardrails", {})}
+                "schedule_id": did, "power_w": power, "guardrails": e.get("guardrails", {}),
+                "switch_mode": d["switch_mode"], "run": run, "run_presets": presets, "run_max_minutes": mx,
+                "can_run": bool(can_sw and state == "off" and not run)}
 
     async def devices_view(self, principal):
         return [await self.device_view(principal, did) for did in self.devices]
@@ -166,6 +176,8 @@ class Core:
             raise GwError(403, "forbidden", "a read-only person cannot switch devices")
         if not self.can_switch(principal, d):
             raise GwError(403, "not_switchable", "this device may not be switched by your role", {"device": did})
+        if on and d["switch_mode"] == "timed":
+            raise GwError(409, "timed_only", "this device is switched on for a limited time only: choose how long", {"device": did, "presets": self.run_presets(did)})
         eid = d["entity"]["ha_target"]
         target = "on" if on else "off"
         cur = self.ha.state(eid)
@@ -188,7 +200,174 @@ class Core:
         outcome = "confirmed" if obs == target else "unconfirmed"
         self._eff.pop(did, None)
         self.db.audit("switch", target=did, before={"state": cur}, after={"requested": target, "observed": obs, "outcome": outcome}, ok=outcome == "confirmed", **actor)
+        if not on and outcome == "confirmed":
+            await self._close_active_run(principal, did)
         return {"outcome": outcome, "device_id": did, "requested": target, "observed": self._norm(obs), "changed": True, "waited_ms": int(waited * 1000)}
+
+    # ── timed runs (Task 29 Part 1) ──
+    def _run_view(self, r):
+        """The card's `run` object from the service's run, or None when there is none or it is over."""
+        if not r:
+            return None
+        import datetime as _dt
+        ends = _dt.datetime.fromisoformat(r["ends_at"]).timestamp()
+        remaining = int(ends - self.clock())
+        if remaining <= 0:
+            return None
+        return {"id": r["id"], "started_at": r["started_at"], "ends_at": r["ends_at"], "remaining_s": remaining, "started_by": r["started_by"],
+                "armed": bool(r.get("armed")), "minutes_total": r["minutes_total"]}
+
+    async def patch_device(self, principal, did, fields):
+        """Admin: the editable device data - how its On button works (timed|plain) and whether the household may switch it."""
+        if did not in self.devices:
+            raise GwError(404, "not_found", "no such device", {"id": did})
+        if not isinstance(fields, dict) or not fields or set(fields) - {"switch_mode", "household_switchable"}:
+            raise GwError(400, "bad_body", "an object with switch_mode and/or household_switchable is required")
+        d = self.devices[did]
+        before = {"switch_mode": d["switch_mode"], "household_switchable": d["switchable"]}
+        new = dict(before)
+        if "switch_mode" in fields:
+            if fields["switch_mode"] not in ("timed", "plain"):
+                raise GwError(422, "bad_value", "switch_mode must be timed or plain")
+            new["switch_mode"] = fields["switch_mode"]
+        if "household_switchable" in fields:
+            if not isinstance(fields["household_switchable"], bool):
+                raise GwError(422, "bad_value", "household_switchable must be true or false")
+            new["household_switchable"] = fields["household_switchable"]
+        self.db.x("UPDATE device_meta SET switch_mode=?, household_switchable=? WHERE device_id=?", (new["switch_mode"], 1 if new["household_switchable"] else 0, did))
+        d["switch_mode"], d["switchable"] = new["switch_mode"], new["household_switchable"]
+        self.db.audit("device_patch", target=did, before=before, after=new, **self._actor(principal))
+        self.hub.publish("device", {"id": did, "state": self._norm(self.ha.state(d["entity"]["ha_target"])), "stale": self.ha.stale()})
+        return await self.device_view(principal, did)
+
+    def run_presets(self, did):
+        d = self.devices[did]
+        mx = d["entity"].get("guardrails", {}).get("max_on_minutes")
+        return [m for m in config.RUN_PRESETS.get(d["kind"], config.RUN_PRESETS["lamp"]) if mx is None or m <= mx]
+
+    async def _close_active_run(self, principal, did):
+        """After a CONFIRMED switch-off: an active run of the device is over (cancelled in the service). Idempotent; a failure here is harmless
+        because Home Assistant ends the run at its end anyway."""
+        try:
+            run = (await self.sched.active_runs(force=True)).get(did)
+            if run and self._run_view(run):
+                role, acting = self._srv(principal)
+                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"], role, acting)
+        except GwError:
+            pass
+
+    @staticmethod
+    def _srv(principal):
+        return ("admin" if principal["role"] == "admin" else "household",
+                {"person": principal["person_id"], "phone": principal.get("phone_id") or "-"})
+
+    def _run_device(self, principal, did):
+        if did not in self.devices:
+            raise GwError(404, "not_found", "no such device", {"id": did})
+        d = self.devices[did]
+        if principal["role"] == "readonly":
+            raise GwError(403, "forbidden", "a read-only person cannot switch devices")
+        if not self.can_switch(principal, d):
+            raise GwError(403, "not_switchable", "this device may not be switched by your role", {"device": did})
+        return d
+
+    async def _wait_armed(self, rid, role):
+        """Polls the service until Home Assistant has loaded the run's end (the applier verified it), up to RUN_ARM_WAIT_S. Returns the run or None."""
+        t0 = time.monotonic()
+        while True:
+            st, js, _ = await self.sched.call("GET", "/v1/runs/" + rid, role)
+            if st == 200 and js and js.get("armed"):
+                return js
+            if st == 200 and js and js.get("status") != "active":
+                return None
+            if time.monotonic() - t0 >= config.RUN_ARM_WAIT_S:
+                return None
+            await asyncio.sleep(config.RUN_ARM_POLL_S)
+
+    async def start_run(self, principal, did, minutes):
+        """Switch ON for N minutes. Order matters (Task 29): 1. the service accepts the run (guardrails) and renders its END into Home Assistant,
+        2. the gateway waits until HA has loaded it (armed), 3. only then the plug is switched ON and read back. If the end cannot be armed, NOTHING is
+        switched on and the run is withdrawn. From then on HA ends the run by itself, whatever happens to the gateway and the service."""
+        d = self._run_device(principal, did)
+        eid = d["entity"]["ha_target"]
+        actor = self._actor(principal)
+        if self.ha.stale():
+            raise GwError(503, "ha_unavailable", "Home Assistant is not reachable; nothing was started")
+        cur = self.ha.state(eid)
+        if cur in ("unavailable", "unknown", None):
+            raise GwError(409, "device_unavailable", "the device is unavailable in Home Assistant", {"state": cur})
+        if cur != "off":
+            raise GwError(409, "already_on", "the device is already on", {"state": cur})
+        last = self._last_switch.get(did)
+        if last is not None and time.monotonic() - last < config.DEBOUNCE_S:
+            raise GwError(429, "too_fast", "this device was switched a moment ago", {"retry_after_s": 2}, {"Retry-After": "2"})
+        role, acting = self._srv(principal)
+        try:
+            run = await self.sched.run_call("POST", "/v1/runs", role, acting, {"entity_id": did, "minutes": minutes})
+        except GwError as e:
+            self.db.audit("run_start", target=did, after={"minutes": minutes, "outcome": "refused", "error": e.code}, ok=False, **actor)
+            raise
+        self._last_switch[did] = time.monotonic()                          # the debounce starts when a run was ACCEPTED (a rejected attempt can be corrected at once)
+        armed = await self._wait_armed(run["id"], role)
+        if not armed:
+            try:
+                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"], role, acting)
+            except GwError:
+                pass
+            self.db.audit("run_start", target=did, after={"minutes": minutes, "run": run["id"], "outcome": "not_armed"}, ok=False, **actor)
+            raise GwError(503, "run_not_armed", "Home Assistant did not confirm the automatic switch-off in time; nothing was switched on")
+        try:
+            await self.ha.call("switch", "turn_on", eid)
+        except GwError as e:
+            try:
+                await self.sched.run_call("DELETE", "/v1/runs/" + run["id"], role, acting)
+            except GwError:
+                pass
+            self.db.audit("run_start", target=did, after={"minutes": minutes, "run": run["id"], "outcome": "failed", "error": e.code}, ok=False, **actor)
+            raise
+        obs, waited = await self.ha.wait_state(eid, lambda s: s == "on", config.SWITCH_CONFIRM_S)
+        outcome = "confirmed" if obs == "on" else "unconfirmed"
+        self._eff.pop(did, None)
+        self.sched.drop_runs_cache()
+        self.db.audit("run_start", target=did, before={"state": cur}, after={"minutes": minutes, "run": run["id"], "ends_at": run["ends_at"], "observed": obs, "outcome": outcome},
+                      ok=outcome == "confirmed", **actor)
+        self.hub.publish("device", {"id": did, "state": self._norm(obs), "stale": self.ha.stale()})
+        return {"outcome": outcome, "device_id": did, "action": "start", "run": self._run_view(armed), "observed": self._norm(obs), "waited_ms": int(waited * 1000)}
+
+    async def extend_run(self, principal, did, minutes):
+        d = self._run_device(principal, did)
+        run = (await self.sched.active_runs(force=True)).get(did)
+        actor = self._actor(principal)
+        if not run or not self._run_view(run):
+            raise GwError(404, "no_run", "no timed run is active for this device")
+        role, acting = self._srv(principal)
+        try:
+            ext = await self.sched.run_call("POST", "/v1/runs/%s/extend" % run["id"], role, acting, {"minutes": minutes})
+        except GwError as e:
+            self.db.audit("run_extend", target=did, after={"minutes": minutes, "run": run["id"], "outcome": "refused", "error": e.code}, ok=False, **actor)
+            raise
+        armed = await self._wait_armed(ext["id"], role)
+        outcome = "confirmed" if armed else "unconfirmed"
+        self.sched.drop_runs_cache()
+        self.db.audit("run_extend", target=did, before={"ends_at": run["ends_at"]}, after={"minutes": minutes, "run": ext["id"], "ends_at": ext["ends_at"], "armed": bool(armed), "outcome": outcome},
+                      ok=bool(armed), **actor)
+        self.hub.publish("device", {"id": did, "state": self._norm(self.ha.state(d["entity"]["ha_target"])), "stale": self.ha.stale()})
+        return {"outcome": outcome, "device_id": did, "action": "extend", "run": self._run_view(armed or ext) or self._run_view({**ext, "armed": False}),
+                "observed": self._norm(self.ha.state(d["entity"]["ha_target"])), "waited_ms": 0}
+
+    async def end_run(self, principal, did):
+        """"Выключить": the plug is switched OFF and read back FIRST; only when it is really off the run is closed in the service. If the switch-off is
+        unconfirmed the run stays: HA still ends it at its end."""
+        d = self._run_device(principal, did)
+        run = (await self.sched.active_runs(force=True)).get(did)
+        if not run or not self._run_view(run):
+            raise GwError(404, "no_run", "no timed run is active for this device")
+        res = await self.switch(principal, did, False)
+        if res["outcome"] == "confirmed":
+            await self._close_active_run(principal, did)                         # idempotent: switch() already did it after a real OFF; this covers "was already off"
+        self.db.audit("run_end", target=did, before={"run": run["id"]}, after={"outcome": res["outcome"], "observed": res["observed"]}, ok=res["outcome"] == "confirmed", **self._actor(principal))
+        self.sched.drop_runs_cache()
+        return {"outcome": res["outcome"], "device_id": did, "action": "end", "run": None, "observed": res["observed"], "waited_ms": res["waited_ms"]}
 
     # ── vacuums ──
     def vacuum_view(self, principal, vid):

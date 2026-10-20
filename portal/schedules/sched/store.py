@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS audit(
   before TEXT, after TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
+CREATE TABLE IF NOT EXISTS runs(
+  id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES entities(id), started_at TEXT NOT NULL, ends_at TEXT NOT NULL,
+  minutes_total INTEGER NOT NULL, status TEXT NOT NULL, ended_at TEXT, by_actor TEXT NOT NULL, rev_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS tokens(
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL, sha256 TEXT NOT NULL, created TEXT NOT NULL,
   expires TEXT, last_used TEXT, revoked INTEGER NOT NULL DEFAULT 0);
@@ -45,6 +48,13 @@ class Conflict(Exception):
 
 class NotFound(Exception):
     pass
+
+
+class RunConflict(Exception):
+    """A run is already active for that plug (extend or end it), or the run is not in a state that allows the operation."""
+    def __init__(self, code, message, run=None):
+        super().__init__(message)
+        self.code, self.run = code, run
 
 
 class Forbidden(Exception):
@@ -86,6 +96,7 @@ class Store:
         if "meta" not in [r["name"] for r in self.db.execute("PRAGMA table_info(entities)")]:      # Task 27 Phase E: device facts (ip, mac)
             self.db.execute("ALTER TABLE entities ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
         self.publish_error = None
+
 
     # ── transactions and audit ────────────────────────────────────────────────
     def _tx(self):
@@ -202,8 +213,146 @@ class Store:
         for e in self.entities():
             s = self.schedule(e["id"])
             skips = sorted(d for d in model.skip_dates(self._exceptions_for_model(e["id"])) if dt.date.fromisoformat(d) >= today)
-            ents.append({**e, "tz": s["tz"], "version": s["version"], "rules": s["rules"], "skip_dates": skips})
+            runs = [{k: x[k] for k in ("id", "started_at", "ends_at", "ended_at", "start_ts", "end_ts", "effective_end_ts", "started_by", "status")}
+                    for x in self.runs(e["id"], since_ts=int(self._now().timestamp()) - 36 * 3600)] if e["kind"] == "plug" else []
+            ents.append({**e, "tz": s["tz"], "version": s["version"], "rules": s["rules"], "skip_dates": skips,
+                         "runs": [x for x in runs if x["status"] == "active"], "recent_runs": [x for x in runs if x["status"] != "active"]})
         return {"schema": 1, "audit_seq": self.audit_seq(), "entities": ents}
+
+    # ── timed runs (Task 29 Part 1) ───────────────────────────────────────────
+    def _now(self):
+        return dt.datetime.fromisoformat(self.clock())
+
+    @staticmethod
+    def _run_row(r):
+        by = json.loads(r["by_actor"])
+        end_eff = dt.datetime.fromisoformat(r["ended_at"]) if r["ended_at"] else None
+        ends = dt.datetime.fromisoformat(r["ends_at"])
+        if end_eff is None or end_eff > ends:
+            end_eff = ends
+        return {"id": r["id"], "entity": r["entity_id"], "started_at": r["started_at"], "ends_at": r["ends_at"], "minutes_total": r["minutes_total"],
+                "status": r["status"], "ended_at": r["ended_at"], "started_by": (by.get("acting") or {}).get("person") or by.get("name"),
+                "start_ts": int(dt.datetime.fromisoformat(r["started_at"]).timestamp()), "end_ts": int(ends.timestamp()),
+                "effective_end_ts": int(end_eff.timestamp()), "rev_seq": r["rev_seq"]}
+
+    def runs(self, entity=None, active_only=False, since_ts=None):
+        q, a = "SELECT * FROM runs WHERE 1=1", []
+        if entity:
+            q += " AND entity_id=?"
+            a.append(entity)
+        if active_only:
+            q += " AND status='active'"
+        with self.lock:
+            rows = self.db.execute(q + " ORDER BY started_at, id", a).fetchall()
+        out = [self._run_row(r) for r in rows]
+        if since_ts is not None:
+            out = [x for x in out if x["status"] == "active" or x["effective_end_ts"] >= since_ts]
+        return out
+
+    def run(self, rid):
+        with self.lock:
+            r = self.db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+        if not r:
+            raise NotFound(rid)
+        return self._run_row(r)
+
+    @staticmethod
+    def run_armed(run, apply_status):
+        """Home Assistant has loaded a rendered set that contains this run (or a later one) - its end is enforced by HA itself."""
+        return bool(run["status"] == "active" and apply_status and apply_status.get("result") == "applied" and apply_status.get("loaded_ok") is True
+                    and (apply_status.get("seq") or 0) >= run["rev_seq"])
+
+    def _check_runner(self, actor, ent):
+        if actor["role"] not in ("admin", "household"):
+            raise Forbidden("this role may not start timed runs")
+        if ent["kind"] != "plug":
+            raise Forbidden("timed runs apply to plugs only")
+
+    def start_run(self, actor, eid, minutes):
+        closed = []
+        with self._tx():
+            ent = self.entity(eid)
+            self._check_runner(actor, ent)
+            now = self._now()
+            for x in self.runs(eid, active_only=True):
+                if x["end_ts"] <= now.timestamp():              # over (only waiting out its grace in HA): close it now, a new run may start
+                    s2 = self._audit({"token": "-", "name": "system", "role": "admin"}, "run_expire", eid, {"id": x["id"]}, {"id": x["id"], "ended_at": x["ends_at"]})
+                    self.db.execute("UPDATE runs SET status='ended', ended_at=?, rev_seq=? WHERE id=?", (x["ends_at"], s2, x["id"]))
+                    closed.append(s2)
+            act = [x for x in self.runs(eid, active_only=True)]
+            if act:
+                raise RunConflict("run_active", "a timed run is already active for this plug; extend or end it", act[0])
+            past = [x for x in self.runs(eid) if x["status"] != "active"]
+            prev_end = max((dt.datetime.fromtimestamp(x["effective_end_ts"], model.TZ) for x in past), default=None)
+            sch = self.schedule(eid)
+            skips = model.skip_dates(self._exceptions_for_model(eid))
+            ends_at, probs = model.validate_run(ent, sch["rules"], skips, minutes, now, prev_end)
+            if probs:
+                raise model.ValidationError(probs)
+            rid = "r" + uuid.uuid4().hex[:10]
+            started = now.replace(microsecond=0)
+            seq = self._audit(actor, "run_start", eid, None, {"id": rid, "minutes": minutes, "started_at": started.isoformat(timespec="seconds"),
+                                                              "ends_at": ends_at.isoformat(timespec="seconds")})
+            self.db.execute("INSERT INTO runs(id,entity_id,started_at,ends_at,minutes_total,status,ended_at,by_actor,rev_seq) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (rid, eid, started.isoformat(timespec="seconds"), ends_at.isoformat(timespec="seconds"),
+                             int((ends_at - started).total_seconds() // 60), "active", None, canon(actor), seq))
+        for s_ in closed + [seq]:
+            self._mirror_audit(s_)
+        self.publish()
+        return self.run(rid)
+
+    def extend_run(self, actor, rid, minutes):
+        with self._tx():
+            r = self.run(rid)
+            ent = self.entity(r["entity"])
+            self._check_runner(actor, ent)
+            if r["status"] != "active":
+                raise RunConflict("run_not_active", "this run has already ended", r)
+            now = self._now()
+            old_end = dt.datetime.fromisoformat(r["ends_at"])
+            if (old_end - now).total_seconds() < model.RUN_MIN_REMAINING_S:
+                raise model.ValidationError([model.problem("too_late", "minutes", "less than %d s are left: Home Assistant would switch the plug off before the new end could be armed; start a new run instead" % model.RUN_MIN_REMAINING_S)])
+            sch = self.schedule(r["entity"])
+            skips = model.skip_dates(self._exceptions_for_model(r["entity"]))
+            ends_at, probs = model.validate_run(ent, sch["rules"], skips, minutes, old_end, None, real_start=dt.datetime.fromisoformat(r["started_at"]))
+            if probs:
+                raise model.ValidationError(probs)
+            total = int((ends_at - dt.datetime.fromisoformat(r["started_at"])).total_seconds() // 60)
+            seq = self._audit(actor, "run_extend", r["entity"], {"id": rid, "ends_at": r["ends_at"]}, {"id": rid, "ends_at": ends_at.isoformat(timespec="seconds"), "minutes_total": total})
+            self.db.execute("UPDATE runs SET ends_at=?, minutes_total=?, rev_seq=? WHERE id=?", (ends_at.isoformat(timespec="seconds"), total, seq, rid))
+        self._mirror_audit(seq)
+        self.publish()
+        return self.run(rid)
+
+    def cancel_run(self, actor, rid):
+        with self._tx():
+            r = self.run(rid)
+            ent = self.entity(r["entity"])
+            self._check_runner(actor, ent)
+            now = self._now().replace(microsecond=0)
+            if r["status"] != "active" or r["end_ts"] <= now.timestamp():
+                raise RunConflict("run_not_active", "this run has already ended", r)
+            seq = self._audit(actor, "run_cancel", r["entity"], {"id": rid, "ends_at": r["ends_at"]}, {"id": rid, "ended_at": now.isoformat(timespec="seconds")})
+            self.db.execute("UPDATE runs SET status='cancelled', ended_at=?, rev_seq=? WHERE id=?", (now.isoformat(timespec="seconds"), seq, rid))
+        self._mirror_audit(seq)
+        self.publish()
+        return self.run(rid)
+
+    def expire_runs(self):
+        """Runs whose end passed more than the grace period ago stop being rendered (HA's end-of-run automation expires with them). Returns how many."""
+        seqs = []
+        with self._tx():
+            now = self._now()
+            for r in self.runs(active_only=True):
+                if now.timestamp() > r["end_ts"] + model.RUN_GRACE_S:
+                    seq = self._audit({"token": "-", "name": "system", "role": "admin"}, "run_expire", r["entity"], {"id": r["id"]}, {"id": r["id"], "ended_at": r["ends_at"]})
+                    self.db.execute("UPDATE runs SET status='ended', ended_at=?, rev_seq=? WHERE id=?", (r["ends_at"], seq, r["id"]))
+                    seqs.append(seq)
+        for s in seqs:
+            self._mirror_audit(s)
+        if seqs:
+            self.publish()
+        return len(seqs)
 
     def publish(self):
         """Write out/schedules.json + out/render/** + out/render.json atomically, READY last. Never raises: failure is health-visible."""

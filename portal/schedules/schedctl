@@ -13,6 +13,7 @@
   schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | add ENTITY override_until HH:MM on|off | rm ID
   schedctl guardrails ENTITY FILE.json       # admin
   schedctl managed ENTITY on|off             # admin: the cutover switch (rendered into HA or not)
+  schedctl run list [ENTITY] | start ENTITY MINUTES | extend ID MINUTES | cancel ID      # timed runs (the CALLER switches the plug; the HA side ends the run itself)
   schedctl token list|create NAME ROLE|revoke ID
 
 URL: $SCHEDCTL_URL (default http://127.0.0.1:16444). Token: file $SCHEDCTL_TOKEN_FILE (default ~/.config/schedctl/token, mode 600).
@@ -150,6 +151,19 @@ def main(a):
     if c == "managed" and len(rest) == 2 and rest[1] in ("on", "off"):
         st, b, _ = call("PATCH", "/v1/entities/" + rest[0], {"managed": rest[1] == "on"})
         return done(st, b)
+    if c == "run" and rest:
+        if rest[0] == "list":
+            st, b, _ = call("GET", "/v1/runs" + ("?entity=" + rest[1] if len(rest) > 1 else ""))
+            return done(st, b)
+        if rest[0] == "start" and len(rest) == 3 and rest[2].isdigit():
+            st, b, _ = call("POST", "/v1/runs", {"entity_id": rest[1], "minutes": int(rest[2])})
+            return done(st, b, ok=(201,))
+        if rest[0] == "extend" and len(rest) == 3 and rest[2].isdigit():
+            st, b, _ = call("POST", "/v1/runs/%s/extend" % rest[1], {"minutes": int(rest[2])})
+            return done(st, b)
+        if rest[0] == "cancel" and len(rest) == 2:
+            st, b, _ = call("DELETE", "/v1/runs/" + rest[1])
+            return done(st, b)
     if c == "token" and rest:
         if rest[0] == "list":
             st, b, _ = call("GET", "/v1/tokens")

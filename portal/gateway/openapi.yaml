@@ -179,6 +179,77 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: patchDevice
+      summary: "Admin only. The editable device data: switch_mode (timed = the On button asks for a duration and a plain ON is refused; plain = ON as before) and household_switchable"
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, minProperties: 1, properties: {switch_mode: {type: string, enum: [timed, plain]}, household_switchable: {type: boolean}}}}}
+      responses:
+        "200": {description: device, content: {application/json: {schema: {$ref: "#/components/schemas/Device"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/devices/{id}/run:
+    post:
+      operationId: startRun
+      summary: >
+        Switch ON for N minutes ("Включить на…"). The schedule service checks the guardrails (max_on_minutes counted from the real start, allowed time of day, gap since the
+        last run, no overlap with a scheduled window; 422 with reasons, never clamped) and renders the END into Home Assistant; the gateway switches the plug on only
+        after HA has loaded it (armed), then reads the state back. If the end cannot be armed in time nothing is switched on (503 run_not_armed). From then on HA ends
+        the run by itself, with the gateway and the schedule service stopped. Refused when the plug is already on (409 already_on) or a run is active (409 run_active).
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [minutes], additionalProperties: false, properties: {minutes: {type: integer, minimum: 1}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/RunResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: endRun
+      summary: '"Выключить": switches the plug off and reads it back first; only a confirmed OFF closes the run (otherwise it stays and HA ends it at its end)'
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/RunResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/devices/{id}/run/extend:
+    post:
+      operationId: extendRun
+      summary: '"+30 мин": adds minutes to the active run; the total counts from the real start and must stay within the guardrail (422 max_on otherwise); the new end is armed in HA before the answer says confirmed'
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [minutes], additionalProperties: false, properties: {minutes: {type: integer, minimum: 1}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/RunResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
   /v1/devices/{id}/switch:
     post:
       operationId: switchDevice
@@ -534,7 +605,7 @@ components:
         state: {type: string, enum: ["on", "off", unavailable]}
         state_age_s: {type: [number, "null"]}
         stale: {type: boolean, description: "true when the HA link is down: the state is old and must not be shown as fresh"}
-        source: {type: string, enum: [schedule, manual, unknown]}
+        source: {type: string, enum: [schedule, manual, run, unknown]}
         manual_until: {type: [string, "null"], description: "when source=manual: the next schedule edge at which the schedule takes over again"}
         next_edge: {oneOf: [{type: "null"}, {type: object, required: [at, action], properties: {at: {type: string}, action: {type: string}}}]}
         can_switch: {type: boolean}
@@ -542,6 +613,11 @@ components:
         schedule_id: {type: string}
         power_w: {type: [number, "null"]}
         guardrails: {type: object}
+        switch_mode: {type: string, enum: [timed, plain], description: "timed: the On button asks for a duration and a plain ON is refused (409 timed_only); OFF is always allowed"}
+        run: {oneOf: [{type: "null"}, {$ref: "#/components/schemas/DeviceRun"}]}
+        run_presets: {type: array, items: {type: integer}, description: "duration presets in minutes, already limited by the max_on_minutes guardrail"}
+        run_max_minutes: {type: [integer, "null"]}
+        can_run: {type: boolean}
     SwitchResult:
       type: object
       required: [outcome, device_id, requested, observed, changed]
@@ -551,6 +627,28 @@ components:
         requested: {type: string, enum: ["on", "off"]}
         observed: {type: string, enum: ["on", "off", unavailable]}
         changed: {type: boolean, description: "false when the device was already in the requested state (idempotent)"}
+        waited_ms: {type: integer}
+        replayed: {type: boolean}
+    DeviceRun:
+      type: object
+      required: [id, started_at, ends_at, remaining_s, started_by, armed, minutes_total]
+      properties:
+        id: {type: string}
+        started_at: {type: string}
+        ends_at: {type: string, description: "a whole minute; Home Assistant switches the plug off there"}
+        remaining_s: {type: integer}
+        started_by: {type: string}
+        armed: {type: boolean, description: "HA has loaded the end of this run (always true on a confirmed start)"}
+        minutes_total: {type: integer, description: "counted from the real start, including extensions"}
+    RunResult:
+      type: object
+      required: [outcome, device_id, action, run, observed]
+      properties:
+        outcome: {type: string, enum: [confirmed, unconfirmed]}
+        device_id: {type: string}
+        action: {type: string, enum: [start, extend, end]}
+        run: {oneOf: [{type: "null"}, {$ref: "#/components/schemas/DeviceRun"}]}
+        observed: {type: string, enum: ["on", "off", unavailable]}
         waited_ms: {type: integer}
         replayed: {type: boolean}
     Vacuum:

@@ -4,18 +4,32 @@
 <p class="msg warn" id="ha-banner" role="status" {% if ha_link != 'down' %}hidden{% endif %}>{{ t('ha_down') }}</p>
 <section class="grid" id="devices" aria-label="{{ t('nav_home') }}">
 {% for d in devices %}
-  <article class="card" data-device="{{ d.id }}" data-state="{{ d.state }}" data-stale="{{ 'yes' if d.stale else 'no' }}">
+  <article class="card" data-device="{{ d.id }}" data-state="{{ d.state }}" data-stale="{{ 'yes' if d.stale else 'no' }}" data-mode="{{ d.switch_mode }}" data-run="{{ d.run.id if d.run else '' }}">
     <header>
       <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#{{ d.icon }}"/></svg>
       <h2>{{ d.name }}</h2>
       <details class="menu"><summary aria-label="{{ t('menu') }}">&#8942;</summary><a href="/settings/{{ d.schedule_id }}">{{ t('settings') }}</a></details>
     </header>
+    {% if d.switch_mode == 'timed' and d.state == 'off' %}
+    <button class="big is-off" data-action="run-menu" {% if not d.can_run %}disabled{% endif %}>
+      <span class="state">{{ t('state_off') }}</span>
+      <span class="act">{{ t('run_for') }}</span>
+    </button>
+    <div class="row presets" hidden>
+      {% for m in d.run_presets %}<button data-action="run-start" data-min="{{ m }}">{{ t('run_min', m=m) }}</button>{% endfor %}
+    </div>
+    {% else %}
     <button class="big {{ 'is-on' if d.state == 'on' else 'is-off' }}" data-action="toggle" data-on="{{ 'true' if d.state == 'on' else 'false' }}" {% if not d.can_switch %}disabled{% endif %}>
       <span class="state">{{ t('state_' + d.state) }}</span>
       <span class="act">{{ t('turn_off') if d.state == 'on' else t('turn_on') }}</span>
     </button>
+    {% endif %}
+    {% if d.run %}
+    <p class="run-line" data-ends="{{ d.run.ends_at }}">{{ t('run_until', t=hhmm(d.run.ends_at)) }} (<span class="remain">{{ t('run_left', r=((d.run.remaining_s // 60) + 1) ~ ' мин') }}</span>)</p>
+    <div class="row"><button data-action="run-extend" data-min="30" {% if not d.can_switch %}disabled{% endif %}>{{ t('run_extend') }}</button></div>
+    {% endif %}
     <p class="meta">
-      <span class="src">{% if d.source == 'manual' and d.manual_until %}{{ t('manual_until', t=hhmm(d.manual_until)) }}{% elif d.source == 'manual' %}{{ t('source_manual') }}{% elif d.source == 'schedule' %}{{ t('source_schedule') }}{% else %}{{ t('source_unknown') }}{% endif %}</span>
+      <span class="src">{% if d.source == 'manual' and d.manual_until %}{{ t('manual_until', t=hhmm(d.manual_until)) }}{% elif d.source == 'manual' %}{{ t('source_manual') }}{% elif d.source == "run" %}{{ t("source_run") }}{% elif d.source == "schedule" %}{{ t("source_schedule") }}{% else %}{{ t('source_unknown') }}{% endif %}</span>
       {% if d.next_edge %}<span class="edge"> · {{ t('next_edge_' + d.next_edge.action, t=hhmm(d.next_edge.at)) }}</span>{% endif %}
       {% if d.power_w is not none %}<span class="pw"> · {{ t('power', w=d.power_w|round(0)|int) }}</span>{% endif %}
     </p>

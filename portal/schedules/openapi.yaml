@@ -169,6 +169,75 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+  /v1/runs:
+    get:
+      operationId: listRuns
+      summary: Timed runs ("run for N minutes"), newest data first by start. active=1 lists only the running ones, otherwise the last 36 hours too
+      parameters: [{name: entity, in: query, schema: {type: string}}, {name: active, in: query, schema: {type: string, enum: ["1", "true", "0"]}}]
+      responses:
+        "200": {description: runs, content: {application/json: {schema: {type: object, required: [runs], properties: {runs: {type: array, items: {$ref: "#/components/schemas/Run"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: startRun
+      summary: >
+        Accepts a timed run of a plug: the guardrails are checked as for a schedule (max_on_minutes counted from the real start including extensions,
+        the allowed time-of-day range, min_gap_minutes after the previous run, no overlap with a scheduled window; rejected with the reasons, never clamped).
+        The end is rendered into Home Assistant (generated automation); the run is `armed` once HA has loaded it. The CALLER switches the plug on, and
+        should do so only when armed.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [entity_id, minutes], additionalProperties: false, properties: {entity_id: {type: string}, minutes: {type: integer, minimum: 1}}}}}
+      responses:
+        "201": {description: accepted, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/runs/{id}:
+    get:
+      operationId: getRun
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "200": {description: the run, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: cancelRun
+      summary: Ends the run now (status cancelled). The caller switches the plug off; the end-of-run automation is withdrawn from HA
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "200": {description: the cancelled run, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/runs/{id}/extend:
+    post:
+      operationId: extendRun
+      summary: >
+        Adds minutes to an active run. The total is counted from the run's REAL start and must stay within the guardrails; rejected when less than 90 s are
+        left (the new end could not be armed in HA before the old one passes).
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [minutes], additionalProperties: false, properties: {minutes: {type: integer, minimum: 1}}}}}
+      responses:
+        "200": {description: the extended run, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/effective:
     get:
       operationId: effective
@@ -416,6 +485,20 @@ components:
         state: {type: [string, "null"]}
         created_by: {$ref: "#/components/schemas/Actor"}
         created_at: {type: string}
+    Run:
+      type: object
+      required: [id, entity, status, started_at, ends_at, minutes_total, started_by, remaining_s, armed]
+      properties:
+        id: {type: string}
+        entity: {type: string}
+        status: {type: string, enum: [active, ended, cancelled]}
+        started_at: {type: string}
+        ends_at: {type: string, description: "a whole minute; HA switches the plug off there"}
+        ended_at: {type: [string, "null"]}
+        minutes_total: {type: integer, description: "counted from the real start, including extensions"}
+        started_by: {type: string}
+        remaining_s: {type: integer}
+        armed: {type: boolean, description: "Home Assistant has loaded a rendered set that contains this run: its end is enforced by HA itself"}
     Effective:
       type: object
       required: [entity, at, state, source, active_overrides, skipped_today, next_edge]

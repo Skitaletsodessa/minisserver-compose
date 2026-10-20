@@ -91,6 +91,8 @@ class App:
             return err(404, "not_found", "not found: %s" % e)
         except storemod.Forbidden as e:
             return err(403, "forbidden", str(e))
+        except storemod.RunConflict as e:
+            return err(409, e.code, str(e), problems=[{"code": e.code, "field": "run", "message": e.run["id"] if e.run else ""}] if e.run else None)
         except storemod.Conflict as e:
             return err(412, "version_conflict", "the schedule changed since you read it; reload and retry",
                        headers={"ETag": '"%d"' % e.current["version"]})
@@ -293,6 +295,58 @@ class App:
             return Response(status_code=204)
         return self._guard(go)
 
+    # ── timed runs (Task 29 Part 1) ───────────────────────────────────────────
+    def _run_view(self, r):
+        out = {k: r[k] for k in ("id", "entity", "status", "started_at", "ends_at", "ended_at", "minutes_total", "started_by")}
+        over = r["status"] == "active" and r["end_ts"] <= self.store._now().timestamp()
+        if over:                                       # past its end (waiting out its grace in HA): to the user it has ended
+            out["status"], out["ended_at"] = "ended", r["ends_at"]
+        out["remaining_s"] = max(0, int(r["end_ts"] - self.store._now().timestamp())) if r["status"] == "active" else 0
+        out["armed"] = self.store.run_armed(r, self.read_apply_status())
+        return out
+
+    async def runs_list(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        active = request.query_params.get("active") in ("1", "true")
+        return JSONResponse({"runs": [self._run_view(r) for r in self.store.runs(request.query_params.get("entity"), active_only=active,
+                                                                                    since_ts=None if active else int(self.store._now().timestamp()) - 36 * 3600)]})
+
+    async def run_get(self, request):
+        who, e = self.authenticate(request, "readonly")
+        if e:
+            return e
+        return self._guard(lambda: JSONResponse(self._run_view(self.store.run(request.path_params["id"]))))
+
+    async def run_create(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if not isinstance(data, dict) or not isinstance(data.get("entity_id"), str) or set(data) - {"entity_id", "minutes"}:
+            return err(400, "bad_body", "an object with entity_id and minutes is required")
+        return self._guard(lambda: JSONResponse(self._run_view(self.store.start_run(who, data["entity_id"], data.get("minutes"))), status_code=201))
+
+    async def run_extend(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if not isinstance(data, dict) or set(data) - {"minutes"}:
+            return err(400, "bad_body", "an object with minutes is required")
+        return self._guard(lambda: JSONResponse(self._run_view(self.store.extend_run(who, request.path_params["id"], data.get("minutes")))))
+
+    async def run_cancel(self, request):
+        who, e = self.authenticate(request, "household")
+        if e:
+            return e
+        return self._guard(lambda: JSONResponse(self._run_view(self.store.cancel_run(who, request.path_params["id"]))))
+
     async def effective(self, request):
         who, e = self.authenticate(request, "readonly")
         if e:
@@ -402,6 +456,7 @@ class App:
                     if stored != list(key):
                         self.store.record_apply({"token": "-", "name": "applier", "role": "admin"}, st)
                     last_key = key
+                self.store.expire_runs()            # a finished run stops being rendered, so its end-of-run automation does not pile up in HA
                 if self.store.publish_error:
                     self.store.publish()
             except Exception:           # pragma: no cover - the loop must not die
@@ -424,6 +479,11 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
         Route("/v1/exceptions", a.exceptions_list, methods=["GET"]),
         Route("/v1/exceptions", a.exception_add, methods=["POST"]),
         Route("/v1/exceptions/{id}", a.exception_delete, methods=["DELETE"]),
+        Route("/v1/runs", a.runs_list, methods=["GET"]),
+        Route("/v1/runs", a.run_create, methods=["POST"]),
+        Route("/v1/runs/{id}", a.run_get, methods=["GET"]),
+        Route("/v1/runs/{id}", a.run_cancel, methods=["DELETE"]),
+        Route("/v1/runs/{id}/extend", a.run_extend, methods=["POST"]),
         Route("/v1/effective", a.effective, methods=["GET"]),
         Route("/v1/audit", a.audit, methods=["GET"]),
         Route("/v1/child-policy", a.child_policy_get, methods=["GET"]),

@@ -77,3 +77,14 @@ Loopback + Caddy on the tailnet address only (`portal-watch` alerts, tier A, if 
 per client IP), roles admin / household / readonly, children have no access. No Home Assistant admin token exists anywhere: the applier triggers a
 `local_only` webhook (id in `secrets.yaml` + `/srv/apps/portal/applier/webhook-id`, both mode 600, both in the encrypted backup).
 Create a token: `docker exec portal-schedules python -m sched.admin token-create NAME ROLE /data/FILE` (first admin) or `schedctl token create NAME ROLE`.
+
+## Timed runs — "включить на N минут" (Task 29 Part 1)
+
+A run is a first-class resource (table `runs`, `/v1/runs`, `schedctl run …`), not a schedule exception: it needs history (the gap between runs, the alert watcher), the real start (extensions are counted from it), who started it and an `armed` state. `skip_date` / `override_until` stay exceptions (`override_until` is still model/API only).
+
+- **Guardrails apply exactly as to a schedule, in the service, never clamped:** `minutes` ≤ `max_on_minutes` counted from the real start *including every extension*; start and end inside `allowed_from..allowed_to` on one day; `min_gap_minutes` after the previous run; no overlap with a scheduled window of that plug (a run is for the gaps; a skipped date has no window); never inside 02:00–03:59. A run ends on a **whole minute** (the next one after start + N).
+- **The end is generated into Home Assistant** (`sch_<entity>_runend_<run>` in the plug's automation file): every minute from `ends_at` for 20 min it switches the plug OFF if it has been ON since before the end. No dependence on the gateway or this service at that time. Window OFF edges do not cut a run; **the reconcile script never turns a plug ON because of a run** (it only refrains from switching OFF while a run is within its time). The fail-safe OFF is untouched.
+- `armed` = the applier verified that HA loaded a render containing this run. **The caller must switch the plug ON only when armed** (the gateway does; it withdraws the run and switches nothing if the end cannot be armed in 30 s).
+- The background loop expires runs 20 min after their end (they stop being rendered, the HA automation disappears). A run past its end is `ended` for every reader at once.
+- `ha-alerts` reads the runs from the snapshot (`runs`, `recent_runs`): a run is a deliberate window, and the "still ON after the end" ceilings count from the run's real end (tier A 30 min for the dryer/UV).
+- Proofs: `tests/test_runs.py` (service + render), `tests/integration_runs.py` (real HA in a throw-away container: end within a minute with the service idle, HA stopped across the end, HA restarted mid-run, OFF plug never switched ON, cancel, extend, expiry — 28 checks).

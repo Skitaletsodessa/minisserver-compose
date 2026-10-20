@@ -109,7 +109,10 @@ class Web(BaseCase):
             self.assertIn(text, r.text)
         self.assertIn('href="/people"', r.text)
         self.assertIn('href="/parental"', r.text)
-        self.assertEqual(len(re.findall(r'data-action="toggle"', r.text)), 6)
+        self.assertEqual(len(re.findall(r'data-action="toggle"', r.text)), 4)                  # the dryer and the UV lamp are timed (Task 29): their On is a duration menu
+        self.assertEqual(len(re.findall(r'data-action="run-menu"', r.text)), 2)
+        self.assertIn('Включить на…', r.text)
+        self.assertEqual(re.findall(r'data-action="run-start" data-min="([0-9]+)"', r.text), ['30', '60', '120', '60', '120', '240'])
         self.assertIn("/static/icons.svg#towel_dryer", r.text)
 
     def test_every_html_page_has_no_inline_script_no_inline_style_and_no_external_resource(self):

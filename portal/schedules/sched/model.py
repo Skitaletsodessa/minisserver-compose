@@ -382,3 +382,77 @@ def effective(entity, rules, exceptions, at):
     return {"entity": entity["id"], "at": at.isoformat(), "state": st, "source": src, "active_overrides": active,
             "skipped_today": at.date().isoformat() in skips,
             "next_edge": ({"at": ne[0].isoformat(), "action": ne[1], "rule": ne[2]} if ne else None)}
+
+
+# ── timed runs (Task 29 Part 1): "run for N minutes" ─────────────────────────
+# A run is a bounded, audited, explicit exception: the plug is switched ON now (by the gateway, after the run is accepted AND armed in HA) and
+# Home Assistant switches it OFF at `ends_at` by itself (generated automation, see render.py). Guardrails apply exactly as to a schedule:
+# the run lies inside the allowed time-of-day range, never exceeds max_on_minutes counted from the REAL start including every extension,
+# keeps min_gap_minutes after the previous run, and never overlaps a scheduled window of the same plug (a run is for the gaps).
+RUN_GRACE_S = 20 * 60           # the generated end-of-run automation stays armed this long after ends_at (HA outage across the end), then it expires
+RUN_MIN_REMAINING_S = 90        # an extension needs at least this much time left: the new end must be armed in HA before the old end passes
+
+
+def ceil_minute(t):
+    """The next whole minute at or after t (aware datetime). Runs end on a minute boundary: HA's time_pattern fires there."""
+    t = t.replace(microsecond=0)
+    return t if t.second == 0 else (t + dt.timedelta(seconds=60 - t.second))
+
+
+def _window_overlaps(entity, rules, skips, start, end):
+    """The scheduled windows (on their local dates, skipped dates removed) that intersect [start, end)."""
+    out = []
+    for d in {start.astimezone(TZ).date(), end.astimezone(TZ).date()}:
+        if d.isoformat() in skips:
+            continue
+        for r in rules:
+            if d.isoweekday() not in r["days"]:
+                continue
+            ws = dt.datetime(d.year, d.month, d.day, parse_hhmm(r["start"]) // 60, parse_hhmm(r["start"]) % 60, tzinfo=TZ)
+            we = dt.datetime(d.year, d.month, d.day, parse_hhmm(r["end"]) // 60, parse_hhmm(r["end"]) % 60, tzinfo=TZ)
+            if ws < end and start < we:
+                out.append("%s-%s" % (r["start"], r["end"]))
+    return out
+
+
+def validate_run(entity, rules, skips, minutes, started_at, previous_end=None, real_start=None):
+    """Checks a new run (real_start None) or an extension (real_start = when the run really started; started_at = the OLD end, minutes = the extra).
+    Returns (ends_at, problems). Never clamps: a run that does not fit is rejected with the reason."""
+    probs = []
+    g = entity.get("guardrails", {})
+    if entity["kind"] != "plug":
+        return None, [problem("kind", "entity", "timed runs apply to plugs only")]
+    if not entity.get("managed"):
+        probs.append(problem("not_managed", "entity", "the plug is not managed by the schedule service: its end could not be enforced in Home Assistant"))
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 1 or minutes > 1440:
+        return None, probs + [problem("range", "minutes", "minutes must be a whole number of minutes, 1 or more")]
+    extending = real_start is not None
+    first = real_start if extending else started_at
+    ends_at = ceil_minute(started_at + dt.timedelta(minutes=minutes))
+    total = (ends_at - first).total_seconds() / 60.0
+    mx = g.get("max_on_minutes")
+    if mx is not None and total > mx + 1e-9:
+        probs.append(problem("max_on", "minutes", ("the run would last %d min in total counted from its real start, the guardrail max_on_minutes is %d" if extending
+                                                    else "%d min run (ending on a whole minute) exceeds the guardrail max_on_minutes %d") % (round(total), mx)))
+    lo = parse_hhmm(g["allowed_from"]) if "allowed_from" in g else None
+    hi = parse_hhmm(g["allowed_to"]) if "allowed_to" in g else None
+    ls, le = first.astimezone(TZ), ends_at.astimezone(TZ)
+    if ls.date() != le.date():
+        probs.append(problem("allowed_range", "minutes", "a run must end on the day it started"))
+    else:
+        sm, em = ls.hour * 60 + ls.minute, le.hour * 60 + le.minute
+        if lo is not None and sm < lo:
+            probs.append(problem("allowed_range", "start", "%s is before the allowed range start %s" % (fmt_hhmm(sm), g["allowed_from"])))
+        if hi is not None and em > hi:
+            probs.append(problem("allowed_range", "minutes", "the run would end at %s, after the allowed range end %s" % (fmt_hhmm(em), g["allowed_to"])))
+        if sm in DST_FORBIDDEN or em in DST_FORBIDDEN:
+            probs.append(problem("dst_ambiguous", "minutes", "a run may not start or end inside 02:00-03:59"))
+    if not extending and previous_end is not None and "min_gap_minutes" in g:
+        gap = (started_at - previous_end).total_seconds() / 60.0
+        if gap < g["min_gap_minutes"]:
+            probs.append(problem("min_gap", "start", "the previous run ended %d min ago, the guardrail min_gap_minutes is %d" % (max(0, int(gap)), g["min_gap_minutes"])))
+    over = _window_overlaps(entity, rules, skips, first, ends_at)
+    if over:
+        probs.append(problem("window_overlap", "minutes", "the run %s-%s overlaps the scheduled window %s; start after it or shorten the run"
+                             % (fmt_hhmm(ls.hour * 60 + ls.minute), fmt_hhmm(le.hour * 60 + le.minute), ", ".join(sorted(set(over))))))
+    return (None if probs else ends_at), probs

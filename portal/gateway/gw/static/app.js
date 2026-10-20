@@ -40,9 +40,13 @@
   function renderDevice(d) {
     var card = q('[data-device="' + d.id + '"]');
     if (!card) { return; }
-    card.dataset.state = d.state;
     card.dataset.stale = d.stale ? "yes" : "no";
+    if (card.dataset.mode === "timed") {                                // the card structure depends on the state and the run: redraw the page
+      if (d.state !== card.dataset.state || (d.run ? d.run.id : "") !== (card.dataset.run || "")) { reloadSoon(); return; }
+    }
+    card.dataset.state = d.state;
     var b = q('[data-action="toggle"]', card);
+    if (!b) { return; }
     b.className = "big " + (d.state === "on" ? "is-on" : "is-off");
     b.dataset.on = d.state === "on" ? "true" : "false";
     b.disabled = !d.can_switch;
@@ -74,6 +78,40 @@
       return refreshDevice(id);
     });
   }
+
+  // ── timed runs (Task 29): "Включить на…", "+30 мин"; "Выключить" is the ordinary switch-off, which also closes the run ──
+  var devReload = null;
+  function reloadSoon() { clearTimeout(devReload); devReload = setTimeout(function () { location.reload(); }, 1200); }
+  function runProblems(e) {
+    var ps = e && e.details && e.details.problems;
+    if (ps && ps.length) { return ps.map(function (p) { var k = "run_p_" + p.code; return (I.S && I.S[k]) ? T(k) : p.message; }).join(" "); }
+    return errText(e);
+  }
+  function onRun(btn) {
+    var card = btn.closest("[data-device]");
+    var id = card.dataset.device;
+    var act = btn.dataset.action;
+    if (act === "run-menu") { var pr = q(".presets", card); if (pr) { pr.hidden = !pr.hidden; } return; }
+    var path = "/v1/devices/" + id + (act === "run-start" ? "/run" : "/run/extend");
+    qa("button", card).forEach(function (x) { x.disabled = true; });
+    note(card, T("run_starting"), false);
+    api("POST", path, { minutes: parseInt(btn.dataset.min, 10) }).then(function (r) {
+      if (r.ok && r.json.outcome === "confirmed") { note(card, T("confirmed"), false); }
+      else if (r.ok) { note(card, T("unconfirmed", { s: T("state_" + r.json.observed) }), true); }
+      else { note(card, runProblems(r.json && r.json.error), true); }
+      setTimeout(function () { location.reload(); }, r.ok ? 800 : 2500);
+    });
+  }
+  function tickRuns() {
+    qa(".run-line").forEach(function (el) {
+      var left = Math.max(0, Math.floor((Date.parse(el.dataset.ends) - Date.now()) / 1000));
+      var txt = left >= 300 ? (Math.floor(left / 60) + 1) + " мин" : Math.floor(left / 60) + ":" + ("0" + (left % 60)).slice(-2);
+      var s = q(".remain", el);
+      if (s) { s.textContent = T("run_left", { r: txt }); }
+      if (left === 0) { reloadSoon(); }
+    });
+  }
+  setInterval(tickRuns, 1000);
 
   // ── home: vacuums ──────────────────────────────────────────────────────────
   var vacReload = null;
@@ -223,6 +261,7 @@
     var a = b.dataset.action;
     if (a === "toggle") { onToggle(b); }
     else if (a.indexOf("vac-") === 0) { onVacuum(b); }
+    else if (a.indexOf("run-") === 0) { onRun(b); }
     else if (["enrol-code", "setup-link", "toggle-web", "revoke"].indexOf(a) >= 0) { onPeople(b); }
   });
 

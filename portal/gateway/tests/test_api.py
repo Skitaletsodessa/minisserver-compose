@@ -190,27 +190,34 @@ class Switching(Base):
     def test_unavailable_device_is_refused_and_audited(self):
         self.e.ha.set("switch.bedroom_parrot", "unavailable")
         self.assertTrue(self.e.wait(lambda: self.e.haclient.state("switch.bedroom_parrot") == "unavailable"))
-        r = self.e.req("POST", "/v1/devices/parrot_uv/switch", who="ivan", json={"on": True})
+        r = self.e.req("POST", "/v1/devices/parrot_uv/switch", who="ivan", json={"on": False})
         self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "device_unavailable"))
         self.assertEqual(self.e.ha.calls, [])
         card = self.e.req("GET", "/v1/devices/parrot_uv", who="ivan").json()
         self.assertEqual((card["state"], card["can_switch"]), ("unavailable", False))
 
-    def test_the_dryer_and_the_uv_lamp_are_switchable_by_the_household(self):
+    def test_the_dryer_and_the_uv_lamp_are_timed_for_the_household_and_may_always_be_switched_off(self):
         for did in ("bathroom_towels", "parrot_uv"):
-            self.assertEqual(self.e.req("POST", "/v1/devices/%s/switch" % did, who="dasha", json={"on": True}).json()["outcome"], "confirmed")
+            r = self.e.req("POST", "/v1/devices/%s/switch" % did, who="dasha", json={"on": True})
+            self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "timed_only"))                 # Task 29: ON only for a limited time
+            self.assertTrue(r.json()["error"]["details"]["presets"])
+            self.e.ha.set({"bathroom_towels": "switch.bathroom_towels", "parrot_uv": "switch.bedroom_parrot"}[did], "on")
+            self.assertTrue(self.e.wait(lambda: self.e.haclient.state({"bathroom_towels": "switch.bathroom_towels", "parrot_uv": "switch.bedroom_parrot"}[did]) == "on"))
+            self.e.core._last_switch.clear()
+            self.assertEqual(self.e.req("POST", "/v1/devices/%s/switch" % did, who="dasha", json={"on": False}).json()["outcome"], "confirmed")
 
     def test_household_switchable_flag_is_honoured(self):
-        self.e.db.x("UPDATE device_meta SET household_switchable=0 WHERE device_id='parrot_uv'")
-        self.e.core.devices["parrot_uv"]["switchable"] = False
+        self.e.db.x("UPDATE device_meta SET household_switchable=0 WHERE device_id='plant_orchids'")
+        self.e.core.devices["plant_orchids"]["switchable"] = False
         try:
-            r = self.e.req("POST", "/v1/devices/parrot_uv/switch", who="dasha", json={"on": True})
+            r = self.e.req("POST", "/v1/devices/plant_orchids/switch", who="dasha", json={"on": True})
             self.assertEqual((r.status_code, r.json()["error"]["code"]), (403, "not_switchable"))
-            self.assertFalse(self.e.req("GET", "/v1/devices/parrot_uv", who="dasha").json()["can_switch"])
-            self.assertEqual(self.e.req("POST", "/v1/devices/parrot_uv/switch", who="ivan", json={"on": True}).json()["outcome"], "confirmed")     # admin always may
+            self.assertFalse(self.e.req("GET", "/v1/devices/plant_orchids", who="dasha").json()["can_switch"])
+            self.assertEqual(self.e.req("POST", "/v1/devices/plant_orchids/switch", who="ivan", json={"on": True}).json()["outcome"], "confirmed")     # admin always may
         finally:
-            self.e.db.x("UPDATE device_meta SET household_switchable=1 WHERE device_id='parrot_uv'")
-            self.e.core.devices["parrot_uv"]["switchable"] = True
+            self.e.db.x("UPDATE device_meta SET household_switchable=1 WHERE device_id='plant_orchids'")
+            self.e.core.devices["plant_orchids"]["switchable"] = True
+
 
     def test_the_allow_list_refuses_anything_else(self):
         import asyncio

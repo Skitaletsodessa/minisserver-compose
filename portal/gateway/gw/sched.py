@@ -17,6 +17,8 @@ class SchedClient:
         self.last_ok = None
         self._entities = None
         self._entities_ts = 0.0
+        self._runs = None
+        self._runs_ts = 0.0
 
     def _token(self, role):
         with open(self.files["admin" if role == "admin" else "household"], encoding="utf-8") as f:
@@ -69,6 +71,30 @@ class SchedClient:
             elif self._entities is None:
                 raise GwError(502, "schedule_service_error", "cannot read the entity list", {"status": st})
         return self._entities
+
+    # ── timed runs (Task 29 Part 1): the schedule service owns them, the gateway only asks ──
+    async def active_runs(self, force=False):
+        """{entity id: run} of the runs the service reports as active (cached 3 s; a write drops the cache)."""
+        if force or self._runs is None or self.clock() - self._runs_ts > 3:
+            try:
+                st, js, _ = await self.call("GET", "/v1/runs?active=1", "household")
+            except GwError:
+                return self._runs or {}
+            if st == 200 and js:
+                self._runs = {r["entity"]: r for r in js["runs"] if r["status"] == "active"}
+                self._runs_ts = self.clock()
+        return self._runs or {}
+
+    def drop_runs_cache(self):
+        self._runs = None
+
+    async def run_call(self, method, path, role, acting, body=None):
+        """Returns the run object. Errors keep the service's code and reasons (422 problems, 409 run_active, ...)."""
+        st, js, _ = await self.call(method, path, role, acting, body)
+        self.drop_runs_cache()
+        if st in (200, 201):
+            return js
+        raise self.translate_error(st, js)
 
     async def effective(self, eid, role="household"):
         st, js, _ = await self.call("GET", "/v1/effective?entity=" + eid, role)

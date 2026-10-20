@@ -80,7 +80,42 @@ def _skip_cond(skips):
     return [{"condition": "template", "value_template": "{{ now().date().isoformat() not in %s }}" % lst}]
 
 
-def _plug_automations(e, rules, skips):
+def _not_in_run_cond(runs):
+    """A window's OFF edge never cuts a timed run short (the run's own end automation ends it). Runs never overlap windows by validation; this is the
+    second line for a schedule edited while a run is active."""
+    if not runs:
+        return []
+    parts = " or ".join("(%d <= now().timestamp() < %d)" % (r["start_ts"], r["end_ts"]) for r in runs)
+    return [{"condition": "template", "value_template": "{{ not (%s) }}" % parts}]
+
+
+def _run_automations(e, runs):
+    """The end of every active run, in Home Assistant itself (Task 29 Part 1): no dependence on the gateway or the schedule service at the end time.
+    Fires every minute from `end_ts` for RUN_GRACE_S and switches the plug OFF if it has been ON since before the end (so a plug that somebody
+    switched ON after the end is left alone). A time trigger takes a time of day, not a date, hence the time_pattern + timestamp window; the entry
+    disappears from the config when the service expires the run. A reload, never a restart."""
+    t = e["ha_target"]
+    items = []
+    for r in runs:
+        end = r["end_ts"]
+        hhmm = dt_from_ts(end)
+        items.append(_item(None, "%s run end %s" % (e["id"], hhmm), {
+            "id": "sch_%s_runend_%s" % (e["id"], r["id"]), "mode": "single",
+            "trigger": [{"platform": "time_pattern", "minutes": "/1"}],
+            "condition": [{"condition": "template", "value_template": "{{ %d <= now().timestamp() < %d }}" % (end, end + model.RUN_GRACE_S)},
+                          {"condition": "state", "entity_id": t, "state": "on"},
+                          {"condition": "template", "value_template": "{{ states.%s.last_changed.timestamp() <= %d }}" % (t, end)}],
+            "action": [{"service": "switch.turn_off", "target": {"entity_id": t}},
+                       {"service": "logbook.log", "data": {"name": "Sch run end", "message": "%s: timed run ended, switched OFF" % t}}]}))
+    return items
+
+
+def dt_from_ts(ts):
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ts, model.TZ).strftime("%H:%M")
+
+
+def _plug_automations(e, rules, skips, runs=()):
     t = e["ha_target"]
     items = []
     for r in rules:
@@ -94,7 +129,7 @@ def _plug_automations(e, rules, skips):
         items.append(_item(None, "%s %s OFF %s" % (e["id"], r["id"], r["end"]), {
             "id": "sch_%s_%s_off" % (e["id"], r["id"]), "mode": "single",
             "trigger": [{"platform": "time", "at": _at(en)}],
-            "condition": cond,
+            "condition": cond + _not_in_run_cond(runs),
             "action": [{"service": "switch.turn_off", "target": {"entity_id": t}}]}))
     mx = e["guardrails"]["max_on_minutes"]
     items.append(_item(None, "%s fail-safe OFF after %d min" % (e["id"], mx), {
@@ -113,6 +148,7 @@ def _plug_automations(e, rules, skips):
         "id": "sch_%s_reconnect" % e["id"],
         "trigger": [{"platform": "state", "entity_id": t, "from": "unavailable"}],
         "action": [{"service": "script.sch_reconcile_%s" % e["id"]}]}))
+    items += _run_automations(e, runs)
     return items
 
 
@@ -130,7 +166,7 @@ def _vacuum_automations(e, rules, skips):
     return items
 
 
-def _reconcile_script(e, rules, skips):
+def _reconcile_script(e, rules, skips, runs=()):
     t = e["ha_target"]
     wins = []
     for r in rules:
@@ -139,16 +175,23 @@ def _reconcile_script(e, rules, skips):
     cond = " or ".join(wins) if wins else "false"
     skip_lst = "[" + ", ".join("'%s'" % d for d in sorted(skips)) + "]"
     target = "{{ 'on' if (today not in %s and (%s)) else 'off' }}" % (skip_lst, cond)
+    # Timed runs (Task 29): the reconcile NEVER turns a plug ON because of a run (a power cut or an HA restart in the middle of a dryer run must not
+    # start the heater by itself: `target` comes from the windows only). While a run is still within its time it only refrains from switching the
+    # plug OFF; at/after the run's end the normal window logic applies, i.e. OFF unless a window says ON.
+    variables = {"t": "{{ now().hour * 60 + now().minute }}", "dow": "{{ now().isoweekday() }}", "today": "{{ now().date().isoformat() }}", "target": target,
+                 "cur": "{{ states('%s') }}" % t}
+    off_cond = "{{ target == 'off' and cur == 'on' }}"
+    if runs:                                   # only while a run exists: the rendered bytes of every plug without a run stay exactly as before
+        variables["in_run"] = "{{ %s }}" % " or ".join("(%d <= now().timestamp() < %d)" % (r["start_ts"], r["end_ts"]) for r in runs)
+        off_cond = "{{ target == 'off' and cur == 'on' and not in_run }}"
     seq = [
-        {"variables": {"t": "{{ now().hour * 60 + now().minute }}", "dow": "{{ now().isoweekday() }}",
-                       "today": "{{ now().date().isoformat() }}", "target": target,
-                       "cur": "{{ states('%s') }}" % t}},
+        {"variables": variables},
         {"if": [{"condition": "template", "value_template": "{{ target == 'on' and cur not in ['on', 'unavailable'] }}"}],
          "then": [{"service": "switch.turn_on", "target": {"entity_id": t}},
-                  {"service": "logbook.log", "data": {"name": "Reconcile", "message": "%s: {{ cur }} \u2192 ON (schedule window)" % e["id"]}}]},
-        {"if": [{"condition": "template", "value_template": "{{ target == 'off' and cur == 'on' }}"}],
+                  {"service": "logbook.log", "data": {"name": "Reconcile", "message": "%s: {{ cur }} → ON (schedule window)" % e["id"]}}]},
+        {"if": [{"condition": "template", "value_template": off_cond}],
          "then": [{"service": "switch.turn_off", "target": {"entity_id": t}},
-                  {"service": "logbook.log", "data": {"name": "Reconcile", "message": "%s: on \u2192 OFF (outside schedule window)" % e["id"]}}]},
+                  {"service": "logbook.log", "data": {"name": "Reconcile", "message": "%s: on → OFF (outside schedule window)" % e["id"]}}]},
     ]
     body = {"sequence": seq}
     return _item(None, "reconcile %s" % e["id"], body)
@@ -163,15 +206,16 @@ def render(snapshot):
         if not e["managed"] or e["kind"] not in model.RENDERABLE_KINDS:
             continue
         rules, skips = e["rules"], set(e.get("skip_dates", ()))
+        runs = sorted(e.get("runs", ()), key=lambda r: (r["start_ts"], r["id"]))
         if e["kind"] == "plug":
-            items = _plug_automations(e, rules, skips)
+            items = _plug_automations(e, rules, skips, runs)
         else:
             items = _vacuum_automations(e, rules, skips)
         files["automations/sch_%s.yaml" % e["id"]] = HEADER + emit([it for it, _ in items]) + "\n"
         for it, h in items:
             exp_a[it["id"]] = it["alias"]
         if e["kind"] == "plug":
-            it, h = _reconcile_script(e, rules, skips)
+            it, h = _reconcile_script(e, rules, skips, runs)
             key = "sch_reconcile_%s" % e["id"]
             script_keys.append(key)
             files["scripts/%s.yaml" % key] = HEADER + emit({key: it}) + "\n"
