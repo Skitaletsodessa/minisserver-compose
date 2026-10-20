@@ -316,6 +316,40 @@ class Vacuums(Base):
         v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="ivan").json()["vacuums"]}["bedroom"]
         self.assertTrue(v["last_result"].startswith("stopped"))
 
+    def test_resume_continues_a_paused_robot_and_is_confirmed(self):
+        self.e.ha.set(self.LV, "cleaning")
+        self.assertTrue(self.e.wait(lambda: self.e.haclient.state(self.LV) == "cleaning"))
+        self.e.req("POST", "/v1/vacuums/bedroom/pause", who="dasha")
+        self.assertEqual(self.e.haclient.state(self.LV), "paused")
+        self.e.ha.calls.clear()
+        j = self.e.req("POST", "/v1/vacuums/bedroom/resume", who="dasha").json()
+        self.assertEqual((j["outcome"], j["action"], j["observed"]["vacuum"]), ("confirmed", "resume", "cleaning"))
+        self.assertEqual([c[:3] for c in self.e.ha.calls], [("vacuum", "start", self.LV)])
+        self.assertEqual(self.audit_actions(1)[0][:2] + self.audit_actions(1)[0][3:], ("vacuum_resume", "dasha", "bedroom", True))
+
+    def test_resume_is_refused_unless_paused_and_for_the_wrong_role(self):
+        r = self.e.req("POST", "/v1/vacuums/bedroom/resume", who="ivan")                      # docked
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "not_paused"))
+        self.assertEqual(self.e.ha.calls, [])
+        self.assertEqual(self.e.req("POST", "/v1/vacuums/bedroom/resume", who="ola").status_code, 403)
+        self.assertEqual(self.e.req("POST", "/v1/vacuums/attic/resume", who="ivan").status_code, 404)
+
+    def test_resume_cancels_an_earlier_stop_guard(self):
+        from gw import config
+        old = (config.STOP_GUARD_S, config.STOP_GUARD_POLL_S)
+        config.STOP_GUARD_S, config.STOP_GUARD_POLL_S = 6.0, 0.2
+        try:
+            self.e.req("POST", "/v1/vacuums/bedroom/scenarios/morning/start", who="ivan")
+            self.e.req("POST", "/v1/vacuums/bedroom/dock", who="ivan")                         # arms the guard
+            self.e.ha.set(self.LV, "paused")
+            self.assertTrue(self.e.wait(lambda: self.e.haclient.state(self.LV) == "paused"))
+            self.e.req("POST", "/v1/vacuums/bedroom/resume", who="ivan")                      # robot cleans again, on purpose
+            self.e.ha.calls.clear()
+            time.sleep(1.5)
+            self.assertEqual([c for c in self.e.ha.calls if c[:2] == ("vacuum", "return_to_base")], [], "the old guard must not send a resumed robot home")
+        finally:
+            config.STOP_GUARD_S, config.STOP_GUARD_POLL_S = old
+
     def test_stopping_a_plan_leaves_a_marker_for_the_alert_watcher(self):
         import json as _json
         path = os.path.join(self.e.data, "stops.jsonl")

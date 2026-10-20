@@ -10,7 +10,7 @@ S = {
     "next_edge_on": "включится в {t}", "next_edge_off": "выключится в {t}", "next_edge_trigger": "запуск в {t}",
     "stale": "данные устарели: нет связи с Home Assistant", "unconfirmed": "Не подтверждено: устройство сейчас «{s}»", "confirmed": "Готово",
     "power": "{w} Вт", "menu": "Меню", "settings": "Настройки", "schedule": "Расписание", "close": "Закрыть",
-    "vacuums": "Пылесосы", "start": "Запустить", "pause": "Пауза", "dock": "На базу", "cancel_start": "Отменить запуск", "plan_cancelled": "План ещё запускался (робот не тронулся): он отменён, робот едет на базу.", "battery": "Заряд {p}%", "running": "идёт: {s}", "last_result": "последний раз: {r}",
+    "vacuums": "Пылесосы", "start": "Запустить", "pause": "Пауза", "dock": "На базу", "cancel_start": "Отменить запуск", "resume": "Продолжить", "plan_cancelled": "План ещё запускался (робот не тронулся): он отменён, робот едет на базу.", "battery": "Заряд {p}%", "running": "идёт: {s}", "last_result": "последний раз: {r}",
     "vac_docked": "на базе", "vac_cleaning": "убирает", "vac_paused": "пауза", "vac_returning": "едет на базу", "vac_idle": "стоит", "vac_error": "ошибка", "vac_unavailable": "недоступен",
     "services_title": "Сервисы", "badge_ok": "работает", "badge_degraded": "с перебоями", "badge_down": "не отвечает", "badge_unknown": "нет данных", "open": "Открыть",
     "people_title": "Люди и устройства", "person_role": "Роль", "person_parent": "Родитель", "web_login": "Вход через браузер", "phones": "Телефоны",

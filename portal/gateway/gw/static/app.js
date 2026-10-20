@@ -81,7 +81,7 @@
     var card = btn.closest("[data-vacuum]");
     var id = card.dataset.vacuum;
     var act = btn.dataset.action;
-    var path = act === "vac-start" ? "/v1/vacuums/" + id + "/scenarios/" + btn.dataset.scenario + "/start" : "/v1/vacuums/" + id + (act === "vac-pause" ? "/pause" : "/dock");
+    var path = act === "vac-start" ? "/v1/vacuums/" + id + "/scenarios/" + btn.dataset.scenario + "/start" : "/v1/vacuums/" + id + (act === "vac-pause" ? "/pause" : act === "vac-resume" ? "/resume" : "/dock");
     btn.disabled = true;
     api("POST", path).then(function (r) {
       if (r.ok && act === "vac-pause" && r.json.action === "dock") { note(card, T("plan_cancelled"), true); }

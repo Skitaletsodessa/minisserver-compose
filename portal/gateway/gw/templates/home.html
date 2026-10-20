@@ -37,6 +37,7 @@
     <div class="row">
       {% for s in v.scenarios %}<button class="primary" data-action="vac-start" data-scenario="{{ s.id }}" title="{{ s.description }}" {% if not v.can_start %}disabled{% endif %}>{{ t('start') }}: {{ s.name }}</button>{% endfor %}
       <button data-action="vac-pause" {% if not (me.role in ("admin", "household")) or v.state != "cleaning" %}disabled{% endif %}>{{ t("pause") }}</button>
+      <button data-action="vac-resume" {% if not (me.role in ("admin", "household")) or v.state != "paused" %}disabled{% endif %}>{{ t("resume") }}</button>
       <button data-action="vac-dock" {% if not (me.role in ('admin', 'household')) %}disabled{% endif %}>{{ t("cancel_start") if (v.running_scenario and v.state in ("docked", "idle")) else t("dock") }}</button>
     </div>
     <p class="note" role="status" hidden></p>

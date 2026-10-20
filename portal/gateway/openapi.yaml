@@ -235,6 +235,21 @@ paths:
         "404": {$ref: "#/components/responses/Error"}
         "409": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/Error"}
+  /v1/vacuums/{id}/resume:
+    post:
+      operationId: resumeVacuum
+      summary: "Continues a paused robot (vacuum.start on a paused robot). Refused unless the robot is paused. The plan script that was running when it was paused has already ended, so the robot finishes its current job on its own"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
   /v1/vacuums/{id}/dock:
     post:
       operationId: dockVacuum
@@ -560,7 +575,7 @@ components:
       properties:
         outcome: {type: string, enum: [confirmed, unconfirmed]}
         vacuum_id: {type: string}
-        action: {type: string, enum: [start, pause, dock]}
+        action: {type: string, enum: [start, pause, resume, dock]}
         scenario: {type: [string, "null"]}
         observed: {type: object}
         waited_ms: {type: integer}

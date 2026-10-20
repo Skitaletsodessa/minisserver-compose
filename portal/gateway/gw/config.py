@@ -35,7 +35,7 @@ SSE_RESUME_S = 300
 IDEM_TTL_S = 24 * 3600
 
 # HA: what the gateway may touch (in addition to what the schedule service lists); everything else is refused by the gateway itself
-HA_ALLOWED_SERVICES = {"switch": {"turn_on", "turn_off"}, "script": {"turn_on", "turn_off"}, "vacuum": {"pause", "return_to_base"}}
+HA_ALLOWED_SERVICES = {"switch": {"turn_on", "turn_off"}, "script": {"turn_on", "turn_off"}, "vacuum": {"pause", "start", "return_to_base"}}
 
 # plug meta that HA/the schedule service do not carry: kind, power sensor (None = no trustworthy meter), switchable by the household
 DEVICE_SEED = {

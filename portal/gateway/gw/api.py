@@ -273,6 +273,8 @@ class App:
         async def go():
             if action == "start":
                 return 200, await self.core.start_scenario(p, vid, scenario)
+            if action == "resume":
+                return 200, await self.core.resume(p, vid)
             if action == "pause":
                 return 200, await self.core.pause(p, vid)
             return 200, await self.core.dock(p, vid)
@@ -281,6 +283,9 @@ class App:
 
     async def vac_start(self, request):
         return await self.vac_action(request, "start")
+
+    async def vac_resume(self, request):
+        return await self.vac_action(request, "resume")
 
     async def vac_pause(self, request):
         return await self.vac_action(request, "pause")
@@ -486,6 +491,7 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/vacuums", a.vacuums_list, methods=["GET"]),
         Route("/v1/vacuums/{id}/scenarios/{scenario}/start", a.vac_start, methods=["POST"]),
         Route("/v1/vacuums/{id}/pause", a.vac_pause, methods=["POST"]),
+        Route("/v1/vacuums/{id}/resume", a.vac_resume, methods=["POST"]),
         Route("/v1/vacuums/{id}/dock", a.vac_dock, methods=["POST"]),
         Route("/v1/schedules/{id}", a.schedule_get, methods=["GET"]),
         Route("/v1/schedules/{id}", a.schedule_put, methods=["PUT"]),

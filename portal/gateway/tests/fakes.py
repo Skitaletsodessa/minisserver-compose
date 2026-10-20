@@ -122,6 +122,8 @@ class FakeHA:
             self.set(eid, "on")
         elif domain == "script" and service == "turn_off":
             self.set(eid, "off")
+        elif domain == "vacuum" and service == "start":
+            self.set(eid, "cleaning")
         elif domain == "vacuum" and service == "pause":
             self.set(eid, "paused")
         elif domain == "vacuum" and service == "return_to_base":

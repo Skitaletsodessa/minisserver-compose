@@ -276,6 +276,24 @@ class Core:
         self.db.audit("vacuum_pause", target=vid, before={"state": vs}, after={"outcome": outcome, "vacuum": obs}, ok=outcome == "confirmed", **self._actor(principal))
         return {"outcome": outcome, "vacuum_id": vid, "action": "pause", "scenario": None, "observed": {"vacuum": obs}, "waited_ms": int(waited * 1000)}
 
+    async def resume(self, principal, vid):
+        """Continue a PAUSED robot. Only vacuum.start on a robot HA reports as paused; the plan script that was running at the pause has ended by now
+        (it waits for the robot to stop cleaning), so the robot finishes its current job by itself and returns to the dock on its own."""
+        v = self._vac(principal, vid)
+        vs = self.ha.state(v["vacuum"])
+        if self.ha.stale():
+            raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
+        if vs != "paused":
+            raise GwError(409, "not_paused", "the robot is not paused (%s)" % vs, {"state": vs})
+        old = self._guards.get(vid)
+        if old and not old.done():
+            old.cancel()                                                # a guard from an earlier stop must not send the resumed robot home again
+        await self.ha.call("vacuum", "start", v["vacuum"])
+        obs, waited = await self.ha.wait_state(v["vacuum"], lambda s: s == "cleaning", config.VACUUM_CONFIRM_S)
+        outcome = "confirmed" if obs == "cleaning" else "unconfirmed"
+        self.db.audit("vacuum_resume", target=vid, before={"state": vs}, after={"outcome": outcome, "vacuum": obs}, ok=outcome == "confirmed", **self._actor(principal))
+        return {"outcome": outcome, "vacuum_id": vid, "action": "resume", "scenario": None, "observed": {"vacuum": obs}, "waited_ms": int(waited * 1000)}
+
     async def dock(self, principal, vid):
         v = self._vac(principal, vid)
         vs, ss = self.ha.state(v["vacuum"]), self.ha.state(v["script"])
