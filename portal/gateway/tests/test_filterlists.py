@@ -53,7 +53,9 @@ class F(BaseCase):
         e._write_parity(time.time() - 600)
         fi = e.o["filters"]
         fi.limits = dict(fl.LIMITS)
-        fi.replica_wait_s, fi.parity_wait_s = 0.3, 0.5
+        fi.replica_wait_s, fi.parity_wait_s, fi.settle_s, fi.settle_gap = 0.3, 0.5, 1.0, 0.05
+        e.agh.lag, e.agh.blocking_mode = 0.0, "default"
+        e.agh.sync_engine()
         fi._busy = False
         e.db.x("DELETE FROM filter_changes")
         self.base_id = e.agh.add_list("Base list", BASEURL, [SENTINEL, "ads.example.org", "tracker.example.org"])
@@ -243,6 +245,7 @@ class Change(F):
         base = e.run(fi.baseline())
         self.assertIn(SENTINEL, base["sentinels"])
         e.agh.active[BASEURL] = ["ads.example.org"]
+        e.agh.sync_engine()
         steps = []
         ok = e.run(fi._probe(base, steps, "probe"))
         self.assertFalse(ok)
@@ -306,6 +309,38 @@ class Change(F):
         self.assertEqual(r.json()["result"], "applied")
         self.assertEqual(next(f for f in e.agh.filters if f["id"] == lid)["rules_count"], 5)
         self.assertEqual(e.req("POST", "%s/%d/refresh" % (FL, lid), who="ivan", json={"confirm": "yes"}).status_code, 400)
+
+    def test_an_engine_that_takes_a_second_to_load_a_change_cannot_fool_the_probe_nor_the_revert_check(self):
+        # found live on 2026-10-20: AdGuard's filtering engine shows a list change about a second AFTER the call returned. Without the settle step the probe after an
+        # ADD looks at the old engine and passes vacuously; without the retry the probe after a REVERT still sees the bad list and reports a failure.
+        e = self.e
+        e.agh.lag = 0.4
+        url = self.new_list("https://l.example/lag-bad.txt", ["example.org", "bad1.example.org", "bad2.example.org"])
+        r = self.add({"url": url, "name": "Lagging bad list"})
+        js = r.json()
+        self.assertEqual(js["result"], "reverted", js)
+        self.assertEqual(self.steps(r), [("validate", True), ("apply", True), ("probe", False), ("revert", True), ("probe_after_revert", True)])
+        self.assertIn("example.org is blocked now", js["change"]["steps"][2]["detail"])
+        time.sleep(0.6)
+        self.assertEqual(self.urls(), [BASEURL])
+        self.assertEqual(e.agh.blocking_ids("example.org"), [])
+
+    def test_blocking_modes_and_names_that_do_not_exist(self):
+        e = self.e
+        inv = "https://l.example/invalid.txt"
+        e.agh.contents[inv] = ["scratch-1.invalid", "scratch-2.invalid"]
+        e.fetch_contents[inv] = text(e.agh.contents[inv])
+        r = self.add({"url": inv, "name": "Names that do not exist"})
+        self.assertEqual((r.json()["result"], self.steps(r)[3]), ("applied", ("replica", True)), r.text)
+        lid = r.json()["list"]["id"]
+        # removing it: the replica answers NXDOMAIN for such a name once the list is gone - that is "not blocked" in the default mode (the live proof once treated it as blocked)
+        r = e.req("DELETE", "%s/%d" % (FL, lid), who="ivan")
+        self.assertEqual((r.json()["result"], self.steps(r)[3]), ("applied", ("replica", True)), r.text)
+        # a house that blocks with NXDOMAIN: the same list of real names is followed by the replica as rcode 3
+        e.agh.blocking_mode = "nxdomain"
+        url = self.new_list()
+        r = self.add({"url": url, "name": "NXDOMAIN mode"})
+        self.assertEqual((r.json()["result"], self.steps(r)[3]), ("applied", ("replica", True)), r.text)
 
     def test_a_refresh_that_breaks_the_probe_is_reverted(self):
         e = self.e
@@ -429,7 +464,7 @@ class Guard(unittest.TestCase):
         a = aghmod.dns_query("127.0.0.1", "ads.example.org", port)
         self.assertEqual((a["addrs"], aghmod.dns_blocked(a)), (["0.0.0.0"], True))
         a = aghmod.dns_query("127.0.0.1", "gone.example.org", port)
-        self.assertEqual((a["rcode"], aghmod.dns_blocked(a)), (3, True))
+        self.assertEqual((a["rcode"], aghmod.dns_blocked(a), aghmod.dns_blocked(a, "nxdomain"), aghmod.dns_blocked(a, "refused")), (3, False, True, False))   # in the default mode NXDOMAIN is "no such name", not a block
         sock.close()
         with self.assertRaises(OSError):
             aghmod.dns_query("127.0.0.1", "example.org", port, timeout=0.3)

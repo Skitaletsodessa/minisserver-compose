@@ -32,6 +32,10 @@ class FakeAgh:
         self.stats = {"top_queried_domains": [], "top_blocked_domains": []}
         self.down = False
         self.reject_add = set()                 # urls for which add_url answers 400
+        self.blocking_mode = "default"
+        self.lag = 0.0                          # seconds the filtering ENGINE needs to take a list change in (real AdGuard: about a second)
+        self.engine = []                        # (id, enabled, [domains]) as the engine currently sees it
+        self._engine_due = None
         self.calls = []
         self.service_rules = {"telegram": ["||t.me^", "||telegram.org^"], "youtube": ["||youtube.com^"], "roblox": ["||roblox.com^"]}
         port = free_port()
@@ -51,10 +55,25 @@ class FakeAgh:
         self.contents[url] = list(domains)
         self.active[url] = list(domains)
         self.filters.append({"id": self.next_id, "name": name, "url": url, "enabled": enabled, "rules_count": len(domains), "last_updated": "2026-10-20T03:00:00Z"})
+        self.sync_engine()
         return self.next_id
 
     def blocking_ids(self, name):
-        return [f["id"] for f in self.filters if f["enabled"] and any(name == d or name.endswith("." + d) for d in self.active.get(f["url"], []))]
+        return [i for i, en, doms in self.engine if en and any(name == d or name.endswith("." + d) for d in doms)]
+
+    def sync_engine(self):
+        self.engine = [(f["id"], f["enabled"], list(self.active.get(f["url"], []))) for f in self.filters]
+        self._engine_due = None
+
+    def _changed(self):
+        if self.lag <= 0:
+            self.sync_engine()
+        elif self._engine_due is None:
+            self._engine_due = __import__("time").time() + self.lag
+
+    def _tick(self):
+        if self._engine_due is not None and __import__("time").time() >= self._engine_due:
+            self.sync_engine()
 
     def check(self, name, client=None):
         if client and client in self.child_ips:
@@ -70,6 +89,7 @@ class FakeAgh:
 
     async def handle(self, request):
         self.calls.append((request.method, request.url.path, request.url.query))
+        self._tick()
         if self.down:
             return JSONResponse({}, status_code=503)
         want = "Basic " + base64.b64encode(("admin:%s" % AGH_PASSWORD).encode()).decode()
@@ -96,15 +116,20 @@ class FakeAgh:
             self.active[body["url"]] = list(self.contents[body["url"]])
             self.filters.append({"id": self.next_id, "name": body["name"], "url": body["url"], "enabled": True, "rules_count": len(self.contents[body["url"]]),
                                  "last_updated": "2026-10-20T20:00:00Z"})
+            self._changed()
             return JSONResponse({"added": len(self.contents[body["url"]])})
         if path == "/filtering/remove_url":
             self.filters = [f for f in self.filters if f["url"] != body["url"]]
+            self._changed()
             return JSONResponse({})
         if path == "/filtering/set_url":
             for f in self.filters:
                 if f["url"] == body["url"]:
                     f["name"], f["enabled"] = body["data"]["name"], body["data"]["enabled"]
+            self._changed()
             return JSONResponse({})
+        if path == "/dns_info":
+            return JSONResponse({"blocking_mode": self.blocking_mode})
         if path == "/filtering/refresh":
             n = 0
             for f in self.filters:
@@ -112,6 +137,7 @@ class FakeAgh:
                     self.active[f["url"]] = list(self.contents[f["url"]])
                     f["rules_count"] = len(self.contents[f["url"]])
                     n += 1
+            self._changed()
             return JSONResponse({"updated": n})
         if path == "/blocked_services/all":
             return JSONResponse({"blocked_services": [{"id": k, "rules": v} for k, v in self.service_rules.items()]})
@@ -150,4 +176,10 @@ class FakeDns:
             blocked = any(en and any(name == d or name.endswith("." + d) for d in contents.get(u, [])) for u, en in enabled.items())
         else:
             blocked = bool(self.agh.blocking_ids(name))
-        return {"rcode": 0, "addrs": ["0.0.0.0"] if blocked else ["93.184.216.34"]}
+        if self.agh.blocking_mode == "nxdomain" and blocked:
+            return {"rcode": 3, "addrs": []}
+        if blocked:
+            return {"rcode": 0, "addrs": ["0.0.0.0"]}
+        if name.endswith(".invalid"):                              # a name that does not exist: NXDOMAIN whether or not a list mentions it in the default mode
+            return {"rcode": 3, "addrs": []}
+        return {"rcode": 0, "addrs": ["93.184.216.34"]}

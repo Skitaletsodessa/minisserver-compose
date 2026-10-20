@@ -125,6 +125,11 @@ def dns_query(server, name, port=53, timeout=3.0):
     return {"rcode": flags & 0x0F, "addrs": addrs}
 
 
-def dns_blocked(answer):
-    """AdGuard's default answer for a blocked name: 0.0.0.0 (or NXDOMAIN/REFUSED when configured so)."""
-    return answer["rcode"] in (3, 5) or (bool(answer["addrs"]) and all(a in ("0.0.0.0", "::") for a in answer["addrs"]))
+def dns_blocked(answer, mode="default"):
+    """What AdGuard answers for a blocked name depends on its blocking mode: default / custom_ip -> an address in the sinkhole (0.0.0.0, ::); nxdomain -> rcode 3;
+    refused -> rcode 5. In the default mode an NXDOMAIN is a name that does not exist, NOT a block (found by the live proof with .invalid test names)."""
+    if mode == "nxdomain":
+        return answer["rcode"] == 3
+    if mode == "refused":
+        return answer["rcode"] == 5
+    return answer["rcode"] == 0 and bool(answer["addrs"]) and all(a in ("0.0.0.0", "::") for a in answer["addrs"])

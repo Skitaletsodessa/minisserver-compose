@@ -144,7 +144,8 @@ async def _no_children():
 
 class FilterLists:
     def __init__(self, agh, db, clock=time.time, *, fetch=None, dns=None, children=None, allow_file=None, parity_state=None, origin_dns="192.168.31.2",
-                 replica_dns="192.168.31.5", replica_wait_s=120.0, parity_wait_s=340.0, poll_s=3.0, limits=None, probe_file=PROBE_FILE, sleep=None):
+                 replica_dns="192.168.31.5", replica_wait_s=120.0, parity_wait_s=340.0, poll_s=3.0, settle_s=8.0, settle_gap=1.0, limits=None, probe_file=PROBE_FILE,
+                 sleep=None):
         self.agh, self.db, self.clock = agh, db, clock
         self._fetch = fetch
         self.dns = dns or aghmod.dns_query
@@ -153,6 +154,8 @@ class FilterLists:
         self.parity_state = parity_state
         self.origin_dns, self.replica_dns = origin_dns, replica_dns
         self.replica_wait_s, self.parity_wait_s, self.poll_s = replica_wait_s, parity_wait_s, poll_s
+        self.settle_s, self.settle_gap = settle_s, settle_gap         # AdGuard reloads its engine about a second AFTER a list call returns (measured live, 2026-10-20)
+        self.block_mode = "default"                                   # AdGuard's blocking mode, read at every baseline
         self.limits = dict(limits or LIMITS)
         self.sleep = sleep or asyncio.sleep
         with open(probe_file, encoding="utf-8") as f:
@@ -251,6 +254,10 @@ class FilterLists:
         return dict(await asyncio.gather(*[one(n) for n in names]))
 
     async def baseline(self):
+        try:
+            self.block_mode = (await self.agh.call("GET", "/dns_info")).get("blocking_mode") or "default"
+        except aghmod.AghError:
+            self.block_mode = "default"
         names = list(dict.fromkeys(self.probe["must_resolve"] + await self._dynamic_names()))
         res = await self._checks(names + self.probe["sentinels"])
         must = [n for n in names if res.get(n) is not None and not aghmod.filtered(res[n])]
@@ -262,8 +269,39 @@ class FilterLists:
             kids[ip] = {k: (None if r.get(v) is None else aghmod.filtered(r[v])) for k, v in (("always_on", cc["always_on"]), ("never_allowed", cc["never_allowed"]))}
         return {"must": must, "sentinels": sentinels, "children": kids}
 
-    async def _probe(self, base, steps, name, removed_list_ids=()):
-        """Compares the situation after a change with the baseline. Returns True when every check passes; appends one step."""
+    async def _probe(self, base, steps, name, removed_list_ids=(), attempts=1):
+        """Compares the situation after a change with the baseline. Returns True when every check passes; appends one step. attempts > 1 (after a revert) repeats it
+        once per settle_gap until it passes: AdGuard's engine needs about a second to take a change in."""
+        for attempt in range(max(1, attempts)):
+            problems, real = await self._problems(base, removed_list_ids)
+            if not problems or attempt == max(1, attempts) - 1:
+                break
+            await self.sleep(self.settle_gap)
+        steps.append({"name": name, "ok": not problems, "detail": ("; ".join(problems[:4]) + (" (+%d)" % (len(problems) - 4) if len(problems) > 4 else "")) if problems else
+                      "%d names resolve, %d sentinels blocked, %d children unchanged, %d real lookups" % (len(base["must"]), len(base["sentinels"]), len(base["children"]), len(real))})
+        return not problems
+
+    async def _settle(self, witnesses, want_blocked):
+        """Waits (bounded) until AdGuard's engine shows the change: a witness name of the list is blocked (add/enable) or no longer blocked (remove/disable). Without a
+        witness: a short fixed pause. Without this the probe could look at the OLD engine and pass vacuously."""
+        if not witnesses:
+            await self.sleep(min(1.0, self.settle_s))
+            return
+        deadline = self.clock() + self.settle_s
+        while True:
+            seen = True
+            for w in witnesses:
+                try:
+                    seen = aghmod.filtered(await self.agh.check_host(w)) == want_blocked
+                except aghmod.AghError:
+                    seen = False
+                if not seen:
+                    break
+            if seen or self.clock() >= deadline:
+                return
+            await self.sleep(min(0.25, self.settle_gap))
+
+    async def _problems(self, base, removed_list_ids=()):
         problems = []
         res = await self._checks(base["must"])
         for n in base["must"]:
@@ -289,13 +327,11 @@ class FilterLists:
         for n in real:
             try:
                 a = await asyncio.to_thread(self.dns, self.origin_dns, n)
-                if a["rcode"] != 0 or not a["addrs"] or aghmod.dns_blocked(a):
+                if a["rcode"] != 0 or not a["addrs"] or aghmod.dns_blocked(a, self.block_mode):
                     problems.append("lookup of %s on the origin resolver: rcode %s, %s" % (n, a["rcode"], a["addrs"][:2]))
             except OSError:
                 problems.append("lookup of %s on the origin resolver timed out" % n)
-        steps.append({"name": name, "ok": not problems, "detail": ("; ".join(problems[:4]) + (" (+%d)" % (len(problems) - 4) if len(problems) > 4 else "")) if problems else
-                      "%d names resolve, %d sentinels blocked, %d children unchanged, %d real lookups" % (len(base["must"]), len(base["sentinels"]), len(base["children"]), len(real))})
-        return not problems
+        return problems, real
 
     # ── replica and parity ────────────────────────────────────────────────────────────────────────────────────────
     async def _wait_replica(self, witnesses, want_blocked, steps):
@@ -309,7 +345,7 @@ class FilterLists:
             for w in witnesses:
                 try:
                     a = await asyncio.to_thread(self.dns, self.replica_dns, w)
-                    if aghmod.dns_blocked(a) == want_blocked:
+                    if aghmod.dns_blocked(a, self.block_mode) == want_blocked:
                         ok += 1
                     last = "%s answers %s" % (w, a["addrs"][:1] or a["rcode"])
                 except OSError:
@@ -412,6 +448,7 @@ class FilterLists:
                 started = self.clock()
                 ok = await self._apply(ops, steps)
                 if ok:
+                    await self._settle(list(witnesses), witnesses_blocked)
                     ok = await self._probe(base, steps, "probe", removed_ids)
                     if ok:
                         ok = await self._wait_replica(list(witnesses), witnesses_blocked, steps)
@@ -439,7 +476,7 @@ class FilterLists:
         except (aghmod.AghError, GwError) as e:
             steps.append({"name": "revert", "ok": False, "detail": "could not restore: %s" % getattr(e, "message", str(e))[:160]})
             return
-        await self._probe(base, steps, "probe_after_revert")
+        await self._probe(base, steps, "probe_after_revert", attempts=max(1, round(self.settle_s / self.settle_gap)))
 
     async def recover(self):
         """At start: a change that was running when the gateway stopped is put back to its snapshot."""
