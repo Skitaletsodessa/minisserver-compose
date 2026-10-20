@@ -5,7 +5,29 @@ homeassistant:
   external_url: "https://minisserver.tail6bf4d5.ts.net:15443"
   internal_url: "http://127.0.0.1:8123"
 
-default_config:
+# Task 27a: the integrations of HA 2026.10 default_config WITHOUT go2rtc. default_config is nothing but this dependency list; HA starts its own go2rtc
+# server (a TCP listener on *:18555 that nobody asked for - there are no cameras) whenever default_config is in the config, and a removed config entry
+# is recreated at every start. Without default_config and without a go2rtc: key go2rtc is not set up at all (components/go2rtc/__init__.py).
+# On an HA upgrade compare this list with the new default_config manifest (docs/report-27a.md has the command).
+assist_pipeline:
+bluetooth:
+cloud:
+conversation:
+dhcp:
+energy:
+file:
+history:
+homeassistant_alerts:
+logbook:
+media_source:
+mobile_app:
+my:
+ssdp:
+stream:
+sun:
+usage_prediction:
+usb:
+zeroconf:
 
 http:
   server_host: 127.0.0.1
