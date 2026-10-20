@@ -13,8 +13,17 @@ SCHED_URL = os.environ.get("GW_SCHED_URL", "http://127.0.0.1:16444")
 SCHED_TOKEN_ADMIN_FILE = os.environ.get("GW_SCHED_TOKEN_ADMIN_FILE", "/secrets/sched-admin")
 SCHED_TOKEN_HOUSEHOLD_FILE = os.environ.get("GW_SCHED_TOKEN_HOUSEHOLD_FILE", "/secrets/sched-household")
 
-# feature flags (the app builds its tabs from them); cameras stay off, parental is Task 29
-FEATURES = {"parental": False, "cameras": False}
+# AdGuard origin (Task 29 Part 2): the admin password is a file mounted read-only into the container; never an environment variable
+AGH_URL = os.environ.get("GW_AGH_URL", "http://127.0.0.1:3000/control")
+AGH_PASSWORD_FILE = os.environ.get("GW_AGH_PASSWORD_FILE", "/secrets-agh/password")
+PARITY_STATE_FILE = os.environ.get("GW_PARITY_STATE", "/ro/adguard-parity/state.json")
+OUI_FILE = os.environ.get("GW_OUI_FILE", "/ro/ieee-data/oui.txt")
+FILTER_FETCH_ALLOW_FILE = os.environ.get("GW_FILTER_FETCH_ALLOW", os.path.join(DATA, "filter-fetch-allow.txt"))   # operator-written; empty/absent in normal operation
+ORIGIN_DNS = os.environ.get("GW_ORIGIN_DNS", "192.168.31.2")
+REPLICA_DNS = os.environ.get("GW_REPLICA_DNS", "192.168.31.5")
+
+# feature flags (the app builds its tabs from them); cameras stay off
+FEATURES = {"parental": True, "cameras": False}
 
 # limits (ADR 0007)
 MAX_PHONES_TOTAL = 20

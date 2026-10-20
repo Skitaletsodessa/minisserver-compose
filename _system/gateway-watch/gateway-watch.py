@@ -102,6 +102,18 @@ def evaluate(N, state, public, full, token_ok, addrs):
     else:
         N.clear("gateway-audit-chain", "gateway: цепочка аудита снова цела")
 
+    # Task 29: an AdGuard filter-list change that was reverted automatically (the safety net did its job - Ivan should know once, nothing is broken). The gateway lists
+    # such changes of the last 48 h in /v1/health; one message per change id, none repeated, cleared when the id leaves the list.
+    now_ids = {r["id"]: r for r in full.get("filter_reverts") or []}
+    for fid, r in now_ids.items():
+        if fid not in state.get("fl_alerted", []):
+            N.alert("gateway-filter-revert-" + fid, "AdGuard: изменение списка «%s» (%s) откатилось автоматически: %s. Ничего не сломано - списки такие же, как до попытки."
+                    % (r.get("list_name") or "?", r.get("action"), (r.get("reason") or "")[:300]), tier="B")
+    for fid in state.get("fl_alerted", []):
+        if fid not in now_ids:
+            N.clear("gateway-filter-revert-" + fid, "")
+    state["fl_alerted"] = sorted(now_ids)
+
     if full.get("status") == "degraded":
         state["degraded"] = state.get("degraded", 0) + 1
         if state["degraded"] >= DEGRADED_AFTER:

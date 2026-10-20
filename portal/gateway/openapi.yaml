@@ -475,14 +475,323 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
-  /v1/parental/{rest}:
+  /v1/parental/children:
     get:
-      operationId: parentalPlanned
-      x-status: planned
-      summary: RESERVED for Task 29 (parental control). Not implemented; answers 404. Listed so that the app is built against a stable namespace
-      parameters: [{name: rest, in: path, required: true, schema: {type: string}}]
+      operationId: listChildren
+      summary: "The children's devices with their status. Parents only: a person who is not a parent gets 403"
       responses:
+        "200": {description: children, content: {application/json: {schema: {type: object, required: [children], properties: {children: {type: array, items: {$ref: "#/components/schemas/ChildSummary"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}:
+    get:
+      operationId: getChild
+      summary: Detail of one child device - status, windows, exceptions, per-child domain lists, what the caller may do
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: child, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDetail"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/windows:
+    get:
+      operationId: getChildWindows
+      summary: The open windows (what opens when) with the guardrails; ETag for If-Match
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200":
+          description: windows
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/ChildWindows"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    put:
+      operationId: putChildWindows
+      summary: "Replaces the windows (household and admin; within the guardrails: rejected with the reasons, never clamped; the policy invariants are not editable). Needs If-Match. Reaches AdGuard and the replica within about a minute"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}, {name: If-Match, in: header, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [rules], additionalProperties: false, properties: {rules: {type: array, items: {$ref: "#/components/schemas/ChildRule"}}}}}}
+      responses:
+        "200":
+          description: saved
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/ChildWindows"}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "412": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "428": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/windows/preview:
+    post:
+      operationId: previewChildWindows
+      summary: What would be open over the next 7 days, the diff against the current windows, and every guardrail problem. Changes nothing
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [rules], additionalProperties: false, properties: {rules: {type: array, items: {$ref: "#/components/schemas/ChildRule"}}}}}}
+      responses:
+        "200": {description: preview, content: {application/json: {schema: {$ref: "#/components/schemas/WindowsPreview"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/windows/undo:
+    post:
+      operationId: undoChildWindows
+      summary: Reverts the last change of the windows as a NEW change (the guardrails apply to it too)
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200":
+          description: reverted
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/ChildWindows"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/exceptions:
+    get:
+      operationId: listChildExceptions
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: active exceptions, content: {application/json: {schema: {type: object, required: [exceptions], properties: {exceptions: {type: array, items: {$ref: "#/components/schemas/ChildException"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: grantChildException
+      summary: "Opens a target for a while (youtube, roblox, maps or all = no restrictions). minutes OR until_end_of_day. Guardrails: max length, latest end, the latest end of all. Replaces an earlier exception of the same target. Expires by itself (the host job drops it, also with the service down)"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [target], additionalProperties: false, properties: {target: {type: string, enum: [youtube, roblox, maps, all]}, minutes: {type: integer, minimum: 1}, until_end_of_day: {type: boolean}}}}}
+      responses:
+        "201": {description: granted, content: {application/json: {schema: {$ref: "#/components/schemas/ChildException"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/exceptions/{xid}:
+    delete:
+      operationId: cancelChildException
+      summary: Ends the exception now
+      parameters: [{$ref: "#/components/parameters/Id"}, {name: xid, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "204": {description: cancelled}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/activity:
+    get:
+      operationId: getChildActivity
+      summary: >
+        The domains this device asked for, read ON DEMAND from AdGuard's own query log (7 days on the server) - nothing is stored by the gateway.
+        DNS shows domains, not pages. Filters: range, blocked (1 = only blocked), q (substring). cursor pages the result.
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+        - {name: range, in: query, schema: {type: string, enum: [24h, 7d], default: 24h}}
+        - {name: blocked, in: query, schema: {type: string, enum: ["0", "1"]}}
+        - {name: q, in: query, schema: {type: string, maxLength: 80}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200": {description: activity, content: {application/json: {schema: {$ref: "#/components/schemas/Activity"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/domains:
+    get:
+      operationId: getChildDomains
+      summary: This child's own allow-always and block-forever lists (the house-wide always-on list is not editable here)
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: lists, content: {application/json: {schema: {$ref: "#/components/schemas/DomainLists"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addChildDomain
+      summary: "Adds a plain domain name to allow or deny (deny beats allow; adding to one removes it from the other). Audited and undoable"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [kind, domain], additionalProperties: false, properties: {kind: {type: string, enum: [allow, deny]}, domain: {type: string}}}}}
+      responses:
+        "200": {description: lists after the change, content: {application/json: {schema: {$ref: "#/components/schemas/DomainLists"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: removeChildDomain
+      summary: Removes a domain from allow or deny (query parameters kind and domain)
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+        - {$ref: "#/components/parameters/Idem"}
+        - {name: kind, in: query, required: true, schema: {type: string, enum: [allow, deny]}}
+        - {name: domain, in: query, required: true, schema: {type: string}}
+      responses:
+        "200": {description: lists after the change, content: {application/json: {schema: {$ref: "#/components/schemas/DomainLists"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/domains/undo:
+    post:
+      operationId: undoChildDomain
+      summary: Reverts the last allow/deny change of this child as a new change
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: lists after the undo, content: {application/json: {schema: {$ref: "#/components/schemas/DomainLists"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/health:
+    get:
+      operationId: getParentalHealth
+      summary: "Is the policy really applied: the rules block in AdGuard against the one the model says it should be (hash), last apply, snapshot age, replica sync and parity, list freshness"
+      responses:
+        "200": {description: health, content: {application/json: {schema: {$ref: "#/components/schemas/ParentalHealth"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/filter-lists:
+    get:
+      operationId: listFilterLists
+      summary: Admin only. AdGuard's block lists with their state, the limits and the history of changes (including automatic reverts)
+      responses:
+        "200": {description: lists, content: {application/json: {schema: {$ref: "#/components/schemas/FilterListsView"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addFilterList
+      summary: >
+        Admin only. Adds a list from the curated catalogue or by URL. Every change: validate (URL reachable, size and rule count within the limits, hard cap needs confirm_large,
+        no duplicate) -> snapshot the previous state -> apply on the origin -> probe (must-resolve names, a must-stay-blocked sentinel, the child check) -> wait for the replica and
+        the parity checker -> on ANY failure revert automatically and probe again. The answer says which: applied, reverted (with the failed step) or held.
+      parameters: [{$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, properties: {catalogue_id: {type: string}, url: {type: string}, name: {type: string, maxLength: 80}, confirm_large: {type: boolean}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/FilterChangeResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/filter-lists/catalogue:
+    get:
+      operationId: getFilterCatalogue
+      summary: Admin only. The short curated catalogue (a subset of AdGuard's own registry)
+      responses:
+        "200": {description: catalogue, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {$ref: "#/components/schemas/CatalogueItem"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/parental/filter-lists/{id}:
+    patch:
+      operationId: patchFilterList
+      summary: "Admin only. Enable/disable or rename a list; enabling and disabling go through the same validate-apply-probe-revert path"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, minProperties: 1, properties: {enabled: {type: boolean}, name: {type: string, maxLength: 80}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/FilterChangeResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: removeFilterList
+      summary: Admin only. Removes a list (same safety net)
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/FilterChangeResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/filter-lists/{id}/refresh:
+    post:
+      operationId: refreshFilterList
+      summary: "Admin only. Refreshes one list; a list that suddenly shrinks or grows by more than the set percentage is HELD for confirmation instead of applied (confirm=true applies it)"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: false
+        content: {application/json: {schema: {type: object, additionalProperties: false, properties: {confirm: {type: boolean}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/FilterChangeResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/filter-lists/{id}/revert:
+    post:
+      operationId: revertFilterList
+      summary: Admin only. Puts the list back to the state before its last change (the stored snapshot), through the same probe
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/FilterChangeResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
 components:
   securitySchemes:
     deviceToken: {type: http, scheme: bearer, description: "per person AND device, shown once at enrolment, revocable"}
@@ -650,6 +959,199 @@ components:
         run: {oneOf: [{type: "null"}, {$ref: "#/components/schemas/DeviceRun"}]}
         observed: {type: string, enum: ["on", "off", unavailable]}
         waited_ms: {type: integer}
+        replayed: {type: boolean}
+    ChildIdentity:
+      type: object
+      required: [ip, mac, randomised_mac]
+      properties:
+        ip: {type: string}
+        mac: {type: [string, "null"]}
+        vendor: {type: [string, "null"]}
+        randomised_mac: {type: boolean}
+        hostname: {type: [string, "null"]}
+    ChildException:
+      type: object
+      required: [id, target, created_at, expires_at, created_by, remaining_s]
+      properties:
+        id: {type: string}
+        target: {type: string, enum: [youtube, roblox, maps, all]}
+        created_at: {type: string}
+        expires_at: {type: string}
+        created_by: {type: string}
+        remaining_s: {type: integer}
+    ChildStatus:
+      type: object
+      required: [state, open_services, open_until, opens_at, exceptions, policy_ok, dns_seen]
+      properties:
+        state: {type: string, enum: [open, closed, restricted], description: "open = YouTube and Roblox (or everything) open now; restricted = only one of them; closed = only the always-on baseline"}
+        open_services: {type: array, items: {type: string, enum: [youtube, roblox, maps, all]}}
+        open_until: {type: [string, "null"], description: "when the current open stretch ends (window end or exception end)"}
+        opens_at: {type: [string, "null"], description: "when it next opens (window start), if closed"}
+        exceptions: {type: array, items: {$ref: "#/components/schemas/ChildException"}}
+        last_query_at: {type: [string, "null"]}
+        queries_today: {type: [integer, "null"]}
+        blocked_today: {type: [integer, "null"]}
+        policy_ok: {type: boolean, description: "the rules block in AdGuard for this device is the one the model says it should be"}
+        dns_seen: {type: boolean, description: "queries of this device arrive at our resolvers (informational)"}
+    ChildSummary:
+      type: object
+      required: [id, name, icon, device_kind, identity, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        icon: {type: string}
+        device_kind: {type: string, enum: [phone, tablet, other]}
+        identity: {$ref: "#/components/schemas/ChildIdentity"}
+        status: {$ref: "#/components/schemas/ChildStatus"}
+    ChildGuardrails:
+      type: object
+      properties:
+        allowed_from: {type: string}
+        allowed_to: {type: string}
+        max_open_minutes_per_day: {type: integer}
+        max_exception_minutes: {type: integer}
+        exception_latest_end: {type: string}
+        all_latest_end: {type: string}
+        proposed: {type: boolean, description: "true while Ivan has not confirmed these numbers"}
+    ChildRule:
+      type: object
+      required: [id, days, start, end, opens]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        days: {type: array, items: {type: integer, minimum: 1, maximum: 7}}
+        start: {type: string}
+        end: {type: string, description: "HH:MM, or 24:00 for the end of the day"}
+        opens: {type: array, items: {type: string, enum: [youtube, roblox, maps]}, minItems: 1}
+    ChildWindows:
+      type: object
+      required: [child, version, tz, rules, guardrails, can_edit]
+      properties:
+        child: {type: string}
+        version: {type: integer}
+        tz: {type: string}
+        updated_at: {type: string}
+        rules: {type: array, items: {$ref: "#/components/schemas/ChildRule"}}
+        guardrails: {$ref: "#/components/schemas/ChildGuardrails"}
+        can_edit: {type: boolean}
+        changed: {type: boolean}
+    WindowsPreview:
+      type: object
+      required: [child, valid, problems]
+      properties:
+        child: {type: string}
+        current_version: {type: integer}
+        valid: {type: boolean}
+        problems: {type: array, items: {type: object, required: [code, field, message], properties: {code: {type: string}, field: {type: string}, message: {type: string}}}}
+        diff: {type: object}
+        open_next_7_days: {type: array, items: {type: object, required: [from, to, opens], properties: {from: {type: string}, to: {type: string}, opens: {type: array, items: {type: string}}}}}
+    DomainLists:
+      type: object
+      required: [allow, deny]
+      properties:
+        allow: {type: array, items: {type: string}}
+        deny: {type: array, items: {type: string}}
+    ChildDetail:
+      type: object
+      required: [id, name, icon, device_kind, identity, status, windows, exceptions, domains, can]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        icon: {type: string}
+        device_kind: {type: string, enum: [phone, tablet, other]}
+        identity: {$ref: "#/components/schemas/ChildIdentity"}
+        status: {$ref: "#/components/schemas/ChildStatus"}
+        windows: {$ref: "#/components/schemas/ChildWindows"}
+        exceptions: {type: array, items: {$ref: "#/components/schemas/ChildException"}}
+        domains: {$ref: "#/components/schemas/DomainLists"}
+        can:
+          type: object
+          required: [edit_windows, grant_exceptions, edit_domains, edit_guardrails, edit_filter_lists]
+          properties: {edit_windows: {type: boolean}, grant_exceptions: {type: boolean}, edit_domains: {type: boolean}, edit_guardrails: {type: boolean}, edit_filter_lists: {type: boolean}}
+        note: {type: string, description: "bedtime and screen-time cut-off live in the Mi WiFi app, outside this portal"}
+    ActivityRow:
+      type: object
+      required: [name, allowed, blocked, first, last, listed_by, threat, in_allow, in_deny]
+      properties:
+        name: {type: string}
+        allowed: {type: integer}
+        blocked: {type: integer}
+        first: {type: string}
+        last: {type: string}
+        listed_by: {type: [string, "null"], description: "the AdGuard list that already flags this name, else null (unknown to every list means nothing either way)"}
+        threat: {type: boolean}
+        in_allow: {type: boolean}
+        in_deny: {type: boolean}
+    Activity:
+      type: object
+      required: [child, range, rows, next_cursor, truncated, note, retention]
+      properties:
+        child: {type: string}
+        range: {type: string}
+        rows: {type: array, items: {$ref: "#/components/schemas/ActivityRow"}}
+        next_cursor: {type: [string, "null"]}
+        truncated: {type: boolean}
+        note: {type: string, description: "DNS shows domain names, not pages"}
+        retention: {type: object, required: [server, replica], properties: {server: {type: string}, replica: {type: string}}}
+    ParentalHealth:
+      type: object
+      required: [status, policy, snapshot, replica, lists, agh]
+      properties:
+        status: {type: string, enum: [ok, degraded]}
+        policy:
+          type: object
+          required: [expected_hash, applied_hash, in_sync]
+          properties: {expected_hash: {type: [string, "null"]}, applied_hash: {type: [string, "null"]}, in_sync: {type: boolean}, last_apply_at: {type: [string, "null"]}, source: {type: [string, "null"]}, last_apply_ok: {type: [boolean, "null"]}}
+        snapshot: {type: object, properties: {checksum: {type: [string, "null"]}, age_s: {type: [integer, "null"]}}}
+        replica: {type: object, properties: {sync_status: {type: [string, "null"]}, sync_age_s: {type: [integer, "null"]}, parity: {type: string, enum: [ok, mismatch, unknown]}}}
+        lists: {type: object, properties: {count: {type: integer}, oldest_updated: {type: [string, "null"]}, stale: {type: boolean}}}
+        agh: {type: object, properties: {reachable: {type: boolean}}}
+    FilterList:
+      type: object
+      required: [id, name, url, enabled, rules_count]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        url: {type: string}
+        enabled: {type: boolean}
+        rules_count: {type: integer}
+        last_updated: {type: [string, "null"]}
+    CatalogueItem:
+      type: object
+      required: [catalogue_id, name, url]
+      properties: {catalogue_id: {type: string}, name: {type: string}, description: {type: string}, url: {type: string}}
+    FilterStep:
+      type: object
+      required: [name, ok]
+      properties: {name: {type: string}, ok: {type: boolean}, detail: {type: string}}
+    FilterListChange:
+      type: object
+      required: [id, at, by, action, result, steps]
+      properties:
+        id: {type: string}
+        at: {type: string}
+        by: {type: string}
+        action: {type: string, enum: [add, remove, enable, disable, rename, refresh, revert]}
+        list_id: {type: [integer, "null"]}
+        list_name: {type: [string, "null"]}
+        result: {type: string, enum: [applied, reverted, held, failed]}
+        steps: {type: array, items: {$ref: "#/components/schemas/FilterStep"}}
+        reason: {type: [string, "null"]}
+    FilterListsView:
+      type: object
+      required: [lists, limits, history]
+      properties:
+        lists: {type: array, items: {$ref: "#/components/schemas/FilterList"}}
+        limits: {type: object, properties: {max_rules: {type: integer}, hard_cap_rules: {type: integer}, change_percent: {type: integer}}}
+        history: {type: array, items: {$ref: "#/components/schemas/FilterListChange"}}
+    FilterChangeResult:
+      type: object
+      required: [result, change]
+      properties:
+        result: {type: string, enum: [applied, reverted, held]}
+        change: {$ref: "#/components/schemas/FilterListChange"}
+        list: {oneOf: [{type: "null"}, {$ref: "#/components/schemas/FilterList"}]}
+        hold_reason: {type: [string, "null"]}
         replayed: {type: boolean}
     Vacuum:
       type: object

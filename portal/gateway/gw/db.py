@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS device_meta(device_id TEXT PRIMARY KEY, kind TEXT NOT
 CREATE TABLE IF NOT EXISTS icon_rules(keyword TEXT PRIMARY KEY, icon TEXT NOT NULL, priority INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS service_tiles(id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT NOT NULL, url TEXT NOT NULL, probe TEXT NOT NULL, visible_to TEXT NOT NULL, position INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS vacuum_runs(vacuum_id TEXT PRIMARY KEY, scenario TEXT, started REAL, person TEXT, last_result TEXT, last_result_ts REAL);
+CREATE TABLE IF NOT EXISTS filter_changes(
+  id TEXT PRIMARY KEY, at REAL NOT NULL, by TEXT, action TEXT NOT NULL, list_id INTEGER, list_name TEXT, result TEXT NOT NULL, steps TEXT, reason TEXT,
+  snapshot TEXT, finished REAL);
 CREATE TABLE IF NOT EXISTS audit(
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, person TEXT, phone TEXT, action TEXT NOT NULL, target TEXT, before TEXT, after TEXT,
   ok INTEGER NOT NULL, ip TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL);

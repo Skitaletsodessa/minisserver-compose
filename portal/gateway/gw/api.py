@@ -36,8 +36,9 @@ def err_response(e):
 
 
 class App:
-    def __init__(self, db, people, core, hub, sched, ha, clock=time.time):
+    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None):
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
+        self.parental, self.filters = parental, filters
         self.bad = defaultdict(deque)                    # failed bearer attempts per address
 
     # ── principal ─────────────────────────────────────────────────────────────
@@ -126,7 +127,8 @@ class App:
         return JSONResponse({"status": status, "version": config.VERSION, "data_checksum": self.db.checksum(), "ha": ha,
                              "schedule_service": {"link": sh["link"], "in_sync": sh.get("in_sync")},
                              "probes": {"last_run_age_s": round(self.clock() - self.core.probe_ts, 1) if self.core.probe_ts else None},
-                             "audit_chain": {"ok": ok, "rows": rows}})
+                             "audit_chain": {"ok": ok, "rows": rows},
+                             "filter_reverts": self.filters.recent_reverts() if self.filters else []})
 
     async def login(self, request):
         b = await self.body(request)
@@ -476,8 +478,254 @@ class App:
         about = None if p["role"] == "admin" else p["person_id"]
         return JSONResponse({"audit": self.db.audit_rows(limit, before, qp.get("action"), qp.get("person") if p["role"] == "admin" else None, qp.get("device") if p["role"] == "admin" else None, about)})
 
-    async def parental(self, request):
-        raise GwError(404, "not_implemented", "the parental-control API is planned for the next step", {"status": "planned"})
+    # ── parental control (Task 29 Part 2): the module owns no data, see parental.py ──
+    def _pm(self):
+        if not self.parental:
+            raise GwError(404, "not_available", "the parental-control module is not configured")
+        return self.parental
+
+    def _paudit(self, p, action, target, after=None, ok=True):
+        self.db.audit(action, person=p["person_id"], phone=p.get("phone_id"), target=target, after=after, ok=ok, ip=p.get("ip"))
+
+    @staticmethod
+    def _rules_body(b):
+        if not isinstance(b, dict) or set(b) != {"rules"} or not isinstance(b["rules"], list):
+            raise GwError(400, "bad_body", "an object with 'rules' (a list) is required")
+        for r in b["rules"]:
+            if (not isinstance(r, dict) or set(r) != {"id", "days", "start", "end", "opens"} or not isinstance(r["id"], str) or not isinstance(r["days"], list)
+                    or not isinstance(r["start"], str) or not isinstance(r["end"], str)
+                    or not isinstance(r["opens"], list) or not r["opens"] or any(o not in ("youtube", "roblox", "maps") for o in r["opens"])):
+                raise GwError(400, "bad_body", "every rule needs id, days, start, end and opens (youtube, roblox, maps)")
+        return b
+
+    async def p_children(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._pm().children(p))
+
+    async def p_child(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._pm().child(p, request.path_params["id"]))
+
+    async def p_windows_get(self, request):
+        p = self.authenticate(request, csrf=False)
+        js, etag = await self._pm().windows_get(p, request.path_params["id"])
+        return JSONResponse(js, headers={"ETag": etag})
+
+    async def p_windows_put(self, request):
+        p = self.authenticate(request)
+        cid = request.path_params["id"]
+        im = request.headers.get("if-match")
+        if im is None:
+            raise GwError(428, "precondition_required", "send If-Match with the ETag you read")
+        raw = await request.body()
+        b = self._rules_body(jload(raw))
+
+        async def go():
+            try:
+                js, etag = await self._pm().windows_put(p, cid, b, im)
+            except GwError as e:
+                self._paudit(p, "parental_windows_put", cid, {"error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_windows_put", cid, {"version": js["version"], "changed": js.get("changed")})
+            return 200, {"__etag": etag, **js}
+        st, body = await self.idem(request, p, "par.win:" + cid, go, required=False, body_bytes=raw)
+        etag = body.pop("__etag", None) if isinstance(body, dict) else None
+        return JSONResponse(body, status_code=st, headers={"ETag": etag or '"%s"' % body.get("version")})
+
+    async def p_windows_preview(self, request):
+        p = self.authenticate(request)
+        b = self._rules_body(jload(await request.body()))
+        return JSONResponse(await self._pm().windows_preview(p, request.path_params["id"], b))
+
+    async def p_windows_undo(self, request):
+        p = self.authenticate(request)
+        cid = request.path_params["id"]
+
+        async def go():
+            try:
+                js, etag = await self._pm().windows_undo(p, cid)
+            except GwError as e:
+                self._paudit(p, "parental_windows_undo", cid, {"error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_windows_undo", cid, {"version": js["version"]})
+            return 200, {"__etag": etag, **js}
+        st, body = await self.idem(request, p, "par.winundo:" + cid, go, required=False)
+        etag = body.pop("__etag", None) if isinstance(body, dict) else None
+        return JSONResponse(body, status_code=st, headers={"ETag": etag or '"%s"' % body.get("version")})
+
+    async def p_exceptions_list(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._pm().exceptions_list(p, request.path_params["id"]))
+
+    async def p_exception_grant(self, request):
+        p = self.authenticate(request)
+        cid = request.path_params["id"]
+        raw = await request.body()
+        b = jload(raw)
+        if (set(b) - {"target", "minutes", "until_end_of_day"} or b.get("target") not in ("youtube", "roblox", "maps", "all")
+                or ("minutes" in b and (isinstance(b["minutes"], bool) or not isinstance(b["minutes"], int) or b["minutes"] < 1))
+                or ("until_end_of_day" in b and not isinstance(b["until_end_of_day"], bool))):
+            raise GwError(400, "bad_body", "target (youtube, roblox, maps, all) and minutes or until_end_of_day are required")
+
+        async def go():
+            try:
+                x = await self._pm().exception_grant(p, cid, b)
+            except GwError as e:
+                self._paudit(p, "parental_exception_grant", cid, {"target": b["target"], "error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_exception_grant", cid, {"target": b["target"], "expires_at": x["expires_at"], "id": x["id"]})
+            return 201, x
+        st, body = await self.idem(request, p, "par.xadd:" + cid, go, body_bytes=raw)
+        return JSONResponse(body, status_code=st)
+
+    async def p_exception_cancel(self, request):
+        p = self.authenticate(request)
+        cid, xid = request.path_params["id"], request.path_params["xid"]
+
+        async def go():
+            try:
+                await self._pm().exception_cancel(p, cid, xid)
+            except GwError as e:
+                self._paudit(p, "parental_exception_cancel", cid, {"id": xid, "error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_exception_cancel", cid, {"id": xid})
+            return 204, None
+        await self.idem(request, p, "par.xdel:" + xid, go)
+        return Response(status_code=204)
+
+    async def p_activity(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._pm().activity(p, request.path_params["id"], request.query_params))
+
+    async def p_domains_get(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._pm().domains_get(p, request.path_params["id"]))
+
+    async def p_domain_add(self, request):
+        p = self.authenticate(request)
+        cid = request.path_params["id"]
+        raw = await request.body()
+        b = jload(raw)
+        if set(b) != {"kind", "domain"} or b["kind"] not in ("allow", "deny") or not isinstance(b["domain"], str) or len(b["domain"]) > 253:
+            raise GwError(400, "bad_body", "kind (allow or deny) and domain are required")
+
+        async def go():
+            try:
+                js = await self._pm().domain_add(p, cid, b)
+            except GwError as e:
+                self._paudit(p, "parental_domain_add", cid, {"kind": b["kind"], "domain": b["domain"][:120], "error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_domain_add", cid, {"kind": b["kind"], "domain": b["domain"][:120]})
+            return 200, js
+        st, body = await self.idem(request, p, "par.dadd:" + cid, go, body_bytes=raw)
+        return JSONResponse(body, status_code=st)
+
+    async def p_domain_remove(self, request):
+        p = self.authenticate(request)
+        cid = request.path_params["id"]
+        kind, domain = request.query_params.get("kind"), request.query_params.get("domain")
+        if kind not in ("allow", "deny") or not domain or len(domain) > 253:
+            raise GwError(400, "bad_query", "kind (allow or deny) and domain are required")
+
+        async def go():
+            try:
+                js = await self._pm().domain_remove(p, cid, kind, domain)
+            except GwError as e:
+                self._paudit(p, "parental_domain_remove", cid, {"kind": kind, "domain": domain[:120], "error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_domain_remove", cid, {"kind": kind, "domain": domain[:120]})
+            return 200, js
+        st, body = await self.idem(request, p, "par.ddel:" + cid, go)
+        return JSONResponse(body, status_code=st)
+
+    async def p_domain_undo(self, request):
+        p = self.authenticate(request)
+        cid = request.path_params["id"]
+
+        async def go():
+            try:
+                js = await self._pm().domain_undo(p, cid)
+            except GwError as e:
+                self._paudit(p, "parental_domain_undo", cid, {"error": e.code}, ok=False)
+                raise
+            self._paudit(p, "parental_domain_undo", cid)
+            return 200, js
+        st, body = await self.idem(request, p, "par.dundo:" + cid, go)
+        return JSONResponse(body, status_code=st)
+
+    async def p_health(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._pm().health(p))
+
+    # filter lists: admin only (and a parent)
+    def _fl(self, p):
+        self._pm()._need(p, admin=True)
+        if not self.filters:
+            raise GwError(404, "not_available", "the filter-list module is not configured")
+        return self.filters
+
+    async def fl_list(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._fl(p).view())
+
+    async def fl_catalogue(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._fl(p).catalogue())
+
+    async def _fl_change(self, request, p, route, fn, raw=b""):
+        async def go():
+            return 200, await fn()
+        st, body = await self.idem(request, p, route, go, body_bytes=raw)
+        return JSONResponse(body, status_code=st)
+
+    async def fl_add(self, request):
+        p = self.authenticate(request)
+        f = self._fl(p)
+        raw = await request.body()
+        b = jload(raw)
+        if (set(b) - {"catalogue_id", "url", "name", "confirm_large"} or any(k in b and not isinstance(b[k], str) for k in ("catalogue_id", "url", "name"))
+                or ("confirm_large" in b and not isinstance(b["confirm_large"], bool))):
+            raise GwError(400, "bad_body", "catalogue_id or url (and name, confirm_large) are required")
+        return await self._fl_change(request, p, "fl.add", lambda: f.add(p, b), raw)
+
+    async def fl_patch(self, request):
+        p = self.authenticate(request)
+        f = self._fl(p)
+        lid = self._list_id(request)
+        raw = await request.body()
+        b = jload(raw)
+        if not b or set(b) - {"enabled", "name"} or ("enabled" in b and not isinstance(b["enabled"], bool)) or ("name" in b and not isinstance(b["name"], str)):
+            raise GwError(400, "bad_body", "enabled (true/false) and/or name are required")
+        return await self._fl_change(request, p, "fl.patch:%d" % lid, lambda: f.patch(p, lid, b), raw)
+
+    async def fl_remove(self, request):
+        p = self.authenticate(request)
+        f = self._fl(p)
+        lid = self._list_id(request)
+        return await self._fl_change(request, p, "fl.del:%d" % lid, lambda: f.remove(p, lid))
+
+    async def fl_refresh(self, request):
+        p = self.authenticate(request)
+        f = self._fl(p)
+        lid = self._list_id(request)
+        raw = await request.body()
+        b = jload(raw)
+        if set(b) - {"confirm"} or ("confirm" in b and not isinstance(b["confirm"], bool)):
+            raise GwError(400, "bad_body", "only confirm (true/false) is accepted")
+        return await self._fl_change(request, p, "fl.refresh:%d" % lid, lambda: f.refresh(p, lid, bool(b.get("confirm"))), raw)
+
+    async def fl_revert(self, request):
+        p = self.authenticate(request)
+        f = self._fl(p)
+        lid = self._list_id(request)
+        return await self._fl_change(request, p, "fl.revert:%d" % lid, lambda: f.revert(p, lid))
+
+    @staticmethod
+    def _list_id(request):
+        try:
+            return int(request.path_params["id"])
+        except ValueError:
+            raise GwError(404, "not_found", "no such list")
 
     # ── events ────────────────────────────────────────────────────────────────
     async def events(self, request):
@@ -555,7 +803,28 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/services", a.services, methods=["GET"]),
         Route("/v1/events", a.events, methods=["GET"]),
         Route("/v1/audit", a.audit, methods=["GET"]),
-        Route("/v1/parental/{rest:path}", a.parental, methods=["GET", "POST", "PUT", "DELETE", "PATCH"]),
+        Route("/v1/parental/children", a.p_children, methods=["GET"]),
+        Route("/v1/parental/children/{id}", a.p_child, methods=["GET"]),
+        Route("/v1/parental/children/{id}/windows", a.p_windows_get, methods=["GET"]),
+        Route("/v1/parental/children/{id}/windows", a.p_windows_put, methods=["PUT"]),
+        Route("/v1/parental/children/{id}/windows/preview", a.p_windows_preview, methods=["POST"]),
+        Route("/v1/parental/children/{id}/windows/undo", a.p_windows_undo, methods=["POST"]),
+        Route("/v1/parental/children/{id}/exceptions", a.p_exceptions_list, methods=["GET"]),
+        Route("/v1/parental/children/{id}/exceptions", a.p_exception_grant, methods=["POST"]),
+        Route("/v1/parental/children/{id}/exceptions/{xid}", a.p_exception_cancel, methods=["DELETE"]),
+        Route("/v1/parental/children/{id}/activity", a.p_activity, methods=["GET"]),
+        Route("/v1/parental/children/{id}/domains", a.p_domains_get, methods=["GET"]),
+        Route("/v1/parental/children/{id}/domains", a.p_domain_add, methods=["POST"]),
+        Route("/v1/parental/children/{id}/domains", a.p_domain_remove, methods=["DELETE"]),
+        Route("/v1/parental/children/{id}/domains/undo", a.p_domain_undo, methods=["POST"]),
+        Route("/v1/parental/health", a.p_health, methods=["GET"]),
+        Route("/v1/parental/filter-lists", a.fl_list, methods=["GET"]),
+        Route("/v1/parental/filter-lists", a.fl_add, methods=["POST"]),
+        Route("/v1/parental/filter-lists/catalogue", a.fl_catalogue, methods=["GET"]),
+        Route("/v1/parental/filter-lists/{id}", a.fl_patch, methods=["PATCH"]),
+        Route("/v1/parental/filter-lists/{id}", a.fl_remove, methods=["DELETE"]),
+        Route("/v1/parental/filter-lists/{id}/refresh", a.fl_refresh, methods=["POST"]),
+        Route("/v1/parental/filter-lists/{id}/revert", a.fl_revert, methods=["POST"]),
     ] + list(extra_routes)
 
     async def gw_error(request, exc):

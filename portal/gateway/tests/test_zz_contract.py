@@ -17,7 +17,7 @@ class Coverage(unittest.TestCase):
 
     def test_planned_paths_are_marked_planned_and_nothing_else_is(self):
         planned = [p for p, item in helpers.SPEC["paths"].items() for op in item.values() if isinstance(op, dict) and op.get("x-status") == "planned"]
-        self.assertEqual(planned, ["/v1/parental/{rest}"])
+        self.assertEqual(planned, [])                      # Task 29: the parental module is real now
 
 
 if __name__ == "__main__":

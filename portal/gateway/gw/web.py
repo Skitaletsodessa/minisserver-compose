@@ -138,7 +138,15 @@ def routes(app):
             return r
         if not p["parent"]:
             return page(request, "message.html", status=403, me=p, title=S["nav_parental"], text="403")
-        return page(request, "message.html", me=p, title=S["parental_soon"], text=S["parental_body"], nav_active="parental")
+        return page(request, "parental.html", me=p, nav_active="parental")
+
+    async def parental_filters(request):
+        p, r = me_or_redirect(request)
+        if r:
+            return r
+        if not p["parent"] or p["role"] != "admin":
+            return page(request, "message.html", status=403, me=p, title=S["par_f_title"], text="403")
+        return page(request, "parental_filters.html", me=p, nav_active="parental")
 
     async def setup_get(request):
         raw = request.path_params["token"]
@@ -178,6 +186,6 @@ def routes(app):
         Route("/", root, methods=["GET"]), Route("/login", login_get, methods=["GET"]), Route("/login", login_post, methods=["POST"]),
         Route("/logout", logout_post, methods=["POST"]), Route("/home", home, methods=["GET"]), Route("/settings/{id}", settings, methods=["GET"]),
         Route("/services", services, methods=["GET"]), Route("/people", people, methods=["GET"]), Route("/audit", audit, methods=["GET"]),
-        Route("/parental", parental, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
+        Route("/parental", parental, methods=["GET"]), Route("/parental/filters", parental_filters, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
         Route("/static/{path:path}", static, methods=["GET"]),
     ]

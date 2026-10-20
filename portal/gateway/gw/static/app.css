@@ -78,3 +78,16 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
 .run-line { margin: 8px 0 4px; font-weight: 600; }
 .presets { margin-top: 8px; }
 .presets button { min-height: 44px; }
+
+/* parental control (Task 29) */
+.par-state { margin: 0; font-weight: 700; }
+.par-state.s-open { color: var(--on); }
+.par-state.s-restricted { color: var(--warn); }
+.par-state.s-closed { color: var(--off); }
+.meta.bad { color: var(--err); }
+.par-sect { margin: 12px 0; }
+.par-sect h3 { margin: .8em 0 .3em; font-size: 1rem; }
+.exc { align-items: center; justify-content: space-between; }
+label.inline { flex-direction: row; align-items: center; gap: 8px; }
+select { min-height: 48px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+#fl-history li { margin: 6px 0; }

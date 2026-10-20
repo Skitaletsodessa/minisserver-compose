@@ -1,0 +1,15 @@
+{
+  "_about": "Probe data of the filter-list safety net (Task 29). must_resolve: names the house really depends on, built from AdGuard's 30-day top-queried list (connectivity checks of Android/Apple/Windows/Firefox/MIUI, the mesh router's cloud, cameras, NTP, Google/Facebook sign-in) plus example.org (a harmless CANARY: the failing-list proof blocks only this name, so a deliberate failure can never hurt the house) plus the infrastructure this server needs (Tailscale control plane, Telegram API, DoH upstreams, Docker/GHCR/GitHub, Debian mirrors, Cloudflare) and the Czech banks and O2. Only names that resolve BEFORE a change are required to resolve AFTER it, so a name that was already blocked never fails a change by itself. The live top-queried names (minus anything already blocked and the harness test names) are added at probe time. sentinels: names that must stay blocked - only those blocked by some list OTHER than the one being removed or disabled count.",
+  "must_resolve": [
+    "controlplane.tailscale.com", "login.tailscale.com", "log.tailscale.com", "api.telegram.org", "core.telegram.org",
+    "cloudflare-dns.com", "dns.quad9.net", "registry-1.docker.io", "auth.docker.io", "ghcr.io", "github.com", "api.github.com", "raw.githubusercontent.com",
+    "deb.debian.org", "security.debian.org", "www.cloudflare.com", "relay.ivandeliver.email",
+    "connectivitycheck.gstatic.com", "www.google.com", "accounts.google.com", "mail.google.com", "play.googleapis.com", "www.gstatic.com",
+    "www.msftconnecttest.com", "captive.apple.com", "www.apple.com", "detectportal.firefox.com", "connectivitycheck.platform.hicloud.com", "connect.rom.miui.com",
+    "eu.api.miwifi.com", "api.miwifi.com", "eudevapi.ezvizlife.com", "0.pool.ntp.org", "2.pool.ntp.org", "claude.ai", "api.anthropic.com", "graph.facebook.com",
+    "example.org", "www.o2.cz", "www.csas.cz", "www.kb.cz", "www.csob.cz", "www.moneta.cz", "www.fio.cz", "www.airbank.cz", "www.seznam.cz", "www.sreality.cz"
+  ],
+  "sentinels": ["doubleclick.net", "googleads.g.doubleclick.net", "app-measurement.com", "www.googletagmanager.com", "babyglee-all.xyz"],
+  "child_check": {"always_on": "api.telegram.org", "never_allowed": "never-allowed.example.net"},
+  "skip_dynamic": ["test", "probe", "dnssec-failed", "in-addr.arpa", "ip6.arpa", "example.com", "example.org", "example.net"]
+}

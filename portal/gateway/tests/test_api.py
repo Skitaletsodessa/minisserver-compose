@@ -57,17 +57,17 @@ class Basics(Base):
         self.assertEqual(iv["tabs"], ["home", "parental"])
         self.assertEqual(da["tabs"], ["home", "parental"])
         self.assertEqual(ol["tabs"], ["home"])                              # no parent flag: no parental tab
-        self.assertEqual(iv["modules"], {"parental": False, "cameras": False})
+        self.assertEqual(iv["modules"], {"parental": True, "cameras": False})
         self.assertEqual((iv["limits"]["max_devices_total"], iv["limits"]["max_devices_per_person"]), (20, 5))
         self.assertTrue(iv["can"]["manage_people"])
         self.assertFalse(da["can"]["manage_people"])
         self.assertFalse(ol["can"]["switch"])
         self.assertEqual(da["person"], {"id": "dasha", "name": "Dasha", "role": "household", "parent": True})
 
-    def test_the_parental_namespace_is_reserved_and_not_implemented(self):
+    def test_the_parental_namespace_has_only_the_documented_paths(self):
         for who in ("ivan", "dasha"):
-            r = self.e.req("GET", "/v1/parental/devices", who=who)
-            self.assertEqual((r.status_code, r.json()["error"]["code"]), (404, "not_implemented"))
+            r = self.e.req("GET", "/v1/parental/devices", who=who, validate=False)
+            self.assertEqual((r.status_code, r.json()["error"]["code"]), (404, "not_found"))
 
     def test_unknown_endpoint_and_bad_json_have_the_error_shape(self):
         r = self.e.req("GET", "/v1/nothing", who="ivan", validate=False)

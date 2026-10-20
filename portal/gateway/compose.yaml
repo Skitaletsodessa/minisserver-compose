@@ -22,6 +22,11 @@ services:
     volumes:
       - /srv/apps/portal/gateway:/data
       - /srv/apps/portal/gateway-secrets:/secrets:ro
+      # Task 29 Part 2 - the parental module. The AdGuard admin password is the SAME file the policy job reads (one source of truth), mounted read-only. It is a single-file
+      # bind mount: change the password IN PLACE (never mv/cp over it) or recreate this container, otherwise the gateway keeps the old inode and AdGuard answers 401.
+      - /home/skit/adguard-admin-password.txt:/secrets-agh/password:ro
+      - /var/lib/adguard-parity:/ro/adguard-parity:ro
+      - /usr/share/ieee-data:/ro/ieee-data:ro
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid,nodev

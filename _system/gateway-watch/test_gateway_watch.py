@@ -80,5 +80,17 @@ check("broken audit chain: tier A at once", ("gateway-audit-chain", "A") in n.al
 n, _ = run(full=None)
 check("authenticated health unavailable (None): no false alarm", n.alerts() == [])
 
+rv = {"id": "f123", "at": "2026-10-20T22:00:00+0200", "action": "add", "list_name": "Bad list", "reason": "probe failed: example.org is blocked now"}
+n, st = run(full=dict(HEALTH, filter_reverts=[rv]))
+check("a reverted filter-list change: ONE tier-B message naming the list and the reason", n.alerts() == [("gateway-filter-revert-f123", "B")])
+n, st = run(state=st, full=dict(HEALTH, filter_reverts=[rv]))
+check("the same revert is not announced again", n.alerts() == [])
+n, st = run(state=st, full=dict(HEALTH, filter_reverts=[rv, dict(rv, id="f124")]))
+check("a second revert is announced on its own", n.alerts() == [("gateway-filter-revert-f124", "B")])
+n, st = run(state=st, full=dict(HEALTH, filter_reverts=[]))
+check("reverts older than 48 h leave the list: both cleared", ("clear", "gateway-filter-revert-f123") in n.calls and ("clear", "gateway-filter-revert-f124") in n.calls and st["fl_alerted"] == [])
+n, _ = run(full=dict(HEALTH))
+check("a gateway that does not report reverts (older build): no alert", n.alerts() == [])
+
 print("\n%d failed" % len(FAILS))
 sys.exit(1 if FAILS else 0)

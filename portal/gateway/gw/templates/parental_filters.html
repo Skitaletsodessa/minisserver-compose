@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ t('par_f_title') }}{% endblock %}
+{% block head %}<script src="/static/parental.js" defer></script>{% endblock %}
+{% block body %}
+<h1>{{ t('par_f_title') }}</h1>
+<p><a href="/parental">{{ t('par_back') }}</a></p>
+<p class="meta">{{ t('par_f_hint') }}</p>
+<div id="par-root" data-mode="filters"><p class="meta">{{ t('par_loading') }}</p></div>
+{% endblock %}

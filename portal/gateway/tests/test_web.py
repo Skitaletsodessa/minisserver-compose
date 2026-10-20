@@ -92,7 +92,7 @@ class Web(BaseCase):
         self.assertEqual(r.status_code, 403)
 
     def test_pages_need_a_session(self):
-        for p in ("/home", "/services", "/people", "/audit", "/parental", "/settings/plant_rack1"):
+        for p in ("/home", "/services", "/people", "/audit", "/parental", "/parental/filters", "/settings/plant_rack1"):
             r = self.e.client.get(p, follow_redirects=False)
             self.assertEqual((r.status_code, r.headers["location"]), (303, "/login"), p)
 
@@ -117,7 +117,7 @@ class Web(BaseCase):
 
     def test_every_html_page_has_no_inline_script_no_inline_style_and_no_external_resource(self):
         ck = self.cookie(self.login())
-        pages = ["/login", "/home", "/services", "/people", "/audit", "/parental", "/settings/plant_rack1", "/settings/vacuum_bedroom"]
+        pages = ["/login", "/home", "/services", "/people", "/audit", "/parental", "/parental/filters", "/settings/plant_rack1", "/settings/vacuum_bedroom"]
         for p in pages:
             r = self.get(p, ck if p != "/login" else None)
             self.assertEqual(r.status_code, 200, p)
@@ -171,15 +171,43 @@ class Web(BaseCase):
         self.assertNotIn('href="/people"', self.get("/home", ck).text)
         self.assertEqual(self.get("/home", ck).status_code, 200)
 
-    def test_parental_tab_only_for_parents_and_it_is_a_placeholder(self):
+    def test_parental_pages_only_for_parents_and_the_filter_page_only_for_the_admin(self):
         ck = self.cookie(self.login("marta", ip="5.5.5.11"))
         r = self.get("/parental", ck)
         self.assertEqual(r.status_code, 200)
-        self.assertIn("появится в следующем шаге", r.text)
-        self.assertIn("Сейчас это только заготовка", r.text)
+        self.assertIn('id="par-root" data-mode="children"', r.text)
+        self.assertIn('src="/static/parental.js"', r.text)
+        self.assertIn("Mi WiFi", r.text)                                                   # bedtime lives in the router app: a one-line note, no integration
+        self.assertNotIn('href="/parental/filters"', r.text)                               # household: no link to the admin page
+        self.assertEqual(self.get("/parental/filters", ck).status_code, 403)
         ck2 = self.cookie(self.login("kid-sitter", ip="5.5.5.12"))
         self.assertEqual(self.get("/parental", ck2).status_code, 403)
+        self.assertEqual(self.get("/parental/filters", ck2).status_code, 403)
         self.assertNotIn('href="/parental"', self.get("/home", ck2).text)
+        ck3 = self.cookie(self.login("webadmin", ip="5.5.5.13"))
+        r = self.get("/parental", ck3)
+        self.assertIn('href="/parental/filters"', r.text)
+        r = self.get("/parental/filters", ck3)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('id="par-root" data-mode="filters"', r.text)
+
+    def test_the_parental_script_is_served_and_builds_the_page_without_innerhtml(self):
+        r = self.e.client.get("/static/parental.js")
+        self.assertEqual((r.status_code, r.headers["content-type"].split(";")[0]), (200, "text/javascript"))
+        self.assertNotIn("innerHTML", r.text)                                              # everything from the server goes in as text
+        self.assertNotIn("eval(", r.text)
+        from gw.strings import S
+        used = set(re.findall(r'\bT\("([a-z0-9_]+)"', r.text)) | set(re.findall(r'\[[0-9]+, "(par_[a-z0-9_]+)"\]', r.text))
+        used = {k for k in used if not k.endswith("_")}                                  # T("par_state_" + s): the dynamic ones are checked below
+        self.assertGreater(len(used), 40)
+        self.assertEqual(sorted(k for k in used if k not in S), [], "strings the page uses but the table lacks")
+        dynamic = {"par_state_": ["open", "closed", "restricted"], "par_target_": ["youtube", "roblox", "maps", "all"],
+                   "par_f_step_": ["validate", "apply", "probe", "replica", "parity", "revert", "probe_after_revert", "hold", "internal"],
+                   "par_f_act_": ["add", "remove", "enable", "disable", "rename", "refresh", "revert"], "par_f_res_": ["applied", "reverted", "held", "failed", "running"]}
+        for prefix, suffixes in dynamic.items():
+            self.assertIn('T("%s" +' % prefix, r.text)
+            for s in suffixes:
+                self.assertIn(prefix + s, S)
 
     def test_people_page_lists_people_and_phones_for_the_admin(self):
         r = self.get("/people", self.cookie(self.login()))

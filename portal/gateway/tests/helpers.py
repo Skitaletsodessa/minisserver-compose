@@ -1,4 +1,6 @@
 """Test environment: gateway app + fake HA + the real schedule service, device tokens for three synthetic people, contract validation."""
+import asyncio
+import json
 import os
 import re
 import sys
@@ -15,6 +17,7 @@ sys.path.insert(0, HERE)
 import httpx  # noqa: E402
 from gw import server, auth  # noqa: E402
 from fakes import FakeHA, SchedHarness, ServerThread, HA_TOKEN, free_port  # noqa: E402
+from fakeagh import FakeAgh, FakeDns, AGH_PASSWORD  # noqa: E402
 
 SPEC = yaml.safe_load(open(os.path.join(ROOT, "openapi.yaml"), encoding="utf-8"))
 PASSWORD = "correct horse battery staple 42"
@@ -63,8 +66,33 @@ class Env:
             f.write(HA_TOKEN + "\n")
         os.chmod(self.ha_token, 0o600)
         self.data = os.path.join(self.tmp, "data")
+        # AdGuard (Task 29 Part 2): a fake control API + fake DNS, a parity-state file the "checker" touches while parity_runs is set, a tiny OUI file
+        self.agh = FakeAgh(self.tmp).start()
+        self.agh.child_ips = {"192.168.31.60", "192.168.31.61"}
+        self.dns = FakeDns(self.agh)
+        self.parity = os.path.join(self.tmp, "parity-state.json")
+        self.parity_streak = {}
+        self.parity_runs = True
+        self._write_parity(time.time() - 600)
+        self.oui = os.path.join(self.tmp, "oui.txt")
+        with open(self.oui, "w") as f:
+            f.write("20-36-D0   (hex)\t\tTest Vendor Inc\n")
+        self.fetch_contents = {}                            # url -> text the gateway's own validation download returns (missing = unreachable)
+
+        def fetch(url):
+            from gw.filterlists import Refused
+            if url not in self.fetch_contents:
+                raise Refused(422, "unreachable", "the list could not be downloaded")
+            return self.fetch_contents[url]
+
+        async def sleep(_s):
+            if self.parity_runs:                            # the 5-minute checker "runs" while the gateway waits
+                self._write_parity(time.time())
+            await asyncio.sleep(0.01)
         self.app = server.make(data_dir=self.data, ha_url=self.ha.url, ha_token_file=self.ha_token, sched_url=self.sched.url,
-                               sched_admin=self.sched.admin_file, sched_household=self.sched.house_file, start_background=background)
+                               sched_admin=self.sched.admin_file, sched_household=self.sched.house_file, start_background=background,
+                               agh_url=self.agh.url, agh_password_file=self.agh.password_file, parity_state=self.parity, oui_file=self.oui,
+                               filter_opts={"fetch": fetch, "dns": self.dns, "sleep": sleep, "poll_s": 0.01, "replica_wait_s": 0.3, "parity_wait_s": 0.5})
         self.o = self.app.state.objs
         self.db, self.people, self.core, self.hub, self.haclient = self.o["db"], self.o["people"], self.o["core"], self.o["hub"], self.o["ha"]
         if not probes:                                       # probes would talk to the real network of the machine running the tests
@@ -141,12 +169,18 @@ class Env:
             for s in secrets + (seeds if name == "audit.jsonl" else []):
                 assert s.encode() not in blob, "a secret appears in %s" % name
 
+    def _write_parity(self, mtime):
+        with open(self.parity, "w") as f:
+            json.dump({"threat_domain": "babyglee-all.xyz", "streak": self.parity_streak, "alerted": []}, f)
+        os.utime(self.parity, (mtime, mtime))
+
     def close(self):
         self.assert_no_secrets()
         self.client.close()
         self.srv.stop()
         self.ha.stop()
         self.sched.stop()
+        self.agh.stop()
 
 
 import unittest  # noqa: E402

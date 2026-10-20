@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <script type="application/json" id="i18n">{{ i18n_json|safe }}</script>
 <script src="/static/app.js" defer></script>
+{% block head %}{% endblock %}
 </head>
 <body data-page="{{ nav_active }}">
 {% if me %}
