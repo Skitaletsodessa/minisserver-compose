@@ -11,11 +11,11 @@
       target:
         entity_id: "switch.bathroom_towels"
 - id: "sch_bathroom_towels_morning_off"
-  alias: "Sch bathroom_towels morning OFF 06:32 [sch 2ab68061]"
+  alias: "Sch bathroom_towels morning OFF 08:00 [sch 4011f381]"
   mode: "single"
   trigger:
     - platform: "time"
-      at: "06:32:00"
+      at: "08:00:00"
   condition: []
   action:
     - service: "switch.turn_off"
@@ -33,18 +33,18 @@
       target:
         entity_id: "switch.bathroom_towels"
 - id: "sch_bathroom_towels_evening_off"
-  alias: "Sch bathroom_towels evening OFF 18:32 [sch 9240fc8e]"
+  alias: "Sch bathroom_towels evening OFF 20:00 [sch 063c8682]"
   mode: "single"
   trigger:
     - platform: "time"
-      at: "18:32:00"
+      at: "20:00:00"
   condition: []
   action:
     - service: "switch.turn_off"
       target:
         entity_id: "switch.bathroom_towels"
 - id: "sch_bathroom_towels_failsafe"
-  alias: "Sch bathroom_towels fail-safe OFF after 2 min [sch c252906a]"
+  alias: "Sch bathroom_towels fail-safe OFF after 120 min [sch 5dd8ba3a]"
   mode: "single"
   trigger:
     - platform: "time_pattern"
@@ -54,7 +54,7 @@
       entity_id: "switch.bathroom_towels"
       state: "on"
     - condition: "template"
-      value_template: "{{ (now() - states.switch.bathroom_towels.last_changed).total_seconds() > 120 }}"
+      value_template: "{{ (now() - states.switch.bathroom_towels.last_changed).total_seconds() > 7200 }}"
   action:
     - service: "switch.turn_off"
       target:
@@ -62,7 +62,7 @@
     - service: "logbook.log"
       data:
         name: "Sch fail-safe"
-        message: "switch.bathroom_towels: ON for 2 min (guardrail max_on_minutes), switched OFF"
+        message: "switch.bathroom_towels: ON for 120 min (guardrail max_on_minutes), switched OFF"
 - id: "sch_bathroom_towels_reconnect"
   alias: "Sch bathroom_towels reconcile on reconnect [sch 6a92ce9a]"
   trigger:
