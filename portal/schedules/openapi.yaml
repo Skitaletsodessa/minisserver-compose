@@ -26,6 +26,7 @@ paths:
     get:
       operationId: listEntities
       responses:
+        "400": {$ref: "#/components/responses/Error"}
         "200": {description: entities, content: {application/json: {schema: {type: object, required: [entities], properties: {entities: {type: array, items: {$ref: "#/components/schemas/Entity"}}}}}}}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
@@ -402,7 +403,7 @@ components:
     Actor:
       type: object
       required: [token, name, role]
-      properties: {token: {type: string}, name: {type: string}, role: {type: string}, ip: {type: string}}
+      properties: {token: {type: string}, name: {type: string}, role: {type: string}, ip: {type: string}, gateway: {type: boolean}, acting: {type: object, description: "Task 28: who the gateway acted for (X-Acting-User, accepted only from gateway tokens)", properties: {person: {type: string}, phone: {type: string}}}}
     Exception:
       type: object
       required: [id, entity, kind, created_by, created_at]
@@ -448,6 +449,7 @@ components:
         expires: {type: [string, "null"]}
         last_used: {type: [string, "null"]}
         revoked: {type: boolean}
+        gateway: {type: boolean}
     Health:
       type: object
       required: [status]

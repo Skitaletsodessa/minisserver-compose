@@ -81,6 +81,8 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
+        if "gateway" not in [r["name"] for r in self.db.execute("PRAGMA table_info(tokens)")]:        # Task 28: tokens of the portal gateway
+            self.db.execute("ALTER TABLE tokens ADD COLUMN gateway INTEGER NOT NULL DEFAULT 0")
         if "meta" not in [r["name"] for r in self.db.execute("PRAGMA table_info(entities)")]:      # Task 27 Phase E: device facts (ip, mac)
             self.db.execute("ALTER TABLE entities ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
         self.publish_error = None
@@ -403,8 +405,9 @@ class Store:
         self.publish()
 
     # ── tokens ────────────────────────────────────────────────────────────────
-    def create_token(self, actor, name, role, expires=None):
-        """Returns the secret ONCE; only its SHA-256 is stored."""
+    def create_token(self, actor, name, role, expires=None, gateway=False):
+        """Returns the secret ONCE; only its SHA-256 is stored. gateway=True marks a token of the portal gateway: only such a token may
+        carry an X-Acting-User header (Task 28), which is then written into the audit rows of its calls."""
         import base64, secrets
         if role not in ("admin", "household", "readonly"):
             raise model.ValidationError([model.problem("value", "role", "role must be admin, household or readonly")])
@@ -414,11 +417,11 @@ class Store:
         tid = "t" + uuid.uuid4().hex[:8]
         with self._tx():
             try:
-                self.db.execute("INSERT INTO tokens(id,name,role,sha256,created,expires) VALUES (?,?,?,?,?,?)",
-                                (tid, name, role, hashlib.sha256(secret.encode()).hexdigest(), self.clock(), expires))
+                self.db.execute("INSERT INTO tokens(id,name,role,sha256,created,expires,gateway) VALUES (?,?,?,?,?,?,?)",
+                                (tid, name, role, hashlib.sha256(secret.encode()).hexdigest(), self.clock(), expires, 1 if gateway else 0))
             except sqlite3.IntegrityError:
                 raise model.ValidationError([model.problem("duplicate", "name", "a token with this name exists (revoke it first)")])
-            seq = self._audit(actor, "token_create", None, None, {"id": tid, "name": name, "role": role, "expires": expires})
+            seq = self._audit(actor, "token_create", None, None, {"id": tid, "name": name, "role": role, "expires": expires, "gateway": bool(gateway)})
         self._mirror_audit(seq)
         return tid, secret
 
@@ -434,7 +437,7 @@ class Store:
     def tokens(self):
         with self.lock:
             return [{"id": r["id"], "name": r["name"], "role": r["role"], "created": r["created"], "expires": r["expires"],
-                     "last_used": r["last_used"], "revoked": bool(r["revoked"])} for r in self.db.execute("SELECT * FROM tokens ORDER BY created")]
+                     "last_used": r["last_used"], "revoked": bool(r["revoked"]), "gateway": bool(r["gateway"])} for r in self.db.execute("SELECT * FROM tokens ORDER BY created")]
 
     def find_token(self, secret):
         h = hashlib.sha256(secret.encode()).hexdigest()
@@ -449,7 +452,7 @@ class Store:
             return None
         if found["expires"] and found["expires"] < self.clock():
             return None
-        return {"token": found["id"], "name": found["name"], "role": found["role"]}
+        return {"token": found["id"], "name": found["name"], "role": found["role"], "gateway": bool(found["gateway"])}
 
     def touch_token(self, tid):
         try:

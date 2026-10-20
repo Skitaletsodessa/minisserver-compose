@@ -3,6 +3,7 @@
 Every error is {"error": {"code", "message", "problems"?}}. Guardrail violations are 422 with the reasons - nothing is clamped.
 """
 import os
+import re
 import json
 import time
 import asyncio
@@ -20,6 +21,7 @@ VERSION = "1.0.0"
 RANK = {"readonly": 1, "household": 2, "admin": 3}
 FAIL_WINDOW, FAIL_LIMIT = 300, 10
 MAX_BODY = 64 * 1024
+ACTING_RE = re.compile(r"^person=([a-z0-9_-]{1,40});phone=([a-z0-9_-]{1,40})$")
 
 
 def err(status, code, message, problems=None, headers=None):
@@ -58,7 +60,16 @@ class App:
         if RANK[who["role"]] < RANK[need]:
             return None, err(403, "forbidden", "role '%s' may not do this" % who["role"])
         self.store.touch_token(who["token"])
-        return {**who, "ip": ip}, None
+        actor = {**who, "ip": ip}
+        hdr = request.headers.get("x-acting-user")
+        if hdr is not None and who.get("gateway"):
+            # Task 28: only a token flagged as the gateway's may say on whose behalf it acts; the audit rows then carry it.
+            m = ACTING_RE.match(hdr)
+            if not m:
+                return None, err(400, "bad_acting_user", "X-Acting-User must look like person=<id>;phone=<id|->")
+            actor["acting"] = {"person": m.group(1), "phone": m.group(2)}
+        # from every other caller the header is ignored: a plain token cannot claim to be somebody else
+        return actor, None
 
     async def body(self, request):
         raw = await request.body()
