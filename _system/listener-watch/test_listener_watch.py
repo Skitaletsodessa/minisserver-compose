@@ -62,9 +62,10 @@ real = open(os.path.join(HERE, "ss-sample.txt")).read()
 n, st = run(real)
 check("the real ss output of today: NO alert at all", n.alerts("A") == [], str(n.alerts("A")))
 check("the real ss output of today: nothing expected is missing", n.alerts("C") == [], str(n.alerts("C")))
-check("the real ss output: go2rtc on 18555 is allowed only because of the until= date",
-      any(e["port"] == "18555" and e["until"] for e in ENTRIES) and st["checked"] > 40, str(st["checked"]))
-
+check("the real ss output (after the go2rtc removal): more than 40 non-loopback sockets were judged", st["checked"] > 40, str(st["checked"]))
+before = open(os.path.join(HERE, "ss-before-go2rtc-removal.txt")).read()
+n, _ = run(before)
+check("the capture from BEFORE the removal: the watcher would have raised tier A for go2rtc on *:18555", n.alerts("A") == ["listener-new-tcp-*-18555"], str(n.alerts()))
 # ── a new listener ──
 new = real + line("tcp", "0.0.0.0:8888", "python3") + "\n"
 n, st = run(new)
@@ -97,14 +98,20 @@ shifted = real.replace(":59885", ":51234").replace(":40687", ":52000")
 check("ephemeral ports may change between starts", run(shifted)[0].alerts() == [])
 low = real + line("udp", "*:5000", "python3") + "\n"
 check("a LOW-numbered port is not 'ephemeral' -> tier A", run(low)[0].alerts("A") == ["listener-new-udp-*-5000"])
-
-# ── until= ──
-later = lw.load_allowlist(os.path.join(HERE, "allowlist.conf"), today=datetime.date(2026, 10, 22))
-n, _ = run(real, entries=later)
-check("after the until= date go2rtc is NOT allowed any more -> tier A", n.alerts("A") == ["listener-new-tcp-*-18555"], str(n.alerts()))
-check("the expired entry is not reported as 'missing' either", n.alerts("C") == [])
-no_go2rtc = "\n".join(l for l in real.splitlines() if ":18555" not in l)
-check("go2rtc removed: before the date nothing is reported missing", run(no_go2rtc)[0].alerts() == [])
+# ── until= (a time-limited exception) with a synthetic allow-list ──
+import tempfile as _tf
+_f = _tf.NamedTemporaryFile("w", suffix=".conf", delete=False)
+_f.write("tcp * 18555 go2rtc until=2026-10-21 temporary known fault, to be removed\n")
+_f.close()
+inside = lw.load_allowlist(_f.name, today=datetime.date(2026, 10, 20))
+n, _ = run("tcp LISTEN 0 4096 *:18555 *:* " + 'users:(("go2rtc",pid=1,fd=3))', entries=inside)
+check("until= in the future: the listener is allowed", n.alerts() == [], str(n.alerts()))
+n, _ = run("", entries=inside)
+check("until= entry whose listener is absent is NOT reported as missing (an exception is not an expectation)", n.alerts() == [], str(n.alerts()))
+after = lw.load_allowlist(_f.name, today=datetime.date(2026, 10, 22))
+n, _ = run("tcp LISTEN 0 4096 *:18555 *:* " + 'users:(("go2rtc",pid=1,fd=3))', entries=after)
+check("after the until= date the same listener is NOT allowed any more -> tier A", n.alerts("A") == ["listener-new-tcp-*-18555"], str(n.alerts()))
+os.unlink(_f.name)
 
 # ── allow-list file errors ──
 import tempfile
