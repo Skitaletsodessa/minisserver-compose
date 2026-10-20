@@ -33,6 +33,25 @@ def is_under(domain, parent):
     return domain == parent or domain.endswith("." + parent)
 
 
+# Invariant 5: the infrastructure is never a child device. A catch-all block `||*^$client=IP` on the router, this server or the Pi would cut the HOUSE's DNS (the
+# server resolves for everything, the Pi is the replica, the router forwards for every other device). These addresses are CODE too.
+PROTECTED_IPS = {"192.168.31.1": "the router", "192.168.31.2": "this server (origin DNS and every service)", "192.168.31.5": "the Pi (replica DNS)"}
+
+
+def device_ip_problem(ip):
+    """None when `ip` may be a child device, else the reason it may not (a malformed address, a non-private one, or house infrastructure)."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return "%r is not an IP address" % (ip,)
+    if a.version != 4 or not a.is_private or a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified:
+        return "%s is not a private LAN address" % ip
+    if ip in PROTECTED_IPS:
+        return "%s is %s: a catch-all block on it would cut DNS for the whole house" % (ip, PROTECTED_IPS[ip])
+    return None
+
+
 def deny_breaks_baseline(domain):
     """A deny rule `||domain^` blocks the domain and every subdomain: it breaks invariant 3 when it equals, contains or sits under a required host."""
     for h in list(REQUIRED_ALWAYS) + list(TELEGRAM_CORE):
@@ -66,6 +85,9 @@ def verify_snapshot(snap):
         if not isinstance(d, dict) or not isinstance(did, str) or not isinstance(d.get("ip"), str) or not IP_RE.match(d["ip"]) or not isinstance(d.get("name"), str):
             bad("device", "a device needs id, name and a valid ip")
             continue
+        ipp = device_ip_problem(d["ip"])
+        if ipp:
+            bad("protected_ip", "%s: %s" % (did, ipp))                       # invariant 5: house infrastructure is never a child device
         if did in seen or d["ip"] in {x.get("ip") for x in devices if x is not d}:
             bad("duplicate", "duplicate device id or ip: %s" % did)
         seen.add(did)

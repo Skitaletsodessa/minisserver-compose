@@ -246,6 +246,20 @@ paths:
         "200": {description: children, content: {application/json: {schema: {type: object, required: [children], properties: {children: {type: array, items: {$ref: "#/components/schemas/ChildDeviceFull"}}}}}}}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addChildDevice
+      summary: "Admin only. Adds a child device (it starts with the windows of `like`, else the standard ones, the proposed guardrails and no exceptions). House infrastructure (router, this server, the Pi) is refused as a device: a catch-all there would cut the house's DNS"
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [name, ip], additionalProperties: false, properties: {name: {type: string, maxLength: 60}, ip: {type: string}, mac: {type: string}, like: {type: string}}}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDeviceFull"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/child/snapshot:
     get:
       operationId: getChildSnapshot
@@ -276,6 +290,17 @@ paths:
         "200": {description: the device, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDeviceFull"}}}}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: removeChildDevice
+      summary: "Admin only. Retires a child device (its catch-all leaves AdGuard at the next job run). The audit row keeps windows, guardrails, lists and exceptions. The last device cannot be removed"
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      responses:
+        "204": {description: removed}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
   /v1/child/{id}/exceptions:
     post:

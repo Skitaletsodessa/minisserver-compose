@@ -1,4 +1,5 @@
 import copy
+import json
 import datetime as dt
 import os
 import sys
@@ -173,6 +174,78 @@ class AgainstTheRunningCode(unittest.TestCase):
             self.assertGreater(n, 900)
         finally:
             cp.read_list, cp.extra_list = orig
+
+
+
+
+class Devices(unittest.TestCase):
+    """Task 29: the set of child devices after the cutover (the import is refused then): admin-only add/remove, and house infrastructure is never a child device."""
+    def setUp(self):
+        self.e = Env()
+        self.assertEqual(self.e.req("PUT", "/v1/child-policy/import", json=PAYLOAD).status_code, 200)
+
+    def add(self, body, role="admin"):
+        return self.e.req("POST", "/v1/child", role=role, json=body)
+
+    def test_add_with_standard_windows_and_the_snapshot_follows(self):
+        r = self.add({"name": "Anna's phone", "ip": "192.168.31.70", "mac": "AA:BB:CC:00:11:22"})
+        self.assertEqual(r.status_code, 201, r.text)
+        d = r.json()
+        self.assertEqual((d["id"], d["name"], d["ip"], d["mac"]), ("child_anna_s_phone", "Anna's phone", "192.168.31.70", "aa:bb:cc:00:11:22"))
+        self.assertEqual(sorted(x["id"] for x in d["rules"]), ["maps", "yt_roblox"])
+        self.assertTrue(d["flags"]["guardrails_proposed"])
+        snap = self.e.req("GET", "/v1/child/snapshot").json()
+        self.assertIn("192.168.31.70", [x["ip"] for x in snap["devices"]])
+        self.assertEqual(self.e.req("GET", "/v1/child/child_anna_s_phone").status_code, 200)
+
+    def test_like_copies_the_windows_of_another_device(self):
+        g = self.e.req("GET", "/v1/schedules/child_a")
+        self.assertEqual(self.e.req("PUT", "/v1/schedules/child_a", headers={"If-Match": g.headers["ETag"]}, json={"rules": RULES[:1]}).status_code, 200)
+        d = self.add({"name": "Copy", "ip": "192.168.31.71", "like": "child_a"}).json()
+        self.assertEqual([x["id"] for x in d["rules"]], ["yt_roblox"])
+        self.assertEqual(self.add({"name": "Bad like", "ip": "192.168.31.72", "like": "nope"}).status_code, 422)
+
+    def test_house_infrastructure_and_non_lan_addresses_are_refused(self):
+        for ip in ("192.168.31.1", "192.168.31.2", "192.168.31.5", "8.8.8.8", "127.0.0.1", "169.254.1.1", "224.0.0.1", "0.0.0.0", "999.1.1.1", "", "::1", "fe80::1", "192.168.31.60"):
+            r = self.add({"name": "X device", "ip": ip})
+            self.assertEqual(r.status_code, 422, ip)
+        r = self.add({"name": "X", "ip": "192.168.31.2"})
+        self.assertIn("whole house", json.dumps(r.json()))
+        # the import and the snapshot verifier know the rule too (second enforcement)
+        bad = copy.deepcopy(PAYLOAD)
+        bad["devices"][0]["ip"] = "192.168.31.2"
+        self.assertEqual(self.e.req("PUT", "/v1/child-policy/import", json=bad).status_code, 422)
+        snap = self.e.req("GET", "/v1/child/snapshot").json()
+        snap["devices"][0]["ip"] = "192.168.31.5"
+        from sched import child_invariants
+        self.assertTrue(any(p["code"] == "protected_ip" for p in child_invariants.verify_snapshot(snap)))
+
+    def test_duplicates_roles_and_bad_bodies(self):
+        self.assertEqual(self.add({"name": "A-phone", "ip": "192.168.31.80"}).status_code, 422)                  # the name exists (case-insensitive)
+        self.assertEqual(self.add({"name": "Fresh", "ip": "192.168.31.60"}).status_code, 422)                    # the ip exists
+        self.assertEqual(self.add({"name": "Fresh", "ip": "192.168.31.81", "mac": "20:36:d0:14:8d:5a"}).status_code, 422)   # the mac exists
+        self.assertEqual(self.add({"name": "Fresh", "ip": "192.168.31.81", "mac": "nope"}).status_code, 422)
+        self.assertEqual(self.add({"name": "!!!", "ip": "192.168.31.82"}).status_code, 422)
+        self.assertEqual(self.add({"name": "Fresh", "ip": "192.168.31.83"}, role="household").status_code, 403)
+        self.assertEqual(self.add({"name": "Fresh", "ip": "192.168.31.83"}, role="readonly").status_code, 403)
+        for bad in ({}, {"name": "x"}, {"name": 1, "ip": "192.168.31.84"}, {"name": "x", "ip": "192.168.31.84", "extra": 1}):
+            self.assertEqual(self.add(bad).status_code, 400, bad)
+
+    def test_remove_keeps_a_record_and_never_the_last_device(self):
+        self.e.req("POST", "/v1/child/child_b/domains", json={"kind": "allow", "domain": "school.example.org"})
+        self.assertEqual(self.e.req("DELETE", "/v1/child/child_b", role="household").status_code, 403)
+        self.assertEqual(self.e.req("DELETE", "/v1/child/nope").status_code, 404)
+        self.assertEqual(self.e.req("DELETE", "/v1/child/child_b").status_code, 204)
+        snap = self.e.req("GET", "/v1/child/snapshot").json()
+        self.assertEqual([x["id"] for x in snap["devices"]], ["child_a"])
+        self.assertEqual(self.e.req("GET", "/v1/child/child_b").status_code, 404)
+        rows = self.e.req("GET", "/v1/audit?limit=5").json()["audit"]
+        rm = next(r for r in rows if r["action"] == "child_device_remove")
+        self.assertEqual(rm["before"]["domains"]["allow"], ["school.example.org"])                               # what is needed to re-create it by hand
+        self.assertEqual(rm["before"]["rules"][0]["id"] in ("maps", "yt_roblox"), True)
+        r = self.e.req("DELETE", "/v1/child/child_a")
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (422, "validation_failed"))                 # the last device
+        self.assertIn("last child device", json.dumps(r.json()))
 
 
 if __name__ == "__main__":

@@ -379,6 +379,28 @@ class App:
             return e
         return JSONResponse(self.store.child_snapshot())
 
+    async def child_device_add(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if (not isinstance(data, dict) or set(data) - {"name", "ip", "mac", "like"} or not isinstance(data.get("name"), str) or not isinstance(data.get("ip"), str)
+                or any(k in data and data[k] is not None and not isinstance(data[k], str) for k in ("mac", "like"))):
+            return err(400, "bad_body", "an object with name and ip (and optional mac, like) is required")
+        return self._guard(lambda: JSONResponse(self.store.add_child_device(who, data["name"], data["ip"], data.get("mac") or "", data.get("like")), status_code=201))
+
+    async def child_device_remove(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+
+        def go():
+            self.store.remove_child_device(who, request.path_params["id"])
+            return Response(status_code=204)
+        return self._guard(go)
+
     async def child_exception_add(self, request):
         who, e = self.authenticate(request, "household")
         if e:
@@ -584,9 +606,11 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
         Route("/v1/runs/{id}", a.run_cancel, methods=["DELETE"]),
         Route("/v1/runs/{id}/extend", a.run_extend, methods=["POST"]),
         Route("/v1/child", a.child_list, methods=["GET"]),
+        Route("/v1/child", a.child_device_add, methods=["POST"]),
         Route("/v1/child/snapshot", a.child_snapshot_get, methods=["GET"]),
         Route("/v1/child/cutover", a.child_cutover, methods=["PUT"]),
         Route("/v1/child/{id}", a.child_get, methods=["GET"]),
+        Route("/v1/child/{id}", a.child_device_remove, methods=["DELETE"]),
         Route("/v1/child/{id}/exceptions", a.child_exception_add, methods=["POST"]),
         Route("/v1/child/{id}/exceptions/{xid}", a.child_exception_cancel, methods=["DELETE"]),
         Route("/v1/child/{id}/domains", a.child_domain_add, methods=["POST"]),

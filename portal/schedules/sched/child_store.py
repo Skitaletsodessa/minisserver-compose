@@ -365,3 +365,77 @@ class ChildMixin:
         self._mirror_audit(seq)
         self.publish()
         return summary
+
+    # ── admin: the set of child DEVICES (after the cutover a re-import is refused, so this is how a device is added or retired) ──────────────────────────────
+    def add_child_device(self, actor, name, ip, mac="", like=None):
+        """Admin only. A new device starts with the windows of `like` (another child device) or the standard ones (16:00-19:00 Mon-Sat YouTube/Roblox, Maps all
+        day), the proposed guardrails, no exceptions and empty own lists. Refused: house infrastructure as a device, a duplicate name/ip/mac."""
+        import re
+        s = _s()
+        if actor["role"] != "admin":
+            raise s.Forbidden("adding a child device is admin-only")
+        name = name.strip() if isinstance(name, str) else ""
+        mac = (mac or "").strip().lower() if isinstance(mac, str) else ""
+        probs = []
+        if not 1 <= len(name) <= 60:
+            probs.append(model.problem("name", "name", "the name must be 1-60 characters"))
+        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        eid = "child_" + slug
+        eid = eid[:40].rstrip("_")
+        dev = {"id": eid, "name": name, "ip": ip if isinstance(ip, str) else "", "mac": mac}
+        probs += child_render.validate_device(dev) if name else []
+        if not slug or not model.ENTITY_ID_RE.match(eid):
+            probs.append(model.problem("name", "name", "the name must contain letters or digits"))
+        with self._tx():
+            existing = self.child_devices()
+            for e in existing:
+                if e["id"] == eid or e["name"].lower() == name.lower():
+                    probs.append(model.problem("duplicate", "name", "a child device named %r already exists" % e["name"]))
+                if e["meta"].get("ip") == dev["ip"]:
+                    probs.append(model.problem("duplicate", "ip", "%s already belongs to %s" % (dev["ip"], e["name"])))
+                if mac and (e["meta"].get("mac") or "") == mac:
+                    probs.append(model.problem("duplicate", "mac", "%s already belongs to %s" % (mac, e["name"])))
+            if self.db.execute("SELECT 1 FROM entities WHERE id=?", (eid,)).fetchone() and not any(p["code"] == "duplicate" for p in probs):
+                probs.append(model.problem("duplicate", "name", "the id %s clashes with another entity" % eid))
+            src = None
+            if like:
+                src = next((e for e in existing if e["id"] == like), None)
+                if not src:
+                    probs.append(model.problem("like", "like", "no child device %r to copy the windows from" % like))
+            guard = dict(src["guardrails"]) if src and src["guardrails"] else dict(PROPOSED_GUARDRAILS)
+            flags = dict(src["flags"]) if src and src["flags"] else dict(CHILD_FLAGS)
+            rules = self.schedule(like)["rules"] if src else [
+                {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}},
+                {"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
+            rules, rp = model.validate_rules({"id": eid, "kind": "child_window", "guardrails": guard}, rules)
+            probs += rp
+            if probs:
+                raise model.ValidationError(probs)
+            pos = (self.db.execute("SELECT COALESCE(MAX(position), 0) m FROM entities").fetchone()["m"]) + 1
+            self.db.execute("INSERT INTO entities(id,kind,name,ha_target,managed,flags,guardrails,position,meta) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (eid, "child_window", name, None, 0, s.canon(flags), s.canon(guard), pos, s.canon({"ip": dev["ip"], "mac": mac})))
+            self.db.execute("INSERT INTO schedules(entity_id,version,tz,rules,updated_at) VALUES (?,?,?,?,?)", (eid, 1, model.TZ_NAME, s.canon(rules), self.clock()))
+            seq = self._audit(actor, "child_device_add", eid, None, {"name": name, "ip": dev["ip"], "mac": mac, "like": like, "rules": rules})
+        self._mirror_audit(seq)
+        self.publish()
+        return self.child_detail(eid)
+
+    def remove_child_device(self, actor, eid):
+        """Admin only. The device stops being filtered by this policy (its catch-all leaves the snapshot and so AdGuard at the next job run). The audit row keeps everything
+        needed to re-create it by hand: windows, guardrails, lists and exceptions."""
+        s = _s()
+        if actor["role"] != "admin":
+            raise s.Forbidden("removing a child device is admin-only")
+        with self._tx():
+            ent = self._child_entity(eid)
+            if len(self.child_devices()) <= 1:
+                raise model.ValidationError([model.problem("last_device", "id", "the last child device cannot be removed: a snapshot without a device would lift every restriction")])
+            before = {"name": ent["name"], "meta": ent["meta"], "guardrails": ent["guardrails"], "flags": ent["flags"], "rules": self.schedule(eid)["rules"],
+                      "domains": self.child_domains(eid), "exceptions": [{k: x[k] for k in ("target", "expires_at")} for x in self.child_exceptions(eid)]}
+            for t in ("exceptions", "child_exceptions", "child_domains"):
+                self.db.execute("DELETE FROM %s WHERE entity_id=?" % t, (eid,))
+            self.db.execute("DELETE FROM schedules WHERE entity_id=?", (eid,))
+            self.db.execute("DELETE FROM entities WHERE id=?", (eid,))
+            seq = self._audit(actor, "child_device_remove", eid, before, None)
+        self._mirror_audit(seq)
+        self.publish()

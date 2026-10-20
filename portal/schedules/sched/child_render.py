@@ -96,4 +96,8 @@ def validate_device(d):
     from .model import problem
     ok = (isinstance(d, dict) and isinstance(d.get("id"), str) and isinstance(d.get("name"), str) and isinstance(d.get("ip"), str)
           and IP_RE.match(d["ip"]) and (not d.get("mac") or MAC_RE.match(d["mac"])))
-    return [] if ok else [problem("device", "devices", "a device needs id, name, a valid ip and an optional valid mac: %r" % (d if not isinstance(d, dict) else d.get("id"),))]
+    if not ok:
+        return [problem("device", "devices", "a device needs id, name, a valid ip and an optional valid mac: %r" % (d if not isinstance(d, dict) else d.get("id"),))]
+    from .child_invariants import device_ip_problem
+    why = device_ip_problem(d["ip"])
+    return [problem("protected_ip", "devices", "%s: %s" % (d["id"], why))] if why else []

@@ -38,6 +38,22 @@ print("   entities: %d (%s); managed: %s" % (len(ents), ", ".join(sorted({e["kin
 print("   tokens (hashes only): %d" % len(st.tokens()))
 snap = st.snapshot()
 print("   schedules readable: %d rules in total" % sum(len(e["rules"]) for e in snap["entities"]))
+# Task 29: the children's policy lives in this database now (windows, per-child domain lists, exceptions, house-wide lists, always-on service); the snapshot the host
+# job executes from is REGENERATED from it, so a restored database must produce a valid snapshot with the same content as the live one (when nothing changed since).
+cs = st.child_snapshot()
+from sched import child_invariants
+probs = child_invariants.verify_snapshot(cs)
+print("   child policy: %d devices, %d window rules, %d allow + %d deny domains (per child), %d active exceptions; invariants: %s" % (
+    len(cs["devices"]), sum(len(d["rules"]) for d in cs["devices"]), sum(len(d["allow_extra"]) for d in cs["devices"]), sum(len(d["deny_extra"]) for d in cs["devices"]),
+    sum(len(d["exceptions"]) for d in cs["devices"]), "ALL HOLD" if not probs else "BROKEN: %s" % probs[:2]))
+try:
+    live_cs = json.load(open("/srv/apps/portal/schedules/out/child-policy.json"))
+    print("   regenerated snapshot checksum %s the live one (%s vs %s; a difference is a change since the backup)" % (
+        "EQUALS" if cs["checksum"] == live_cs["checksum"] else "differs from", cs["checksum"][:12], live_cs["checksum"][:12]))
+except (OSError, ValueError):
+    print("   (no live snapshot file to compare with)")
+if probs:
+    sys.exit(1)
 # compare with live (read-only)
 live = sqlite3.connect("file:/srv/apps/portal/schedules/schedules.db?mode=ro", uri=True)
 l_audit = live.execute("select count(*) from audit").fetchone()[0]
