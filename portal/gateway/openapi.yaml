@@ -209,7 +209,7 @@ paths:
   /v1/vacuums/{id}/scenarios/{scenario}/start:
     post:
       operationId: startScenario
-      summary: Runs the existing HA script. Refused when the robot is unavailable or a plan is already running (reason in the error). Confirmed by read-back
+      summary: "Runs the existing HA script. Refused when the robot is unavailable or a plan is already running (reason in the error). outcome confirmed = the script is running; the robot itself may take up to about a minute to leave the dock (observed.vacuum is what HA sees)"
       parameters: [{$ref: "#/components/parameters/Id"}, {name: scenario, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/Idem"}]
       responses:
         "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}
@@ -238,7 +238,7 @@ paths:
   /v1/vacuums/{id}/dock:
     post:
       operationId: dockVacuum
-      summary: Stops the running plan script (if any) and sends the robot home
+      summary: "Stops the running plan script (if any) and sends the robot home. For two minutes afterwards a guard sends it home again if it starts anyway (a start command already on its way). Pause while a plan is still starting is treated as dock (action is reported as dock)"
       parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
       responses:
         "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}

@@ -67,6 +67,8 @@ class DB:
         self.c.execute("PRAGMA foreign_keys=ON")
         self.c.execute("PRAGMA synchronous=FULL")
         self.c.executescript(SCHEMA)
+        if "display_name" not in [r["name"] for r in self.c.execute("PRAGMA table_info(device_meta)")]:      # added after the first deployment
+            self.c.execute("ALTER TABLE device_meta ADD COLUMN display_name TEXT")
         self.jsonl = os.path.join(data_dir, "audit.jsonl")
 
     def tx(self):

@@ -148,6 +148,10 @@ PLAN_DUE_GRACE = 2 * 3600
 PLAN_HUNG_SECS = 4 * 3600
 PLAN_ALERT_FROM = 1792151514                        # earlier plan runs never wrote the 'ПЛАН ВЫПОЛНЕН' line
 PLAN_DONE_MARK = "ПЛАН ВЫПОЛНЕН"
+# Task 28: a person who stops a running plan through the portal gateway leaves one JSON line here ({ts, script, person, action}, no secret);
+# a plan that ended that way is a deliberate act, not a failure: a quiet line instead of a 'did not finish' message.
+GATEWAY_STOPS = os.environ.get("PORTAL_GATEWAY_STOPS", "/srv/apps/portal/gateway/stops.jsonl")
+STOP_MATCH_AFTER_END = 90
 
 
 class Ctx:
@@ -218,6 +222,22 @@ class Ctx:
         if start is not None:
             res.append((start, None))
         return res
+
+    def stopped_on_purpose(self, script, start, end):
+        """Who stopped this run through the portal gateway (a name), or None. The stop must fall inside the run or shortly after its end."""
+        try:
+            lines = open(GATEWAY_STOPS, encoding="utf-8").read().splitlines()[-200:]
+        except OSError:
+            return None
+        until = (end if end is not None else self.now) + STOP_MATCH_AFTER_END
+        for line in reversed(lines):
+            try:
+                rec = json.loads(line)
+                if rec.get("script") == script and start - 5 <= float(rec["ts"]) <= until:
+                    return str(rec.get("person") or "кто-то")
+            except (ValueError, KeyError, TypeError):
+                continue
+        return None
 
     def plan_done(self, logname, start, end):
         for _ts, data in self.conn.execute("""
@@ -402,7 +422,8 @@ def recent_runs(ctx, script, horizon):
 
 def failed_runs(ctx, script, logname, horizon):
     """Plan runs (started after the feature went live) that ended without the end marker."""
-    return [(s, e) for s, e in recent_runs(ctx, script, horizon) if e is not None and not ctx.plan_done(logname, s, e)]
+    return [(s, e) for s, e in recent_runs(ctx, script, horizon)
+            if e is not None and not ctx.plan_done(logname, s, e) and not ctx.stopped_on_purpose(script, s, e)]
 
 
 def check_vacuums(ctx, N):
@@ -452,8 +473,12 @@ def check_vacuums(ctx, N):
                 N.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int((ctx.now - start) // 3600)} ч, возможно завис", tier="B")
             else:
                 N.clear(key_h, "")
+            who = ctx.stopped_on_purpose(script, start, end) if end is not None else None
             if end is not None and ctx.now - end >= 600 and not ctx.plan_done(logname, start, end):
-                if had_incident:
+                if who:
+                    N.alert(key_f + "-quiet", f"HA: сценарий пылесоса ({label}) от {hm(ctx, start)} остановлен через портал ({who})", tier="C")
+                    N.clear(key_f, "")
+                elif had_incident:
                     N.alert(key_f + "-quiet", f"HA: сценарий пылесоса ({label}) от {hm(ctx, start)} не дошёл до конца (инцидент уже отправлен)", tier="C")
                 else:
                     N.alert(key_f, f"HA: сценарий пылесоса ({label}), запущенный в {hm(ctx, start)}, не дошёл до конца (смотри уведомления HA и журнал)", tier="B")

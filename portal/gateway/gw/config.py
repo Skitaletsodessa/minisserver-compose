@@ -26,6 +26,8 @@ SESSION_IDLE_S = 12 * 3600
 SESSION_ABS_S = 7 * 86400
 SWITCH_CONFIRM_S = 6.0
 VACUUM_CONFIRM_S = 12.0
+STOP_GUARD_S = 120.0            # after stopping a running plan: watch this long for a robot that starts anyway (observed live: it starts up to ~1 min after the script)
+STOP_GUARD_POLL_S = 2.0
 DEBOUNCE_S = 1.5
 PROBE_EVERY_S = 30
 SSE_HEARTBEAT_S = 25
@@ -37,12 +39,12 @@ HA_ALLOWED_SERVICES = {"switch": {"turn_on", "turn_off"}, "script": {"turn_on", 
 
 # plug meta that HA/the schedule service do not carry: kind, power sensor (None = no trustworthy meter), switchable by the household
 DEVICE_SEED = {
-    "bathroom_towels": {"kind": "dryer", "power_sensor": "sensor.bathroom_towels_power", "household_switchable": 1},
-    "plant_rack1":     {"kind": "lamp",  "power_sensor": "sensor.living_room_rack_power", "household_switchable": 1},
-    "plant_rack2":     {"kind": "lamp",  "power_sensor": "sensor.livingroom_rack_big_power", "household_switchable": 1},
-    "plant_orchids":   {"kind": "lamp",  "power_sensor": None, "household_switchable": 1},          # fake meter (always 0): no value shown
-    "plant_cacti":     {"kind": "lamp",  "power_sensor": "sensor.minisserver_power", "household_switchable": 1},
-    "parrot_uv":       {"kind": "uv",    "power_sensor": "sensor.bedroom_parrot_power", "household_switchable": 1},
+    "bathroom_towels": {"name": "Полотенцесушитель", "kind": "dryer", "power_sensor": "sensor.bathroom_towels_power", "household_switchable": 1},
+    "plant_rack1":     {"name": "Свет для растений — стеллаж 1", "kind": "lamp",  "power_sensor": "sensor.living_room_rack_power", "household_switchable": 1},
+    "plant_rack2":     {"name": "Свет для растений — стеллаж 2", "kind": "lamp",  "power_sensor": "sensor.livingroom_rack_big_power", "household_switchable": 1},
+    "plant_orchids":   {"name": "Свет для орхидей", "kind": "lamp",  "power_sensor": None, "household_switchable": 1},          # fake meter (always 0): no value shown
+    "plant_cacti":     {"name": "Свет для кактусов (фитолампа)", "kind": "lamp",  "power_sensor": "sensor.minisserver_power", "household_switchable": 1},
+    "parrot_uv":       {"name": "УФ-лампа для попугая", "kind": "uv",    "power_sensor": "sensor.bedroom_parrot_power", "household_switchable": 1},
 }
 
 # robots and OUR scenarios = the existing HA scripts (never new automations)

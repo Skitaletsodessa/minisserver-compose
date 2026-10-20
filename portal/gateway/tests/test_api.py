@@ -316,6 +316,67 @@ class Vacuums(Base):
         v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="ivan").json()["vacuums"]}["bedroom"]
         self.assertTrue(v["last_result"].startswith("stopped"))
 
+    def test_stopping_a_plan_leaves_a_marker_for_the_alert_watcher(self):
+        import json as _json
+        path = os.path.join(self.e.data, "stops.jsonl")
+        before = len(open(path).read().splitlines()) if os.path.exists(path) else 0
+        self.e.req("POST", "/v1/vacuums/bedroom/scenarios/evening/start", who="dasha")
+        self.e.req("POST", "/v1/vacuums/bedroom/dock", who="dasha")
+        lines = open(path).read().splitlines()
+        self.assertEqual(len(lines), before + 1)
+        rec = _json.loads(lines[-1])
+        self.assertEqual((rec["script"], rec["person"], rec["action"]), (self.LS, "dasha", "dock"))
+        self.assertEqual(sorted(rec), ["action", "person", "script", "ts"])                       # nothing else, no secret
+        self.e.req("POST", "/v1/vacuums/bedroom/dock", who="dasha")                               # nothing was running: no marker
+        self.assertEqual(len(open(path).read().splitlines()), before + 1)
+
+    def test_pause_while_the_plan_is_still_starting_cancels_it(self):
+        """Found live 2026-10-20: the script is running but HA still says docked (the robot leaves the dock up to ~1 min later). A pause must not be
+        refused as 'not running' while the plan keeps going: it cancels the plan and sends the robot home."""
+        self.e.req("POST", "/v1/vacuums/bedroom/scenarios/morning/start", who="ivan")
+        self.assertEqual(self.e.haclient.state(self.LV), "docked")
+        self.e.ha.calls.clear()
+        j = self.e.req("POST", "/v1/vacuums/bedroom/pause", who="ivan").json()
+        self.assertEqual((j["outcome"], j["action"]), ("confirmed", "dock"))
+        self.assertEqual([c[:3] for c in self.e.ha.calls], [("script", "turn_off", self.LS), ("vacuum", "return_to_base", self.LV)])
+        self.assertEqual(self.e.haclient.state(self.LS), "off")
+
+    def test_stop_guard_sends_the_robot_home_again_when_it_starts_after_the_stop(self):
+        """Found live 2026-10-20: the robot began cleaning ~10 s AFTER the plan was stopped (the start command was already on its way)."""
+        from gw import config
+        old = (config.STOP_GUARD_S, config.STOP_GUARD_POLL_S)
+        config.STOP_GUARD_S, config.STOP_GUARD_POLL_S = 12.0, 0.2
+        try:
+            self.e.req("POST", "/v1/vacuums/bedroom/scenarios/morning/start", who="ivan")
+            self.e.ha.calls.clear()
+            j = self.e.req("POST", "/v1/vacuums/bedroom/dock", who="ivan").json()
+            self.assertEqual(j["outcome"], "confirmed")
+            self.assertEqual([c[:3] for c in self.e.ha.calls], [("script", "turn_off", self.LS), ("vacuum", "return_to_base", self.LV)])   # sent although HA said docked
+            self.e.ha.set(self.LV, "cleaning")                                                                                           # the late start
+            self.assertTrue(self.e.wait(lambda: sum(1 for c in self.e.ha.calls if c[:3] == ("vacuum", "return_to_base", self.LV)) >= 2, 8), "the guard did not react")
+            self.assertTrue(self.e.wait(lambda: self.e.haclient.state(self.LV) == "returning"))
+            self.assertIn("vacuum_stop_guard", [r["action"] for r in self.e.db.audit_rows(10)])
+        finally:
+            config.STOP_GUARD_S, config.STOP_GUARD_POLL_S = old
+
+    def test_a_plan_started_on_purpose_ends_the_guard(self):
+        from gw import config
+        old = (config.STOP_GUARD_S, config.STOP_GUARD_POLL_S)
+        config.STOP_GUARD_S, config.STOP_GUARD_POLL_S = 6.0, 0.2
+        try:
+            self.e.req("POST", "/v1/vacuums/bedroom/scenarios/morning/start", who="ivan")
+            self.e.req("POST", "/v1/vacuums/bedroom/dock", who="ivan")
+            self.e.ha.set(self.LV, "docked")
+            self.assertTrue(self.e.wait(lambda: self.e.haclient.state(self.LV) == "docked"))
+            self.e.req("POST", "/v1/vacuums/bedroom/scenarios/evening/start", who="ivan")                 # on purpose, a new plan
+            self.e.ha.calls.clear()
+            self.e.ha.set(self.LV, "cleaning")
+            import time as _t
+            _t.sleep(1.5)
+            self.assertEqual([c for c in self.e.ha.calls if c[:2] == ("vacuum", "return_to_base")], [], "the guard must not fight a plan started on purpose")
+        finally:
+            config.STOP_GUARD_S, config.STOP_GUARD_POLL_S = old
+
     def test_dock_when_already_docked_is_idempotent(self):
         j = self.e.req("POST", "/v1/vacuums/bedroom/dock", who="ivan").json()
         self.assertEqual(j["outcome"], "confirmed")

@@ -105,7 +105,7 @@ class Web(BaseCase):
         ck = self.cookie(self.login())
         r = self.get("/home", ck)
         self.assertEqual(r.status_code, 200)
-        for text in ("Plant light - rack 1", "Towel dryer", "Parrot UV lamp", "Пылесос — спальня", "Пылесос — гостиная", "Включить", "Настройки"):
+        for text in ("Свет для растений — стеллаж 1", "Полотенцесушитель", "УФ-лампа для попугая", "Пылесос — спальня", "Пылесос — гостиная", "Включить", "Настройки"):
             self.assertIn(text, r.text)
         self.assertIn('href="/people"', r.text)
         self.assertIn('href="/parental"', r.text)
@@ -139,7 +139,7 @@ class Web(BaseCase):
         doc = json.loads(m.group(1))
         self.assertEqual((doc["id"], doc["kind"], doc["schedule"]["can_edit"]), ("plant_rack1", "plug", True))
         self.assertNotIn("<", m.group(1))                                # nothing in the data block can close the tag
-        self.assertIn("Расписание: Plant light - rack 1", r.text)
+        self.assertIn("Расписание: Свет для растений — стеллаж 1", r.text)
 
     def test_the_i18n_table_is_inert_json_too(self):
         r = self.e.client.get("/login")

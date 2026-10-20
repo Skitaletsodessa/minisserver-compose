@@ -165,6 +165,32 @@ db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on
 run(db, every(ts(20, 40), ts(21, 10)))
 check("plan stopped at once (robot not ready) with no incident: ONE message", len(msgs("не дошёл до конца")) == 1, str(msgs()))
 
+_stops = os.path.join(STATE, "stops.jsonl")                              # Task 28: a stop made on purpose through the portal gateway
+_orig_stops = haa.GATEWAY_STOPS
+haa.GATEWAY_STOPS = _stops
+def stops(*recs):
+    with open(_stops, "w") as f:
+        for r in recs:
+            f.write(_json.dumps(r) + "\n")
+import json as _json
+db = reset(); stops({"ts": t0 + 20, "script": SC, "person": "dasha", "action": "dock"})
+db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on"); db.put(SC, t0 + 30, "off")
+run(db, every(ts(20, 40), ts(21, 10)))
+check("plan stopped through the portal: NO message, a quiet line names who", not msgs() and any("остановлен через портал (dasha)" in x for x in quiet()), str((msgs(), quiet())))
+db = reset(); stops({"ts": t0 + 20, "script": "script.vacuum_bedroom_plan", "person": "dasha", "action": "dock"}, {"ts": t0 - 3600, "script": SC, "person": "dasha", "action": "dock"})
+db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on"); db.put(SC, t0 + 30, "off")
+run(db, every(ts(20, 40), ts(21, 10)))
+check("a stop of ANOTHER plan, or an hour earlier, does not excuse this failure: ONE message", len(msgs("не дошёл до конца")) == 1, str(msgs()))
+db = reset(); stops()                                                    # no marker file content at all
+db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on"); db.put(SC, t0 + 30, "off")
+run(db, every(ts(20, 40), ts(21, 10)))
+check("no marker: the failure is reported as before", len(msgs("не дошёл до конца")) == 1, str(msgs()))
+haa.GATEWAY_STOPS = "/nonexistent/stops.jsonl"
+db = reset(); db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on"); db.put(SC, t0 + 30, "off")
+run(db, every(ts(20, 40), ts(21, 10)))
+check("marker file missing (gateway not installed): the failure is reported as before", len(msgs("не дошёл до конца")) == 1, str(msgs()))
+haa.GATEWAY_STOPS = _orig_stops
+
 db = reset()                                                             # unavailable for a long time after a failed plan = part of the incident
 db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on"); db.put(SC, t0 + 30, "off"); db.put(V, ts(23, 0), "unavailable")
 run(db, every(ts(23, 5), ts(23, 55)) + every(ts(0, 0, day_off=1), ts(12, 0, day_off=1), 1800))

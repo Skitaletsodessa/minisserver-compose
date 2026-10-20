@@ -99,7 +99,8 @@ def routes(app):
         if r:
             return r
         sid = request.path_params["id"]
-        ent = await a._sched_entity(sid)
+        ent = dict(await a._sched_entity(sid))
+        ent["name"] = (a.core.devices.get(sid) or {}).get("name") or ent["name"]          # the Russian display name when there is one
         st, js, hd = await a.sched.call("GET", "/v1/schedules/" + sid, a._srole(p), a._acting(p))
         if st != 200:
             raise a.sched.translate_error(st, js)

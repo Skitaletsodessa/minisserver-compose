@@ -1,6 +1,8 @@
 """The gateway's domain logic: devices, switching with read-back, vacuums, service tiles and probes, capabilities.
 Home Assistant remains the executor and the schedule service the only writer of schedules; this module reads, requests and confirms."""
 import asyncio
+import json
+import os
 import socket
 import struct
 import time
@@ -26,12 +28,16 @@ class Core:
         self._probe_task = None
         self.devices = {}
         self.vacuums = {}
+        self._guards = {}
 
     # ── seed data (first start only; afterwards it is editable data) ──
     def seed(self):
         if not self.db.q1("SELECT 1 FROM device_meta LIMIT 1"):
             for did, m in config.DEVICE_SEED.items():
-                self.db.x("INSERT INTO device_meta(device_id,kind,power_sensor,household_switchable) VALUES (?,?,?,?)", (did, m["kind"], m["power_sensor"], m["household_switchable"]))
+                self.db.x("INSERT INTO device_meta(device_id,kind,power_sensor,household_switchable,display_name) VALUES (?,?,?,?,?)", (did, m["kind"], m["power_sensor"], m["household_switchable"], m.get("name")))
+        for did, m in config.DEVICE_SEED.items():                  # databases created before display names existed: fill the empty ones only (never overwrite an edit)
+            if m.get("name"):
+                self.db.x("UPDATE device_meta SET display_name=? WHERE device_id=? AND display_name IS NULL", (m["name"], did))
         if not self.db.q1("SELECT 1 FROM icon_rules LIMIT 1"):
             for i, (kw, icon) in enumerate(config.ICON_SEED):
                 self.db.x("INSERT INTO icon_rules(keyword,icon,priority) VALUES (?,?,?)", (kw, icon, i))
@@ -56,6 +62,7 @@ class Core:
             if e["kind"] == "plug" and e.get("ha_target", "").startswith("switch."):
                 meta = self.db.q1("SELECT * FROM device_meta WHERE device_id=?", (e["id"],))
                 self.devices[e["id"]] = {"entity": e, "kind": meta["kind"] if meta else "plug", "power_sensor": meta["power_sensor"] if meta else None,
+                                         "name": (meta["display_name"] if meta else None) or e["name"],
                                          "switchable": bool(meta["household_switchable"]) if meta else False}
                 watch.add(e["ha_target"])
                 ctl.add(e["ha_target"])
@@ -143,7 +150,7 @@ class Core:
             except ValueError:
                 power = None
         can_sw = self.can_switch(principal, d) and state in PRESENT and not self.ha.stale()
-        return {"id": did, "name": e["name"], "kind": d["kind"], "icon": self.icon_for(e["name"], did), "state": state,
+        return {"id": did, "name": d["name"], "kind": d["kind"], "icon": self.icon_for(e["name"], did), "state": state,
                 "state_age_s": round(self.clock() - c["changed"], 1) if c and c["changed"] else None, "stale": stale, "source": source,
                 "manual_until": manual_until, "next_edge": next_edge, "can_switch": can_sw, "can_edit_schedule": self.can_edit_schedule(principal, e),
                 "schedule_id": did, "power_w": power, "guardrails": e.get("guardrails", {})}
@@ -253,9 +260,17 @@ class Core:
         vs = self.ha.state(v["vacuum"])
         if self.ha.stale():
             raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
+        if vs != "cleaning" and self.ha.state(v["script"]) == "on":
+            # Found live 2026-10-20: the plan script is running but the robot has not left the dock yet (this robot reports "docked" for up to ~1 min
+            # after the start). Pausing nothing would leave the plan running, so a pause here cancels the plan and sends the robot home (with the guard).
+            res = await self.dock(principal, vid)
+            res["action"] = "dock"
+            return res
         if vs != "cleaning":
             raise GwError(409, "not_running", "the robot is not cleaning (%s)" % vs, {"state": vs})
         await self.ha.call("vacuum", "pause", v["vacuum"])
+        if self.ha.state(v["script"]) == "on":
+            self._note_stop(principal, v, "pause")
         obs, waited = await self.ha.wait_state(v["vacuum"], lambda s: s == "paused", config.VACUUM_CONFIRM_S)
         outcome = "confirmed" if obs == "paused" else "unconfirmed"
         self.db.audit("vacuum_pause", target=vid, before={"state": vs}, after={"outcome": outcome, "vacuum": obs}, ok=outcome == "confirmed", **self._actor(principal))
@@ -269,9 +284,12 @@ class Core:
         if vs in (None, "unavailable", "unknown"):
             raise GwError(409, "robot_unavailable", "the robot is unavailable")
         if ss == "on":
+            self._note_stop(principal, v, "dock")
             await self.ha.call("script", "turn_off", v["script"])
-        if vs not in ("docked",):
+        if vs not in ("docked",) or ss == "on":                       # a plan that was running may have a start command in flight even though HA still says docked
             await self.ha.call("vacuum", "return_to_base", v["vacuum"])
+        if ss == "on" or vs == "cleaning":
+            self._start_stop_guard(principal, vid, v)
         ok_states = ("returning", "docked")
         t0 = time.monotonic()
         obs_v, _ = await self.ha.wait_state(v["vacuum"], lambda s: s in ok_states, config.VACUUM_CONFIRM_S)
@@ -281,6 +299,48 @@ class Core:
             self.db.x("INSERT INTO vacuum_runs(vacuum_id,last_result,last_result_ts) VALUES (?,?,?) ON CONFLICT(vacuum_id) DO UPDATE SET last_result='stopped', last_result_ts=excluded.last_result_ts", (vid, "stopped", self.clock()))
         self.db.audit("vacuum_dock", target=vid, before={"state": vs, "script": ss}, after={"outcome": outcome, "vacuum": obs_v, "script": obs_s}, ok=outcome == "confirmed", **self._actor(principal))
         return {"outcome": outcome, "vacuum_id": vid, "action": "dock", "scenario": None, "observed": {"vacuum": obs_v, "script": obs_s}, "waited_ms": int((time.monotonic() - t0) * 1000)}
+
+    def _note_stop(self, principal, v, action):
+        """A person stopped a running plan. The host-side alert watcher (ha-alerts) reads this small file so that a plan someone cancelled on purpose is a
+        quiet line, not a 'plan did not finish' page. One JSON object per line, no secret in it; trimmed to the last 100 lines when it grows past 64 KB."""
+        path = os.path.join(self.db.dir, "stops.jsonl")
+        try:
+            rec = {"ts": round(time.time(), 1), "script": v["script"], "person": principal["person_id"], "action": action}
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            if os.path.getsize(path) > 65536:
+                keep = open(path, encoding="utf-8").read().splitlines()[-100:]
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(keep) + "\n")
+        except OSError:
+            pass                                                           # the marker is a courtesy to the alert watcher; never fail the stop because of it
+
+    def _start_stop_guard(self, principal, vid, v):
+        """After a stop of a running plan: for STOP_GUARD_S seconds, if the robot starts cleaning anyway (a command that was already on its way) and no new
+        plan was started, send it home again (at most 3 times, 8 s apart). Every send is audited. A plan started on purpose ends the guard."""
+        old = self._guards.get(vid)
+        if old and not old.done():
+            old.cancel()
+        actor = self._actor(principal)
+
+        async def run():
+            end = time.monotonic() + config.STOP_GUARD_S
+            sends, last = 0, -100.0
+            while time.monotonic() < end:
+                await asyncio.sleep(config.STOP_GUARD_POLL_S)
+                if self.ha.stale():
+                    continue
+                if self.ha.state(v["script"]) == "on":
+                    return
+                if self.ha.state(v["vacuum"]) == "cleaning" and sends < 3 and time.monotonic() - last >= 8:
+                    try:
+                        await self.ha.call("vacuum", "return_to_base", v["vacuum"])
+                        sends += 1
+                        last = time.monotonic()
+                        self.db.audit("vacuum_stop_guard", target=vid, after={"resent_return_to_base": sends}, **actor)
+                    except GwError:
+                        pass
+        self._guards[vid] = asyncio.get_running_loop().create_task(run())
 
     # ── service tiles ──
     def tiles(self, principal):
