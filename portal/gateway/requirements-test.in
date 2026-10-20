@@ -1,0 +1,10 @@
+# test-only (never in the image); superset of requirements.in
+starlette
+uvicorn
+jinja2
+segno
+websockets
+httpx
+PyYAML
+jsonschema
+openapi-spec-validator

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ t('login_title') }}{% endblock %}
+{% block body %}
+<section class="narrow">
+  <h1>{{ t('login_title') }}</h1>
+  {% if error %}<p class="msg err" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/login" autocomplete="off">
+    <label>{{ t('username') }}<input name="username" required autocapitalize="none" autocomplete="username"></label>
+    <label>{{ t('password') }}<input name="password" type="password" required autocomplete="current-password"></label>
+    <label>{{ t('totp') }}<input name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"></label>
+    <button class="primary" type="submit">{{ t('login_button') }}</button>
+  </form>
+</section>
+{% endblock %}

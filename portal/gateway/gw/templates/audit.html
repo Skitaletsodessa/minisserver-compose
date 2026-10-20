@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ t('audit_title') }}{% endblock %}
+{% block body %}
+<h1>{{ t('audit_title') }}</h1>
+<form method="get" action="/audit" class="filters">
+  <label>{{ t('filter_action') }}<input name="action" value="{{ f_action }}"></label>
+  <label>{{ t('filter_person') }}<input name="person" value="{{ f_person }}"></label>
+  <button type="submit">{{ t('apply') }}</button>
+</form>
+<div class="tablewrap"><table>
+<thead><tr><th>#</th><th>{{ t('when') }}</th><th>{{ t('who') }}</th><th>{{ t('what') }}</th><th>{{ t('result') }}</th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr><td>{{ r.seq }}</td><td>{{ r.ts[:19]|replace('T', ' ') }}</td><td>{{ r.person or '—' }}{% if r.device %} ({{ r.device }}){% endif %}</td>
+<td>{{ r.action }}{% if r.target %}: {{ r.target }}{% endif %}</td><td>{{ t('ok') if r.ok else t('failed') }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+{% endblock %}

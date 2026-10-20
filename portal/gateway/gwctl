@@ -1,0 +1,5 @@
+#!/bin/sh
+# gwctl - administration of portal-gateway, run on the server. It executes gw.ctl INSIDE the container (the data directory is mode 700 and
+# the database is not readable from the host account). No subcommand prints a secret: links and codes that must be seen by a person are
+# written to /srv/apps/portal/gateway/out/ (mode 600) and the command only says where. See `gwctl help`.
+exec docker exec -i portal-gateway python -m gw.ctl "$@"

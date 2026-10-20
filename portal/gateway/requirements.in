@@ -1,0 +1,5 @@
+starlette
+uvicorn
+jinja2
+segno
+websockets

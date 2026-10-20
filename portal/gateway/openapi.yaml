@@ -1,0 +1,604 @@
+openapi: 3.1.0
+info:
+  title: portal-gateway
+  version: 1.0.0
+  description: >
+    The Home Portal gateway (Task 28, ADR 0007). One API for the web UI and the Android app. HA stays the executor and the schedule service stays
+    the only writer of schedules: the gateway reads, requests and confirms by read-back. Tailnet only. Every state-changing call carries an
+    Idempotency-Key; every error has the shape {error: {code, message, details}}. Spec first: contract tests check every response of the running
+    service against this file. Paths marked x-status: planned are RESERVED and have no implementation (they answer 404).
+servers:
+  - url: https://minisserver.tail6bf4d5.ts.net:17443
+security:
+  - deviceToken: []
+  - session: []
+paths:
+  /v1/health:
+    get:
+      operationId: health
+      summary: Liveness (no credentials) or details (authenticated)
+      security: []
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Health"}}}}
+  /v1/auth/login:
+    post:
+      operationId: login
+      summary: Web login (admin needs password + TOTP). Sets a session cookie. Rate-limited per address and per account
+      security: []
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [username, password], additionalProperties: false, properties: {username: {type: string}, password: {type: string}, totp: {type: string}}}}}
+      responses:
+        "200": {description: logged in, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      parameters: [{$ref: "#/components/parameters/Idem"}]
+      responses:
+        "204": {description: logged out}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/auth/session:
+    get:
+      operationId: session
+      summary: Who am I, and the CSRF token of this session
+      responses:
+        "200": {description: the session, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/enrol:
+    post:
+      operationId: enrol
+      summary: The app trades a one-time enrolment code for a device token (shown once). No other credential
+      security: []
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/EnrolRequest"}}}
+      responses:
+        "201": {description: enrolled, content: {application/json: {schema: {$ref: "#/components/schemas/EnrolResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/capabilities:
+    get:
+      operationId: capabilities
+      summary: What this caller may do; the app builds its tabs from this
+      responses:
+        "200": {description: capabilities, content: {application/json: {schema: {$ref: "#/components/schemas/Capabilities"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/people:
+    get:
+      operationId: listPeople
+      summary: Admin only
+      responses:
+        "200": {description: people, content: {application/json: {schema: {type: object, required: [people], properties: {people: {type: array, items: {$ref: "#/components/schemas/Person"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: createPerson
+      summary: Admin only. No credentials are created here
+      parameters: [{$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/PersonCreate"}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/Person"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/people/{id}:
+    patch:
+      operationId: patchPerson
+      summary: Admin only. role, parent, active, web_login_enabled, name
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, properties: {name: {type: string}, role: {type: string, enum: [admin, household, readonly]}, parent: {type: boolean}, active: {type: boolean}, web_login_enabled: {type: boolean}}}}}
+      responses:
+        "200": {description: updated, content: {application/json: {schema: {$ref: "#/components/schemas/Person"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/people/{id}/enrolment-codes:
+    post:
+      operationId: createEnrolmentCode
+      summary: Admin only. A one-time code (10 min, single use) bound to the person; the code is returned ONCE
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/EnrolmentCode"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /v1/people/{id}/setup-link:
+    post:
+      operationId: createSetupLink
+      summary: Admin only. A one-time link on which the person sets their OWN password and TOTP (web login). Returned ONCE
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "201": {description: created, content: {application/json: {schema: {type: object, required: [url, expires_at], properties: {url: {type: string}, expires_at: {type: string}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /v1/phones:
+    get:
+      operationId: listPhones
+      summary: Enrolled devices (phones). Admin sees all, everyone else only their own
+      responses:
+        "200": {description: phones, content: {application/json: {schema: {type: object, required: [phones], properties: {phones: {type: array, items: {$ref: "#/components/schemas/Phone"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/phones/{id}:
+    delete:
+      operationId: revokePhone
+      summary: Revoke a device token. Takes effect on that device's NEXT request and closes its event stream. Admin, or the owner for their own phone
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "204": {description: revoked}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/devices:
+    get:
+      operationId: listDevices
+      summary: The "Дом" cards for smart plugs
+      responses:
+        "200": {description: devices, content: {application/json: {schema: {type: object, required: [devices, ha_link], properties: {devices: {type: array, items: {$ref: "#/components/schemas/Device"}}, ha_link: {type: string, enum: [ws, poll, down]}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/devices/{id}:
+    get:
+      operationId: getDevice
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: device, content: {application/json: {schema: {$ref: "#/components/schemas/Device"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/devices/{id}/switch:
+    post:
+      operationId: switchDevice
+      summary: Idempotent. Confirmed by reading the state back within a bounded wait; otherwise outcome=unconfirmed with the observed state. Never reported as success on the service call alone
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [on], additionalProperties: false, properties: {on: {type: boolean}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/SwitchResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/vacuums:
+    get:
+      operationId: listVacuums
+      summary: Robots and OUR scenarios (the existing HA scripts)
+      responses:
+        "200": {description: vacuums, content: {application/json: {schema: {type: object, required: [vacuums], properties: {vacuums: {type: array, items: {$ref: "#/components/schemas/Vacuum"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/vacuums/{id}/scenarios/{scenario}/start:
+    post:
+      operationId: startScenario
+      summary: Runs the existing HA script. Refused when the robot is unavailable or a plan is already running (reason in the error). Confirmed by read-back
+      parameters: [{$ref: "#/components/parameters/Id"}, {name: scenario, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/vacuums/{id}/pause:
+    post:
+      operationId: pauseVacuum
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/vacuums/{id}/dock:
+    post:
+      operationId: dockVacuum
+      summary: Stops the running plan script (if any) and sends the robot home
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}:
+    get:
+      operationId: getSchedule
+      summary: Proxy of the schedule service. id = the card's schedule_id
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200":
+          description: rules, guardrails, ETag
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/ScheduleDoc"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    put:
+      operationId: putSchedule
+      summary: Proxy. If-Match required. Guardrail rejections pass through with their codes and details
+      parameters: [{$ref: "#/components/parameters/Id"}, {name: If-Match, in: header, required: true, schema: {type: string}}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [rules], additionalProperties: false, properties: {rules: {type: array, items: {type: object}}}}}}
+      responses:
+        "200":
+          description: stored
+          headers: {ETag: {schema: {type: string}}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/ScheduleDoc"}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "412": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "428": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}/preview:
+    post:
+      operationId: previewSchedule
+      summary: Proxy. Validate, diff and the next 7 days of edges; changes nothing
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [rules], properties: {rules: {type: array, items: {type: object}}}}}}
+      responses:
+        "200": {description: preview, content: {application/json: {schema: {type: object}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}/undo:
+    post:
+      operationId: undoSchedule
+      summary: Proxy. Reverts the last rule change as a new change
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: reverted, content: {application/json: {schema: {$ref: "#/components/schemas/ScheduleDoc"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/schedules/{id}/exceptions:
+    get:
+      operationId: listExceptions
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: exceptions, content: {application/json: {schema: {type: object, required: [exceptions], properties: {exceptions: {type: array, items: {type: object}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addException
+      summary: Proxy. skip_date {date} or override_until {until, state} (modelled in the schedule service, not enforced in HA in step a)
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [kind], properties: {kind: {type: string, enum: [skip_date, override_until]}, date: {type: string}, until: {type: string}, state: {type: string}}}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {type: object, required: [id], properties: {id: {type: string}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "400": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/exceptions/{xid}:
+    delete:
+      operationId: deleteException
+      parameters: [{name: xid, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "204": {description: deleted}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/services:
+    get:
+      operationId: listServices
+      summary: Tiles with health badges, filtered by who may see them
+      responses:
+        "200": {description: tiles, content: {application/json: {schema: {type: object, required: [services], properties: {services: {type: array, items: {$ref: "#/components/schemas/ServiceTile"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/events:
+    get:
+      operationId: events
+      summary: Server-Sent Events. device / vacuum / service / link events; a heartbeat comment every 25 s; Last-Event-ID resumes the last few minutes. A revoked token closes its stream
+      parameters: [{name: Last-Event-ID, in: header, schema: {type: string}}]
+      responses:
+        "200": {description: text/event-stream, content: {text/event-stream: {schema: {type: string}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/audit:
+    get:
+      operationId: audit
+      summary: "Admin sees everything (with filters); everyone else only entries about themselves"
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500}}
+        - {name: before, in: query, schema: {type: integer}}
+        - {name: action, in: query, schema: {type: string}}
+        - {name: person, in: query, schema: {type: string}}
+        - {name: device, in: query, schema: {type: string}}
+      responses:
+        "200": {description: newest first, content: {application/json: {schema: {type: object, required: [audit], properties: {audit: {type: array, items: {$ref: "#/components/schemas/AuditRow"}}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/parental/{rest}:
+    get:
+      operationId: parentalPlanned
+      x-status: planned
+      summary: RESERVED for Task 29 (parental control). Not implemented; answers 404. Listed so that the app is built against a stable namespace
+      parameters: [{name: rest, in: path, required: true, schema: {type: string}}]
+      responses:
+        "404": {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    deviceToken: {type: http, scheme: bearer, description: "per person AND device, shown once at enrolment, revocable"}
+    session: {type: apiKey, in: cookie, name: gw_session, description: "web login; state-changing calls also need X-CSRF-Token"}
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: string}}
+    Idem: {name: Idempotency-Key, in: header, required: false, schema: {type: string, minLength: 8, maxLength: 80}, description: "required by the server on switch/vacuum/exception/enrolment calls; a repeat with the same key returns the first result"}
+  responses:
+    Error:
+      description: error
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            details: {type: object}
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [ok, degraded]}
+        version: {type: string}
+        data_checksum: {type: string}
+        ha: {type: object, properties: {link: {type: string, enum: [ws, poll, down]}, last_event_age_s: {type: [number, "null"]}}}
+        schedule_service: {type: object, properties: {link: {type: string}, in_sync: {type: [boolean, "null"]}}}
+        probes: {type: object, properties: {last_run_age_s: {type: [number, "null"]}}}
+        audit_chain: {type: object, properties: {ok: {type: boolean}, rows: {type: integer}}}
+    Session:
+      type: object
+      required: [person, csrf, expires_at]
+      properties:
+        person: {$ref: "#/components/schemas/PersonRef"}
+        csrf: {type: string}
+        expires_at: {type: string}
+        idle_expires_at: {type: string}
+    PersonRef:
+      type: object
+      required: [id, name, role, parent]
+      properties: {id: {type: string}, name: {type: string}, role: {type: string, enum: [admin, household, readonly]}, parent: {type: boolean}}
+    Person:
+      type: object
+      required: [id, name, role, parent, active, web_login_enabled, has_web_credentials, phones]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        role: {type: string, enum: [admin, household, readonly]}
+        parent: {type: boolean}
+        active: {type: boolean}
+        web_login_enabled: {type: boolean}
+        has_web_credentials: {type: boolean}
+        phones: {type: integer}
+    PersonCreate:
+      type: object
+      required: [name, role]
+      additionalProperties: false
+      properties: {name: {type: string, minLength: 1, maxLength: 60}, role: {type: string, enum: [admin, household, readonly]}, parent: {type: boolean}}
+    EnrolmentCode:
+      type: object
+      required: [code, expires_at, qr_payload, ttl_s]
+      properties:
+        code: {type: string}
+        expires_at: {type: string}
+        ttl_s: {type: integer}
+        qr_payload: {type: object, required: [u, c, tailnet], properties: {u: {type: string}, c: {type: string}, tailnet: {type: string, description: "reserved; filled by Task 30 with the per-device tailnet node key"}}}
+        qr_svg: {type: string, description: "inline SVG of the payload"}
+    EnrolRequest:
+      type: object
+      required: [code, device]
+      additionalProperties: false
+      properties:
+        code: {type: string}
+        device: {type: object, required: [label], properties: {label: {type: string, maxLength: 60}, model: {type: string, maxLength: 60}, platform: {type: string, maxLength: 30}, app_version: {type: string, maxLength: 30}}}
+    EnrolResult:
+      type: object
+      required: [phone_id, token, person, expires_at]
+      properties:
+        phone_id: {type: string}
+        token: {type: string, description: "shown once"}
+        person: {$ref: "#/components/schemas/PersonRef"}
+        expires_at: {type: string, description: "sliding 90 days"}
+    Phone:
+      type: object
+      required: [id, person_id, label, created_at, last_seen, expires_at, revoked]
+      properties:
+        id: {type: string}
+        person_id: {type: string}
+        person_name: {type: string}
+        label: {type: string}
+        model: {type: [string, "null"]}
+        platform: {type: [string, "null"]}
+        created_at: {type: string}
+        last_seen: {type: [string, "null"]}
+        expires_at: {type: string}
+        revoked: {type: boolean}
+    Capabilities:
+      type: object
+      required: [person, tabs, modules, limits, can]
+      properties:
+        person: {$ref: "#/components/schemas/PersonRef"}
+        tabs: {type: array, items: {type: string, enum: [home, parental]}}
+        modules: {type: object, required: [parental, cameras], properties: {parental: {type: boolean}, cameras: {type: boolean}}}
+        limits: {type: object, properties: {max_devices_total: {type: integer}, max_devices_per_person: {type: integer}}}
+        can: {type: object, properties: {switch: {type: boolean}, edit_schedules: {type: boolean}, start_vacuum: {type: boolean}, manage_people: {type: boolean}, see_audit: {type: boolean}}}
+        gateway: {type: object, properties: {version: {type: string}}}
+    Device:
+      type: object
+      required: [id, name, kind, icon, state, state_age_s, stale, source, can_switch, can_edit_schedule, schedule_id]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        kind: {type: string, enum: [plug, lamp, dryer, uv]}
+        icon: {type: string}
+        state: {type: string, enum: ["on", "off", unavailable]}
+        state_age_s: {type: [number, "null"]}
+        stale: {type: boolean, description: "true when the HA link is down: the state is old and must not be shown as fresh"}
+        source: {type: string, enum: [schedule, manual, unknown]}
+        manual_until: {type: [string, "null"], description: "when source=manual: the next schedule edge at which the schedule takes over again"}
+        next_edge: {oneOf: [{type: "null"}, {type: object, required: [at, action], properties: {at: {type: string}, action: {type: string}}}]}
+        can_switch: {type: boolean}
+        can_edit_schedule: {type: boolean}
+        schedule_id: {type: string}
+        power_w: {type: [number, "null"]}
+        guardrails: {type: object}
+    SwitchResult:
+      type: object
+      required: [outcome, device_id, requested, observed, changed]
+      properties:
+        outcome: {type: string, enum: [confirmed, unconfirmed]}
+        device_id: {type: string}
+        requested: {type: string, enum: ["on", "off"]}
+        observed: {type: string, enum: ["on", "off", unavailable]}
+        changed: {type: boolean, description: "false when the device was already in the requested state (idempotent)"}
+        waited_ms: {type: integer}
+        replayed: {type: boolean}
+    Vacuum:
+      type: object
+      required: [id, name, state, available, scenarios, stale]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        icon: {type: string}
+        state: {type: string}
+        battery: {type: [integer, "null"]}
+        available: {type: boolean}
+        stale: {type: boolean}
+        running_scenario: {type: [string, "null"]}
+        last_result: {type: [string, "null"]}
+        scenarios: {type: array, items: {type: object, required: [id, name, description], properties: {id: {type: string}, name: {type: string}, description: {type: string}}}}
+        schedule_id: {type: [string, "null"]}
+        can_start: {type: boolean}
+    VacuumResult:
+      type: object
+      required: [outcome, vacuum_id, action, observed]
+      properties:
+        outcome: {type: string, enum: [confirmed, unconfirmed]}
+        vacuum_id: {type: string}
+        action: {type: string, enum: [start, pause, dock]}
+        scenario: {type: [string, "null"]}
+        observed: {type: object}
+        waited_ms: {type: integer}
+        replayed: {type: boolean}
+    ScheduleDoc:
+      type: object
+      required: [entity, version, rules]
+      properties:
+        entity: {type: string}
+        version: {type: integer}
+        tz: {type: string}
+        rules: {type: array, items: {type: object}}
+        guardrails: {type: object}
+        can_edit: {type: boolean}
+    ServiceTile:
+      type: object
+      required: [id, name, icon, url, badge, visible_to]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        icon: {type: string}
+        url: {type: string}
+        badge: {type: string, enum: [ok, degraded, down, unknown]}
+        visible_to: {type: string, enum: [admin, household]}
+        last_ok: {type: [string, "null"]}
+        rtt_ms: {type: [integer, "null"]}
+        detail: {type: [string, "null"]}
+    AuditRow:
+      type: object
+      required: [seq, ts, action, person, device, ok]
+      properties:
+        seq: {type: integer}
+        ts: {type: string}
+        action: {type: string}
+        person: {type: [string, "null"]}
+        device: {type: [string, "null"]}
+        target: {type: [string, "null"]}
+        before: {}
+        after: {}
+        ok: {type: boolean}
+        source_ip: {type: [string, "null"]}

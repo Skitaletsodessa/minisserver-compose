@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav_home') }}{% endblock %}
+{% block body %}
+<p class="msg warn" id="ha-banner" role="status" {% if ha_link != 'down' %}hidden{% endif %}>{{ t('ha_down') }}</p>
+<section class="grid" id="devices" aria-label="{{ t('nav_home') }}">
+{% for d in devices %}
+  <article class="card" data-device="{{ d.id }}" data-state="{{ d.state }}" data-stale="{{ 'yes' if d.stale else 'no' }}">
+    <header>
+      <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#{{ d.icon }}"/></svg>
+      <h2>{{ d.name }}</h2>
+      <details class="menu"><summary aria-label="{{ t('menu') }}">&#8942;</summary><a href="/settings/{{ d.schedule_id }}">{{ t('settings') }}</a></details>
+    </header>
+    <button class="big {{ 'is-on' if d.state == 'on' else 'is-off' }}" data-action="toggle" data-on="{{ 'true' if d.state == 'on' else 'false' }}" {% if not d.can_switch %}disabled{% endif %}>
+      <span class="state">{{ t('state_' + d.state) }}</span>
+      <span class="act">{{ t('turn_off') if d.state == 'on' else t('turn_on') }}</span>
+    </button>
+    <p class="meta">
+      <span class="src">{% if d.source == 'manual' and d.manual_until %}{{ t('manual_until', t=hhmm(d.manual_until)) }}{% elif d.source == 'manual' %}{{ t('source_manual') }}{% elif d.source == 'schedule' %}{{ t('source_schedule') }}{% else %}{{ t('source_unknown') }}{% endif %}</span>
+      {% if d.next_edge %}<span class="edge"> · {{ t('next_edge_' + d.next_edge.action, t=hhmm(d.next_edge.at)) }}</span>{% endif %}
+      {% if d.power_w is not none %}<span class="pw"> · {{ t('power', w=d.power_w|round(0)|int) }}</span>{% endif %}
+    </p>
+    <p class="note" role="status" {% if not d.stale %}hidden{% endif %}>{{ t('stale') }}</p>
+  </article>
+{% endfor %}
+</section>
+<h2 class="sect">{{ t('vacuums') }}</h2>
+<section class="grid" id="vacuums">
+{% for v in vacuums %}
+  <article class="card" data-vacuum="{{ v.id }}">
+    <header>
+      <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#{{ v.icon }}"/></svg>
+      <h2>{{ v.name }}</h2>
+      {% if v.schedule_id %}<details class="menu"><summary aria-label="{{ t('menu') }}">&#8942;</summary><a href="/settings/{{ v.schedule_id }}">{{ t('settings') }}</a></details>{% endif %}
+    </header>
+    <p class="meta"><span class="vstate">{{ t('vac_' + v.state) if ('vac_' + v.state) in S else v.state }}</span>{% if v.battery is not none %}<span> · {{ t('battery', p=v.battery) }}</span>{% endif %}
+      {% if v.running_scenario %}<span> · {{ t('running', s=v.running_scenario) }}</span>{% endif %}{% if v.last_result %}<span> · {{ t('last_result', r=v.last_result) }}</span>{% endif %}</p>
+    <div class="row">
+      {% for s in v.scenarios %}<button class="primary" data-action="vac-start" data-scenario="{{ s.id }}" title="{{ s.description }}" {% if not v.can_start %}disabled{% endif %}>{{ t('start') }}: {{ s.name }}</button>{% endfor %}
+      <button data-action="vac-pause" {% if not (me.role in ('admin', 'household')) %}disabled{% endif %}>{{ t('pause') }}</button>
+      <button data-action="vac-dock" {% if not (me.role in ('admin', 'household')) %}disabled{% endif %}>{{ t('dock') }}</button>
+    </div>
+    <p class="note" role="status" hidden></p>
+  </article>
+{% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,43 @@
+# Task 28 gateway (ADR 0007). network_mode: host because Home Assistant (127.0.0.1:8123) and the schedule service (127.0.0.1:16444) listen on
+# loopback only and are meant to stay that way. The bind address is ONE explicit line (GW_BIND) that the code refuses to change to anything
+# but loopback, and every start is followed by `check-bind.sh` (an `ss` assertion). Caddy publishes the tailnet-only site
+# minisserver.tail6bf4d5.ts.net:17443 -> 127.0.0.1:17444. Nothing here is public: no Funnel, no tunnel, no router port.
+# Secrets are files (mode 600) in /srv/apps/portal/gateway-secrets, mounted read-only at /secrets; nothing secret is in this file or in the environment.
+services:
+  portal-gateway:
+    build: .
+    image: portal-gateway:local
+    container_name: portal-gateway
+    network_mode: host
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      - TZ=Europe/Prague
+      - GW_BIND=127.0.0.1
+      - GW_PORT=17444
+      - GW_DATA=/data
+      - GW_PUBLIC_URL=https://minisserver.tail6bf4d5.ts.net:17443
+      - GW_HA_URL=http://127.0.0.1:8123
+      - GW_SCHED_URL=http://127.0.0.1:16444
+    volumes:
+      - /srv/apps/portal/gateway:/data
+      - /srv/apps/portal/gateway-secrets:/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:17444/v1/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "portal.base-image=python:3.13-slim-trixie"
+      - "portal.base-digest=sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"

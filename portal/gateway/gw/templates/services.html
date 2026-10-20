@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ t('services_title') }}{% endblock %}
+{% block body %}
+<h1>{{ t('services_title') }}</h1>
+<section class="grid" id="tiles">
+{% for s in tiles %}
+  <article class="card tile" data-service="{{ s.id }}">
+    <header><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#{{ s.icon }}"/></svg><h2>{{ s.name }}</h2></header>
+    <p class="badge b-{{ s.badge }}"><span class="dot" aria-hidden="true"></span><span class="btext">{{ t('badge_' + s.badge) }}</span>{% if s.rtt_ms is not none %}<span class="rtt"> · {{ s.rtt_ms }} мс</span>{% endif %}</p>
+    <a class="linkbtn" href="{{ s.url }}" rel="noopener">{{ t('open') }}</a>
+  </article>
+{% endfor %}
+</section>
+{% endblock %}

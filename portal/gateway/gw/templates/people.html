@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ t('people_title') }}{% endblock %}
+{% block body %}
+<h1>{{ t('people_title') }}</h1>
+<section id="people">
+{% for p in people %}
+  <article class="card" data-person="{{ p.id }}">
+    <header><h2>{{ p.name }}</h2></header>
+    <p class="meta">{{ t('person_role') }}: {{ p.role }}{% if p.parent %} · {{ t('person_parent') }}{% endif %}{% if not p.active %} · off{% endif %} · {{ t('phones') }}: {{ p.phones }}</p>
+    <div class="row">
+      <button class="primary" data-action="enrol-code">{{ t('enrol_create') }}</button>
+      {% if p.web_login_enabled %}<button data-action="setup-link">{{ t('setup_link') }}</button>{% endif %}
+      <button data-action="toggle-web" data-on="{{ 'true' if p.web_login_enabled else 'false' }}">{{ t('web_login') }}: {{ 'вкл' if p.web_login_enabled else 'выкл' }}</button>
+    </div>
+    <div class="out" hidden></div>
+  </article>
+{% endfor %}
+</section>
+<h2 class="sect">{{ t('phones_title') }}</h2>
+<section id="phones">
+{% for ph in phones %}{% if not ph.revoked %}
+  <article class="card" data-phone="{{ ph.id }}">
+    <header><h2>{{ ph.label }}</h2></header>
+    <p class="meta">{{ ph.person_name }}{% if ph.model %} · {{ ph.model }}{% endif %} · {{ t('last_seen') }}: {{ ph.last_seen or '—' }}</p>
+    <div class="row"><button class="danger" data-action="revoke">{{ t('revoke') }}</button></div>
+  </article>
+{% endif %}{% else %}<p>{{ t('no_phones') }}</p>{% endfor %}
+</section>
+{% endblock %}

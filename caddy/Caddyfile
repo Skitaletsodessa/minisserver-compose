@@ -169,3 +169,11 @@ minisserver.tail6bf4d5.ts.net:16443 {
 	# The service listens on 127.0.0.1:16444; every request needs a bearer token (roles admin/household/readonly) and failed attempts are rate-limited per client IP.
 	reverse_proxy 127.0.0.1:16444
 }
+
+minisserver.tail6bf4d5.ts.net:17443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 28: portal gateway (web UI + /v1 API for the Android app) - tailnet only, never on the LAN, never public (no Funnel, no tunnel).
+	# The service listens on 127.0.0.1:17444; every API call needs a device token or a login session, failures are rate-limited per real client IP.
+	reverse_proxy 127.0.0.1:17444
+}
