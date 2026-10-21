@@ -1,0 +1,7 @@
+# GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
+# snapshot checksum: 6a844c0a837fe842
+# scratch-proof (192.168.31.199)
+# allow:
+
+# deny:
+
