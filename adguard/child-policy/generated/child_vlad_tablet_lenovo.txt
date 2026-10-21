@@ -1,5 +1,5 @@
 # GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
-# snapshot checksum: 408fbf61b168fda3
+# snapshot checksum: 0f6f94241b8e3dcf
 # vlad-tablet-lenovo (192.168.31.61)
 # allow:
 
