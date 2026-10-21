@@ -52,6 +52,11 @@ def main():
         text = head + "# %s (%s)\n# allow:\n%s\n# deny:\n%s\n" % (dev["name"], dev["ip"], "\n".join(sorted(dev.get("allow_extra") or [])), "\n".join(sorted(dev.get("deny_extra") or [])))
         if write_if_changed(POLICY / "generated" / (dev["id"] + ".txt"), text):
             changed.append("generated/%s.txt" % dev["id"])
+    keep = {dev["id"] + ".txt" for dev in snap["devices"]}              # a device that was removed leaves no file behind (found by the live proof with a scratch device)
+    for stale in sorted((POLICY / "generated").glob("*.txt")) if (POLICY / "generated").is_dir() else []:
+        if stale.name not in keep:
+            stale.unlink()
+            changed.append("generated/%s (removed)" % stale.name)
     if not changed:
         print("up to date")
         return 0
