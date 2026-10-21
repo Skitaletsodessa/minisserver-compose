@@ -1,5 +1,5 @@
 # GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
-# snapshot checksum: 0f773eb00c400efb
+# snapshot checksum: 27ad8dac33b328d7
 maps.google.com
 maps.googleapis.com
 maps.gstatic.com
