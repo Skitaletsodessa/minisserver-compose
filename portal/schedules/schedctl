@@ -11,6 +11,7 @@
   schedctl effective ENTITY [ISO-TIME]
   schedctl audit [ENTITY] [LIMIT]
   schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | add ENTITY override_until HH:MM on|off | rm ID
+  schedctl plug add ID "Name" switch.xxx LIKE_ID     # admin: a new plug entity with the windows/guardrails of LIKE_ID, starts unmanaged (then: managed ID on)
   schedctl child list | add NAME IP [--mac MAC] [--like DEVICE_ID] | remove ID    # the children's devices (Task 29; add/remove are admin-only)
   schedctl guardrails ENTITY FILE.json       # admin
   schedctl managed ENTITY on|off             # admin: the cutover switch (rendered into HA or not)
@@ -146,6 +147,9 @@ def main(a):
         if rest[0] == "rm" and len(rest) == 2:
             st, b, _ = call("DELETE", "/v1/exceptions/" + rest[1])
             return done(st, b)
+    if c == "plug" and len(rest) == 5 and rest[0] == "add":                  # plug add ID "Name" switch.xxx LIKE_ID
+        st, b, _ = call("POST", "/v1/entities", {"id": rest[1], "name": rest[2], "ha_target": rest[3], "like": rest[4]})
+        return done(st, b, ok=(201,))
     if c == "child" and rest:
         if rest[0] == "list":
             st, b, _ = call("GET", "/v1/child")

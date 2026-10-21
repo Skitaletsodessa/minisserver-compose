@@ -30,6 +30,20 @@ paths:
         "200": {description: entities, content: {application/json: {schema: {type: object, required: [entities], properties: {entities: {type: array, items: {$ref: "#/components/schemas/Entity"}}}}}}}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addPlug
+      summary: "Admin only. Adds a smart plug as an entity: copies guardrails, flags and windows of an existing plug (`like`). Starts UNMANAGED (nothing is rendered into Home Assistant until PATCH managed=true)"
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [id, name, ha_target, like], additionalProperties: false, properties: {id: {type: string}, name: {type: string}, ha_target: {type: string, pattern: "^switch[.][a-z0-9_]+$"}, like: {type: string}}}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/Entity"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/entities/{id}:
     patch:
       operationId: patchEntity

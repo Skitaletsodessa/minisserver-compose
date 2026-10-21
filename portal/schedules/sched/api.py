@@ -171,6 +171,17 @@ class App:
             return e
         return JSONResponse({"entities": self.store.entities()})
 
+    async def entity_add(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if (not isinstance(data, dict) or set(data) != {"id", "name", "ha_target", "like"} or any(not isinstance(v, str) for v in data.values())):
+            return err(400, "bad_body", "an object with id, name, ha_target and like (strings) is required")
+        return self._guard(lambda: JSONResponse(self.store.add_plug(who, data["id"], data["name"], data["ha_target"], data["like"]), status_code=201))
+
     async def entity_patch(self, request):
         who, e = self.authenticate(request, "admin")
         if e:
@@ -590,6 +601,7 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
     routes = [
         Route("/v1/health", a.health, methods=["GET"]),
         Route("/v1/entities", a.entities, methods=["GET"]),
+        Route("/v1/entities", a.entity_add, methods=["POST"]),
         Route("/v1/entities/{id}", a.entity_patch, methods=["PATCH"]),
         Route("/v1/entities/{id}/guardrails", a.guardrails_put, methods=["PUT"]),
         Route("/v1/schedules", a.schedules, methods=["GET"]),

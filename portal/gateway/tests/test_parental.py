@@ -432,12 +432,13 @@ class Health(P):
         self.assertEqual((js["policy"]["in_sync"], js["policy"]["applied_hash"]), (False, None))
 
     def test_an_active_exception_is_part_of_what_is_expected(self):
+        # target "all" always changes the block (a window of youtube may be open at the real time of day the suite runs)
         e = self.e
-        x = e.req("POST", BASE + A + "/exceptions", who="ivan", json={"target": "youtube", "minutes": 30}).json()
+        x = e.req("POST", BASE + A + "/exceptions", who="ivan", json={"target": "all", "minutes": 30}).json()
         e.agh.user_rules = self.render()                                                                                # the job has NOT applied the exception yet
         e.o["parental"]._cache.clear()
         self.assertFalse(e.req("GET", "/v1/parental/health", who="ivan").json()["policy"]["in_sync"])
-        e.agh.user_rules = self.render([{"client": "192.168.31.60", "target": "youtube"}])                              # now it has
+        e.agh.user_rules = self.render([{"client": "192.168.31.60", "target": "all"}])                              # now it has
         e.o["parental"]._cache.clear()
         self.assertTrue(e.req("GET", "/v1/parental/health", who="ivan").json()["policy"]["in_sync"])
         e.req("DELETE", BASE + A + "/exceptions/" + x["id"], who="ivan")

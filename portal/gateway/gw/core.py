@@ -35,6 +35,10 @@ class Core:
         if not self.db.q1("SELECT 1 FROM device_meta LIMIT 1"):
             for did, m in config.DEVICE_SEED.items():
                 self.db.x("INSERT INTO device_meta(device_id,kind,power_sensor,household_switchable,display_name,switch_mode) VALUES (?,?,?,?,?,?)", (did, m["kind"], m["power_sensor"], m["household_switchable"], m.get("name"), m.get("switch_mode", "plain")))
+        for did, m in config.DEVICE_SEED.items():                  # a plug added AFTER the first start (e.g. the citrus plug, 2026-10-21) gets its meta row once; an existing row is never touched
+            if not self.db.q1("SELECT 1 FROM device_meta WHERE device_id=?", (did,)):
+                self.db.x("INSERT INTO device_meta(device_id,kind,power_sensor,household_switchable,display_name,switch_mode) VALUES (?,?,?,?,?,?)",
+                          (did, m["kind"], m["power_sensor"], m["household_switchable"], m.get("name"), m.get("switch_mode", "plain")))
         for did, m in config.DEVICE_SEED.items():                  # Task 29: a database from before switch modes existed gets the seed default, once (NULL only, never an edit)
             self.db.x("UPDATE device_meta SET switch_mode=? WHERE device_id=? AND switch_mode IS NULL", (m.get("switch_mode", "plain"), did))
         for did, m in config.DEVICE_SEED.items():                  # databases created before display names existed: fill the empty ones only (never overwrite an edit)

@@ -33,5 +33,21 @@ class Migration(unittest.TestCase):
         self.assertEqual({r["device_id"]: r["display_name"] for r in db.q("SELECT device_id, display_name FROM device_meta")}, rows)
 
 
+
+    def test_a_plug_added_after_the_first_start_gets_its_meta_row_once(self):
+        d = tempfile.mkdtemp(prefix="gw-mig2-")
+        db = dbmod.DB(d)
+        core = Core.__new__(Core)
+        core.db = db
+        core.seed()
+        db.x("DELETE FROM device_meta WHERE device_id='plant_citrus'")                              # a database from before the citrus plug existed
+        db.x("UPDATE device_meta SET household_switchable=0, display_name='Моё' WHERE device_id='plant_rack1'")   # edits made by hand
+        core.seed()
+        c = db.q1("SELECT * FROM device_meta WHERE device_id='plant_citrus'")
+        self.assertEqual((c["kind"], c["power_sensor"], c["household_switchable"], c["switch_mode"]), ("lamp", "sensor.citrus_2nd_floor_power", 1, "plain"))
+        r = db.q1("SELECT * FROM device_meta WHERE device_id='plant_rack1'")
+        self.assertEqual((r["household_switchable"], r["display_name"]), (0, "Моё"))                 # never overwritten
+
+
 if __name__ == "__main__":
     unittest.main()
