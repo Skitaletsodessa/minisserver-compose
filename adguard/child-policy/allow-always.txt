@@ -1,27 +1,18 @@
-# Allowed every day, all day. Seeded with the Android plumbing a phone needs to
-# function at all under a block-everything policy; refine from the AGH query log
-# of the real device (admin UI -> Query log, filter by client), not by guessing.
-# --- connectivity check / time / push (Telegram notifications ride FCM)
-connectivitycheck.gstatic.com
+# GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
+# snapshot checksum: 408fbf61b168fda3
+accuweather.com
+android.apis.google.com
+android.googleapis.com
+awxcdn.com
 connectivitycheck.android.com
-time.android.com
-mtalk.google.com
+connectivitycheck.gstatic.com
+deviceintegritytokens-pa.googleapis.com
 fcm.googleapis.com
 firebaseinstallations.googleapis.com
-android.apis.google.com
-# --- weather: AccuWeather (Motorola stock weather app), seen in Vlad's phone query log 2026-10-02
-accuweather.com
-awxcdn.com
-# --- Google services the phone needs for sign-in, settings, device attestation and Family
-# Link. Added 2026-10-02 from Vlad's real query log (all six were blocked and broke the
-# Google settings screen / YouTube). Deliberately NOT included: dl.google.com,
-# edgedl.me.gvt1.com, update.googleapis.com (app/system updates), content-autofill,
-# photosdata-pa, socialuserlocation, firebase*/app-measurement (telemetry).
-www.googleapis.com
-android.googleapis.com
-play.googleapis.com
-play-fe.googleapis.com
-deviceintegritytokens-pa.googleapis.com
 kidsmanagement-pa.googleapis.com
-# --- 2026-10-05: Lenovo tablets validate the network with https://www.google.com/generate_204; blocked, Android shows limited internet and Family Link does not sync. Safe search is forced for these clients, so this opens only Google SafeSearch.
+mtalk.google.com
+play-fe.googleapis.com
+play.googleapis.com
+time.android.com
 www.google.com
+www.googleapis.com

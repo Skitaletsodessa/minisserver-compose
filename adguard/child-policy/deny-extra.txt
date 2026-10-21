@@ -1,2 +1,4 @@
-# Managed from the admin page (child-ui). One domain per line; subdomains are included.
-# allow-extra: always allowed. deny-extra: always blocked, even when everything is opened.
+# GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
+# snapshot checksum: 408fbf61b168fda3
+# union over the children (informational)
+
