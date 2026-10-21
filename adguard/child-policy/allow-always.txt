@@ -1,5 +1,5 @@
 # GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
-# snapshot checksum: 27ad8dac33b328d7
+# snapshot checksum: 0f773eb00c400efb
 accuweather.com
 android.apis.google.com
 android.googleapis.com
