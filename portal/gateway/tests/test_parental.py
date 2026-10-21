@@ -154,7 +154,7 @@ class Windows(P):
     def test_get_put_with_if_match_and_the_rules_round_trip(self):
         e = self.e
         r = e.req("GET", BASE + A + "/windows", who="dasha")
-        self.assertEqual((r.status_code, self.byid(r.json()["rules"]), r.json()["guardrails"]["allowed_from"], r.json()["guardrails"]["proposed"], r.json()["can_edit"]), (200, self.byid(self.rules()), "08:00", True, True))
+        self.assertEqual((r.status_code, self.byid(r.json()["rules"]), r.json()["guardrails"]["allowed_from"], r.json()["guardrails"]["proposed"], r.json()["can_edit"]), (200, self.byid(self.rules()), "08:00", False, True))
         etag = r.headers["ETag"]
         r = self.put_windows("dasha", A, self.rules("16:00", "18:00"), etag)
         self.assertEqual(r.status_code, 200, r.text)

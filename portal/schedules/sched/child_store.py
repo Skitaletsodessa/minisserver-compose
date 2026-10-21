@@ -12,10 +12,12 @@ import datetime as dt
 
 from . import model, child_render, child_invariants
 
-# Guardrails proposed from today's behaviour (window 16:00-19:00 Mon-Sat; exceptions 30 min ... end of day). PROPOSED - Ivan confirms (ADR 0008 (b)):
-PROPOSED_GUARDRAILS = {"allowed_from": "08:00", "allowed_to": "21:00", "max_open_minutes_per_day": 240, "max_exception_minutes": 360,
-                       "exception_latest_end": "22:00", "all_latest_end": "21:00"}
-CHILD_FLAGS = {"household_editable": True, "guardrails_proposed": True}
+# Guardrails = TODAY'S behaviour (Ivan, 2026-10-21: "keep the current values"): windows only inside 08:00-21:00 (today's 16:00-19:00 Mon-Sat is inside), at most 240 min a day
+# of open YouTube/Roblox time (today 180). NO cap and NO ceiling on temporary exceptions: they run from a minute to the end of the day (23:59), "everything"
+# included, exactly as the old child-ui/child-override allowed. exception_latest_end / all_latest_end / max_exception_minutes still exist as optional guardrails
+# (schedctl guardrails, admin-only, audited) but are not set. The earlier proposal (360 min, 22:00, all <= 21:00) was STRICTER than today and was dropped.
+PROPOSED_GUARDRAILS = {"allowed_from": "08:00", "allowed_to": "21:00", "max_open_minutes_per_day": 240}
+CHILD_FLAGS = {"household_editable": True, "guardrails_proposed": False}
 EXCEPTION_GRACE_S = 120          # an expired exception stays in the data this long (the host job drops it by its own clock first)
 
 

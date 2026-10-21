@@ -1012,7 +1012,7 @@ components:
         max_exception_minutes: {type: integer}
         exception_latest_end: {type: string}
         all_latest_end: {type: string}
-        proposed: {type: boolean, description: "true while Ivan has not confirmed these numbers"}
+        proposed: {type: boolean, description: "true while Ivan has not confirmed these numbers (false since 2026-10-21: today's values)"}
     ChildRule:
       type: object
       required: [id, days, start, end, opens]

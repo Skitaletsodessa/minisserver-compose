@@ -305,7 +305,7 @@ paths:
   /v1/child/{id}/exceptions:
     post:
       operationId: addChildException
-      summary: "A time-boxed exception: target youtube|roblox|maps|all, minutes XOR until_end_of_day. Guardrails: max_exception_minutes, exception_latest_end, all_latest_end (rejected with reasons, never clamped). Replaces an active exception of the same target"
+      summary: "A time-boxed exception: target youtube|roblox|maps|all, minutes XOR until_end_of_day. By default NO cap and NO ceiling (today's behaviour: a minute up to the end of the day, 23:59, everything included; crossing midnight is refused); the optional guardrails max_exception_minutes, exception_latest_end, all_latest_end apply only when an admin sets them (rejected with reasons, never clamped). Replaces an active exception of the same target"
       parameters: [{$ref: "#/components/parameters/EntityId"}]
       requestBody:
         required: true

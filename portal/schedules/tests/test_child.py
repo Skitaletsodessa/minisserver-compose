@@ -193,7 +193,7 @@ class Devices(unittest.TestCase):
         d = r.json()
         self.assertEqual((d["id"], d["name"], d["ip"], d["mac"]), ("child_anna_s_phone", "Anna's phone", "192.168.31.70", "aa:bb:cc:00:11:22"))
         self.assertEqual(sorted(x["id"] for x in d["rules"]), ["maps", "yt_roblox"])
-        self.assertTrue(d["flags"]["guardrails_proposed"])
+        self.assertFalse(d["flags"]["guardrails_proposed"])
         snap = self.e.req("GET", "/v1/child/snapshot").json()
         self.assertIn("192.168.31.70", [x["ip"] for x in snap["devices"]])
         self.assertEqual(self.e.req("GET", "/v1/child/child_anna_s_phone").status_code, 200)

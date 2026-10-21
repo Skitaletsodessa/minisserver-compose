@@ -45,11 +45,10 @@ class Base(unittest.TestCase):
 
 
 class ImportAndSnapshot(Base):
-    def test_import_gives_proposed_guardrails_flags_and_per_child_lists(self):
+    def test_import_gives_todays_guardrails_flags_and_per_child_lists(self):
         d = self.req("GET", "/v1/child/child_a").json()
-        self.assertEqual(d["guardrails"], {"allowed_from": "08:00", "allowed_to": "21:00", "max_open_minutes_per_day": 240, "max_exception_minutes": 360,
-                                           "exception_latest_end": "22:00", "all_latest_end": "21:00"})
-        self.assertEqual(d["flags"], {"household_editable": True, "guardrails_proposed": True})
+        self.assertEqual(d["guardrails"], {"allowed_from": "08:00", "allowed_to": "21:00", "max_open_minutes_per_day": 240})        # no cap/ceiling on exceptions: today's behaviour
+        self.assertEqual(d["flags"], {"household_editable": True, "guardrails_proposed": False})
         self.assertEqual((d["ip"], d["domains"], d["exceptions"]), ("192.168.31.60", {"allow": [], "deny": []}, []))
         self.assertEqual([x["id"] for x in self.req("GET", "/v1/child").json()["children"]], ["child_a", "child_b"])
 
@@ -202,7 +201,28 @@ class Exceptions(Base):
         self.assertEqual([e["id"] for e in self.req("GET", "/v1/child/child_a").json()["exceptions"]], [z["id"]])
         self.assertEqual(self.req("DELETE", "/v1/child/child_a/exceptions/%s" % y["id"], role="household").status_code, 404)
 
+    def test_default_exceptions_are_todays_behaviour_no_cap_no_ceiling_until_the_end_of_the_day(self):
+        """Ivan 2026-10-21: keep the current values. An exception may run from a minute to 23:59, 'everything' included; only crossing midnight is refused."""
+        self.set_clock(12, 0)
+        self.assertEqual(self.grant("youtube", minutes=30).status_code, 201)
+        self.assertEqual(self.grant("roblox", minutes=600).status_code, 201)                      # 10 h: ends 22:00, no 360 cap, no 22:00 ceiling
+        r = self.grant("all", until_end_of_day=True)
+        self.assertEqual((r.status_code, r.json()["expires_at"][:19]), (201, "2026-10-19T23:59:00"))
+        r = self.grant("maps", minutes=700)                                                       # would end 23:40... 12:00 + 11 h 40 = 23:40: fine
+        self.assertEqual(r.status_code, 201)
+        r = self.grant("youtube", minutes=720)                                                    # 24:00 = next day
+        self.assertEqual(r.json()["error"]["problems"][0]["code"], "midnight")
+        self.set_clock(23, 40)
+        self.assertEqual(self.grant("all", until_end_of_day=True).status_code, 201)                # 23:59 is still ahead
+        self.set_clock(23, 59)
+        r = self.grant("all", until_end_of_day=True)
+        self.assertEqual((r.status_code, r.json()["error"]["problems"][0]["code"]), (422, "too_late"))
+
     def test_guardrails_on_exceptions_length_latest_end_and_all(self):
+        # the optional guardrails still work when an admin sets them (they are not set by default any more)
+        g = self.req("GET", "/v1/child/child_a").json()["guardrails"]
+        self.assertEqual(self.req("PUT", "/v1/entities/child_a/guardrails",
+                                  json={**g, "max_exception_minutes": 360, "exception_latest_end": "22:00", "all_latest_end": "21:00"}).status_code, 200)
         r = self.grant("youtube", minutes=400)
         self.assertEqual(r.status_code, 422)
         self.assertEqual([p["code"] for p in r.json()["error"]["problems"]], ["max_exception"])
@@ -215,6 +235,8 @@ class Exceptions(Base):
         self.assertEqual(self.grant("all", minutes=50).status_code, 201)
 
     def test_until_end_of_day_means_the_latest_end_of_that_target(self):
+        g = self.req("GET", "/v1/child/child_a").json()["guardrails"]
+        self.req("PUT", "/v1/entities/child_a/guardrails", json={**g, "exception_latest_end": "22:00", "all_latest_end": "21:00"})
         r = self.grant("youtube", until_end_of_day=True).json()
         self.assertTrue(r["expires_at"].startswith("2026-10-19T22:00:00"))
         r = self.grant("all", until_end_of_day=True).json()

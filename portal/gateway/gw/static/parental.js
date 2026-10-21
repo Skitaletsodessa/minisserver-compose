@@ -131,7 +131,9 @@
     var d = cur.d, w = d.windows, g = w.guardrails;
     var box = section(T("par_windows"), "par-windows");
     box.appendChild(el("p", { "class": "meta", text: T("par_windows_hint") }));
-    box.appendChild(el("p", { "class": "meta", text: T("par_guard", { a: g.allowed_from, b: g.allowed_to, m: g.max_open_minutes_per_day, x: g.max_exception_minutes, e: g.exception_latest_end, all: g.all_latest_end }) + (g.proposed ? " " + T("par_guard_proposed") : "") }));
+    var capped = g.max_exception_minutes || g.exception_latest_end || g.all_latest_end;            // the exception limits are optional: by default there are none
+    var excText = capped ? T("par_guard_exc_capped", { x: g.max_exception_minutes || 1440, e: g.exception_latest_end || "23:59", all: g.all_latest_end || "23:59" }) : T("par_guard_exc_free");
+    box.appendChild(el("p", { "class": "meta", text: T("par_guard", { a: g.allowed_from, b: g.allowed_to, m: g.max_open_minutes_per_day }) + " " + excText + (g.proposed ? " " + T("par_guard_proposed") : "") }));
     var rulesBox = el("div", { id: "par-rules" });
     var msg = el("p", { id: "par-win-msg", role: "status", hidden: true });
     var out = el("div", { id: "par-preview", hidden: true });
