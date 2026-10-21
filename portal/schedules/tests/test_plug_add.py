@@ -52,5 +52,18 @@ class AddPlug(unittest.TestCase):
         self.assertEqual(self.add(ok).status_code, 422)                                         # not twice
 
 
+
+    def test_the_ha_switch_of_a_plug_can_be_renamed(self):
+        self.add({"id": "plant_citrus", "name": "Citrus", "ha_target": "switch.smartplug_citrus_2ndfloor", "like": "plant_rack1"})
+        r = self.e.req("PATCH", "/v1/entities/plant_citrus", json={"ha_target": "switch.citrus_2nd_floor"})
+        self.assertEqual((r.status_code, r.json()["ha_target"]), (200, "switch.citrus_2nd_floor"))
+        for bad in ("light.x", "switch.Bad!", "switch.living_room_rack", 5):
+            self.assertEqual(self.e.req("PATCH", "/v1/entities/plant_citrus", json={"ha_target": bad}).status_code, 422, bad)
+        self.assertEqual(self.e.req("PATCH", "/v1/entities/plant_citrus", role="household", json={"ha_target": "switch.x1"}).status_code, 403)
+        self.assertEqual(self.e.req("PATCH", "/v1/entities/vacuum_bedroom", json={"ha_target": "switch.x1"}).status_code, 422)         # not a plug
+        row = next(x for x in self.e.req("GET", "/v1/audit?limit=3").json()["audit"] if x["action"] == "entity")
+        self.assertEqual((row["before"]["ha_target"], row["after"]["ha_target"]), ("switch.smartplug_citrus_2ndfloor", "switch.citrus_2nd_floor"))
+
+
 if __name__ == "__main__":
     unittest.main()

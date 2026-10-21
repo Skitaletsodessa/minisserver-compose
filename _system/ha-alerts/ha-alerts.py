@@ -129,7 +129,7 @@ ZERO_PWR_WATTS = {
     "switch.kitchen_orchids": 1.0, "switch.bedroom_parrot": 2.0, "switch.minisserver": 2.0,
 }
 SKIP_ZERO_POWER = {"switch.kitchen_orchids"}        # fake metering chip (DPS 20-25 always 0)
-PLANT_LIGHTS = {"switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver"}
+PLANT_LIGHTS = {"switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver", "switch.citrus_2nd_floor"}
 DRYER = "switch.bathroom_towels"
 
 # ── policy (Task 26) ──

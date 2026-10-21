@@ -538,7 +538,7 @@ class Store(ChildMixin):
             ent = self.entity(eid)
             probs = []
             for k in patch:
-                if k not in ("name", "flags", "managed"):
+                if k not in ("name", "flags", "managed", "ha_target"):
                     probs.append(model.problem("unknown_key", k, "unknown field '%s'" % k))
             new = dict(ent)
             if "name" in patch:
@@ -559,14 +559,23 @@ class Store(ChildMixin):
                     probs.append(model.problem("required", "managed", "the entity has no ha_target"))
                 else:
                     new["managed"] = patch["managed"]
+            if "ha_target" in patch:                              # the HA switch of a plug was renamed in Home Assistant (citrus plug, 2026-10-21): the same plug, a new entity id
+                import re
+                t = patch["ha_target"]
+                if ent["kind"] != "plug" or not isinstance(t, str) or not re.match(r"^switch[.][a-z0-9_]{1,60}$", t):
+                    probs.append(model.problem("format", "ha_target", "ha_target must be switch.something and only a plug has one"))
+                elif any(o["id"] != eid and o.get("ha_target") == t for o in self.entities()):
+                    probs.append(model.problem("duplicate", "ha_target", "%s is already the switch of another entity" % t))
+                else:
+                    new["ha_target"] = t
             if probs:
                 raise model.ValidationError(probs)
             if new == ent:
                 return ent, False
-            self.db.execute("UPDATE entities SET name=?, flags=?, managed=? WHERE id=?",
-                            (new["name"], canon(new["flags"]), 1 if new["managed"] else 0, eid))
-            seq = self._audit(actor, "entity", eid, {k: ent[k] for k in ("name", "flags", "managed")},
-                              {k: new[k] for k in ("name", "flags", "managed")})
+            self.db.execute("UPDATE entities SET name=?, flags=?, managed=?, ha_target=? WHERE id=?",
+                            (new["name"], canon(new["flags"]), 1 if new["managed"] else 0, new.get("ha_target"), eid))
+            seq = self._audit(actor, "entity", eid, {k: ent[k] for k in ("name", "flags", "managed", "ha_target")},
+                              {k: new[k] for k in ("name", "flags", "managed", "ha_target")})
         self._mirror_audit(seq)
         self.publish()
         return self.entity(eid), True

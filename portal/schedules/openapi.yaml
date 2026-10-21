@@ -47,7 +47,7 @@ paths:
   /v1/entities/{id}:
     patch:
       operationId: patchEntity
-      summary: Admin only. name, flags, managed (the cutover switch)
+      summary: Admin only. name, flags, managed (the cutover switch), ha_target (a plug whose switch was renamed in Home Assistant)
       parameters: [{$ref: "#/components/parameters/EntityId"}]
       requestBody:
         required: true
