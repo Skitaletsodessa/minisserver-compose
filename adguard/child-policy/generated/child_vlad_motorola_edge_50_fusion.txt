@@ -1,5 +1,5 @@
 # GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
-# snapshot checksum: 6a844c0a837fe842
+# snapshot checksum: 27ad8dac33b328d7
 # vlad-motorola-edge-50-fusion (192.168.31.60)
 # allow:
 
