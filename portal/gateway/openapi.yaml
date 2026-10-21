@@ -475,6 +475,51 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+  /v1/parental/candidates:
+    get:
+      operationId: listDeviceCandidates
+      summary: "Admin only. LAN devices that are not children, not house infrastructure and not gear the portal already knows (neighbour table + AdGuard's own client list, identity data, queries today). Suggestions only: nothing is applied by listing; nothing is stored"
+      responses:
+        "200": {description: candidates, content: {application/json: {schema: {$ref: "#/components/schemas/DeviceCandidates"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/parental/children/{id}/setup-checklist:
+    get:
+      operationId: getSetupChecklist
+      summary: "What only a human can do for this device (router reservation, MAC randomisation, static IP with both DNS servers, private DNS/VPN, bedtime in Mi WiFi), with a live check where one exists. Informational: it never blocks or changes anything"
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: checklist, content: {application/json: {schema: {$ref: "#/components/schemas/SetupChecklist"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/removed-children:
+    get:
+      operationId: listRemovedChildren
+      summary: "Admin only. Removed child devices that can still be restored (24 h)"
+      responses:
+        "200": {description: removals, content: {application/json: {schema: {type: object, required: [removed], properties: {removed: {type: array, items: {$ref: "#/components/schemas/RemovedChild"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/parental/removed-children/{rid}/restore:
+    post:
+      operationId: restoreChildDevice
+      summary: "Admin only. The undo of a removal within 24 h: re-creates the device with its windows, lists and still-active exceptions and verifies it like an add (removed again if the verification fails)"
+      parameters: [{name: rid, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/Idem"}]
+      responses:
+        "200": {description: created or reverted, content: {application/json: {schema: {$ref: "#/components/schemas/DeviceChangeResult"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
   /v1/parental/children:
     get:
       operationId: listChildren
@@ -486,6 +531,26 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: addChildDevice
+      summary: >
+        Admin only. Adds a child device: creates the policy (template `closed` = catch-all and the always-on list only, NO windows; or `copy:<child_id>` = windows and per-child lists of an existing device)
+        and VERIFIES it before success: the host job applied it, an ordinary name is blocked, an always-on name allowed, the AdGuard client entry has the child flags, the applied rules equal the
+        expected ones, the OTHER children rules did not move, the replica and the parity checker agree. Any failure removes the device again (result `reverted`, with the reason). One change at a time.
+        Takes up to about 6 minutes. A randomised MAC, a MAC that differs from what answers at that IP and an address held by other house gear are WARNINGS, not refusals. Infrastructure and duplicate addresses are refused.
+      parameters: [{$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [name, ip], additionalProperties: false, properties: {name: {type: string, maxLength: 40, description: "the child"}, device_label: {type: string, maxLength: 40}, ip: {type: string}, mac: {type: string}, icon: {type: string, enum: [phone, tablet, laptop, console, tv, other]}, template: {type: string, description: "closed (default) or copy:<child_id>"}}}}}
+      responses:
+        "200": {description: created or reverted, content: {application/json: {schema: {$ref: "#/components/schemas/DeviceChangeResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
   /v1/parental/children/{id}:
     get:
       operationId: getChild
@@ -499,6 +564,23 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: removeChildDevice
+      summary: "Admin only. Removes a child device. Needs `confirm` = the exact device name. Removes the policy, waits for the host job (the IP is an ordinary client again), deletes the AdGuard client entry (the sync carries it to the replica), verifies that the other children did not move; the definition is kept 24 h for the undo. Result `removed` or `removal_incomplete` (steps say what is left)"
+      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [confirm], additionalProperties: false, properties: {confirm: {type: string}}}}}
+      responses:
+        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/DeviceChangeResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
   /v1/parental/children/{id}/windows:
     get:
       operationId: getChildWindows
@@ -993,6 +1075,69 @@ components:
         blocked_today: {type: [integer, "null"]}
         policy_ok: {type: boolean, description: "the rules block in AdGuard for this device is the one the model says it should be"}
         dns_seen: {type: boolean, description: "queries of this device arrive at our resolvers (informational)"}
+    DeviceCandidates:
+      type: object
+      required: [candidates, excluded, note]
+      properties:
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [ip, mac, randomised_mac, queries_today, warnings]
+            properties:
+              ip: {type: string}
+              mac: {type: string}
+              vendor: {type: [string, "null"]}
+              randomised_mac: {type: boolean}
+              hostname: {type: [string, "null"]}
+              last_query_at: {type: [string, "null"]}
+              queries_today: {type: [integer, "null"]}
+              device_kind: {type: string}
+              warnings: {type: array, items: {type: string}}
+        excluded: {type: object}
+        note: {type: string}
+    DeviceChangeResult:
+      type: object
+      required: [result, steps]
+      properties:
+        result: {type: string, enum: [created, reverted, removed, removal_incomplete]}
+        child_id: {type: [string, "null"]}
+        removal: {type: object}
+        steps: {type: array, items: {$ref: "#/components/schemas/FilterStep"}}
+        warnings: {type: array, items: {type: object, required: [code, message], properties: {code: {type: string}, message: {type: string}}}}
+        reason: {type: string}
+        replayed: {type: boolean}
+    SetupChecklist:
+      type: object
+      required: [child, ip, items, note]
+      properties:
+        child: {type: string}
+        ip: {type: string}
+        note: {type: string}
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, kind, status, title, text]
+            properties:
+              id: {type: string}
+              kind: {type: string, enum: [instruction, live, note]}
+              status: {type: string, enum: [ok, warn, todo, unknown, info]}
+              title: {type: string}
+              text: {type: string}
+              detail: {type: string}
+              both_resolvers: {type: string}
+    RemovedChild:
+      type: object
+      required: [removal_id, child_id, name, removed_at, restorable_until]
+      properties:
+        removal_id: {type: string}
+        child_id: {type: string}
+        name: {type: string}
+        ip: {type: [string, "null"]}
+        removed_at: {type: string}
+        restorable_until: {type: string}
+        removed_by: {type: [string, "null"]}
     ChildSummary:
       type: object
       required: [id, name, icon, device_kind, identity, status]

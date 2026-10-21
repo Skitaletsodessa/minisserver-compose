@@ -78,7 +78,8 @@ class ChildMixin:
         now = now or self._now()
         ent = self._child_entity(eid)
         sch = self.schedule(eid)
-        return {"id": eid, "name": ent["name"], "ip": ent["meta"].get("ip"), "mac": ent["meta"].get("mac"), "version": sch["version"], "tz": sch["tz"],
+        return {"id": eid, "name": ent["name"], "ip": ent["meta"].get("ip"), "mac": ent["meta"].get("mac"), "label": ent["meta"].get("label") or "", "icon": ent["meta"].get("icon") or "",
+                "child": ent["meta"].get("child") or "", "version": sch["version"], "tz": sch["tz"],
                 "updated_at": sch["updated_at"], "rules": sch["rules"], "guardrails": ent["guardrails"], "flags": ent["flags"],
                 "exceptions": self.child_exceptions(eid, now=now), "domains": self.child_domains(eid), "status": self.child_status(eid, now)}
 
@@ -369,29 +370,46 @@ class ChildMixin:
         return summary
 
     # ── admin: the set of child DEVICES (after the cutover a re-import is refused, so this is how a device is added or retired) ──────────────────────────────
-    def add_child_device(self, actor, name, ip, mac="", like=None):
-        """Admin only. A new device starts with the windows of `like` (another child device) or the standard ones (16:00-19:00 Mon-Sat YouTube/Roblox, Maps all
-        day), the proposed guardrails, no exceptions and empty own lists. Refused: house infrastructure as a device, a duplicate name/ip/mac."""
+    REMOVAL_UNDO_HOURS = 24
+    ICONS = ("phone", "tablet", "laptop", "console", "tv", "other")
+    TRANSLIT = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя", ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "ts",
+                                                           "ch", "sh", "sch", "", "y", "", "e", "yu", "ya"]))
+
+    @classmethod
+    def _slug(cls, text):
         import re
+        t = "".join(cls.TRANSLIT.get(c, c) for c in (text or "").lower())
+        return re.sub(r"[^a-z0-9]+", "_", t).strip("_")
+
+    def add_child_device(self, actor, name, ip, mac="", like=None, label="", icon="other", closed=False):
+        """Admin only. `name` is the CHILD, `label` the device ("телефон"); the entity is called "<name> <label>". A new device starts with the windows and the per-child
+        lists of `like` (another device), else with the standard windows (16:00-19:00 Mon-Sat YouTube/Roblox, Maps all day), else - `closed=True` - with NO windows at all
+        (catch-all + the always-on list only: nothing opens until a parent sets a window). Proposed guardrails, no exceptions. Refused: house infrastructure as a device,
+        a duplicate name/ip/mac. The AdGuard side (client entry, rules) is the host job's, from the next snapshot."""
         s = _s()
         if actor["role"] != "admin":
             raise s.Forbidden("adding a child device is admin-only")
         name = name.strip() if isinstance(name, str) else ""
+        label = label.strip() if isinstance(label, str) else ""
+        full = ("%s %s" % (name, label)).strip()
         mac = (mac or "").strip().lower() if isinstance(mac, str) else ""
         probs = []
-        if not 1 <= len(name) <= 60:
-            probs.append(model.problem("name", "name", "the name must be 1-60 characters"))
-        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-        eid = "child_" + slug
-        eid = eid[:40].rstrip("_")
-        dev = {"id": eid, "name": name, "ip": ip if isinstance(ip, str) else "", "mac": mac}
+        if not 1 <= len(name) <= 40 or len(label) > 40 or not any(ch.isalnum() for ch in name):
+            probs.append(model.problem("name", "name", "the child's name must be 1-40 characters with a letter or digit, the device label at most 40"))
+        if icon not in self.ICONS:
+            probs.append(model.problem("icon", "icon", "icon must be one of %s" % ", ".join(self.ICONS)))
+        slug = self._slug(full)
+        if not slug:
+            slug = "dev_" + (ip or "").replace(".", "_")
+        eid = ("child_" + slug)[:40].rstrip("_")
+        dev = {"id": eid, "name": full, "ip": ip if isinstance(ip, str) else "", "mac": mac}
         probs += child_render.validate_device(dev) if name else []
-        if not slug or not model.ENTITY_ID_RE.match(eid):
+        if not model.ENTITY_ID_RE.match(eid):
             probs.append(model.problem("name", "name", "the name must contain letters or digits"))
         with self._tx():
             existing = self.child_devices()
             for e in existing:
-                if e["id"] == eid or e["name"].lower() == name.lower():
+                if e["id"] == eid or e["name"].lower() == full.lower():
                     probs.append(model.problem("duplicate", "name", "a child device named %r already exists" % e["name"]))
                 if e["meta"].get("ip") == dev["ip"]:
                     probs.append(model.problem("duplicate", "ip", "%s already belongs to %s" % (dev["ip"], e["name"])))
@@ -404,27 +422,43 @@ class ChildMixin:
                 src = next((e for e in existing if e["id"] == like), None)
                 if not src:
                     probs.append(model.problem("like", "like", "no child device %r to copy the windows from" % like))
+            if like and closed:
+                probs.append(model.problem("template", "like", "give either a template to copy or closed, not both"))
             guard = dict(src["guardrails"]) if src and src["guardrails"] else dict(PROPOSED_GUARDRAILS)
             flags = dict(src["flags"]) if src and src["flags"] else dict(CHILD_FLAGS)
-            rules = self.schedule(like)["rules"] if src else [
-                {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}},
-                {"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
+            if src:
+                rules = self.schedule(like)["rules"]
+            elif closed:
+                rules = []
+            else:
+                rules = [{"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}},
+                         {"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
             rules, rp = model.validate_rules({"id": eid, "kind": "child_window", "guardrails": guard}, rules)
             probs += rp
             if probs:
                 raise model.ValidationError(probs)
             pos = (self.db.execute("SELECT COALESCE(MAX(position), 0) m FROM entities").fetchone()["m"]) + 1
             self.db.execute("INSERT INTO entities(id,kind,name,ha_target,managed,flags,guardrails,position,meta) VALUES (?,?,?,?,?,?,?,?,?)",
-                            (eid, "child_window", name, None, 0, s.canon(flags), s.canon(guard), pos, s.canon({"ip": dev["ip"], "mac": mac})))
+                            (eid, "child_window", full, None, 0, s.canon(flags), s.canon(guard), pos, s.canon({"ip": dev["ip"], "mac": mac, "label": label, "icon": icon, "child": name})))
             self.db.execute("INSERT INTO schedules(entity_id,version,tz,rules,updated_at) VALUES (?,?,?,?,?)", (eid, 1, model.TZ_NAME, s.canon(rules), self.clock()))
-            seq = self._audit(actor, "child_device_add", eid, None, {"name": name, "ip": dev["ip"], "mac": mac, "like": like, "rules": rules})
+            if src:
+                for kind, doms in self.child_domains(like).items():
+                    for d in doms:
+                        self.db.execute("INSERT INTO child_domains(entity_id,kind,domain,added_by,added_at) VALUES (?,?,?,?,?)", (eid, kind, d, s.canon(actor), self.clock()))
+            seq = self._audit(actor, "child_device_add", eid, None, {"name": full, "ip": dev["ip"], "mac": mac, "label": label, "icon": icon, "like": like, "closed": bool(closed),
+                                                                   "rules": rules})
         self._mirror_audit(seq)
         self.publish()
         return self.child_detail(eid)
 
-    def remove_child_device(self, actor, eid):
-        """Admin only. The device stops being filtered by this policy (its catch-all leaves the snapshot and so AdGuard at the next job run). The audit row keeps everything
-        needed to re-create it by hand: windows, guardrails, lists and exceptions."""
+    def _definition(self, eid, ent):
+        return {"id": eid, "name": ent["name"], "meta": ent["meta"], "guardrails": ent["guardrails"], "flags": ent["flags"], "rules": self.schedule(eid)["rules"],
+                "domains": self.child_domains(eid), "exceptions": [{k: x[k] for k in ("target", "created_at", "expires_at")} for x in self.child_exceptions(eid)]}
+
+    def remove_child_device(self, actor, eid, keep=True):
+        """Admin only. The device stops being filtered by this policy (its catch-all leaves the snapshot and so AdGuard at the next job run). The definition (windows,
+        guardrails, lists, active exceptions) is kept for 24 h in `child_removed` so the removal can be UNDONE; the audit row keeps it as well. Returns the removal
+        record (keep=False, used to roll back a FAILED add, forgets the record: nothing to undo). The last device cannot be removed."""
         s = _s()
         if actor["role"] != "admin":
             raise s.Forbidden("removing a child device is admin-only")
@@ -432,12 +466,83 @@ class ChildMixin:
             ent = self._child_entity(eid)
             if len(self.child_devices()) <= 1:
                 raise model.ValidationError([model.problem("last_device", "id", "the last child device cannot be removed: a snapshot without a device would lift every restriction")])
-            before = {"name": ent["name"], "meta": ent["meta"], "guardrails": ent["guardrails"], "flags": ent["flags"], "rules": self.schedule(eid)["rules"],
-                      "domains": self.child_domains(eid), "exceptions": [{k: x[k] for k in ("target", "expires_at")} for x in self.child_exceptions(eid)]}
+            before = self._definition(eid, ent)
+            rid = "r" + uuid.uuid4().hex[:10]
+            now = self._now()
+            if keep:
+                self.db.execute("INSERT INTO child_removed(id,entity_id,name,removed_at,removed_by,definition) VALUES (?,?,?,?,?,?)",
+                               (rid, eid, ent["name"], now.isoformat(timespec="seconds"), s.canon(actor), s.canon(before)))
             for t in ("exceptions", "child_exceptions", "child_domains"):
                 self.db.execute("DELETE FROM %s WHERE entity_id=?" % t, (eid,))
             self.db.execute("DELETE FROM schedules WHERE entity_id=?", (eid,))
             self.db.execute("DELETE FROM entities WHERE id=?", (eid,))
-            seq = self._audit(actor, "child_device_remove", eid, before, None)
+            seq = self._audit(actor, "child_device_remove", eid, before, {"removal": rid})
         self._mirror_audit(seq)
         self.publish()
+        return {"removal_id": rid, "child_id": eid, "name": ent["name"], "removed_at": now.isoformat(timespec="seconds"),
+                "restorable_until": (now + dt.timedelta(hours=self.REMOVAL_UNDO_HOURS)).isoformat(timespec="seconds")}
+
+    def child_removed(self, now=None):
+        """Removals that can still be undone (younger than 24 h); older records are dropped here."""
+        now = now or self._now()
+        cutoff = (now - dt.timedelta(hours=self.REMOVAL_UNDO_HOURS)).isoformat(timespec="seconds")
+        with self.lock:
+            self.db.execute("DELETE FROM child_removed WHERE removed_at < ?", (cutoff,))
+            rows = self.db.execute("SELECT * FROM child_removed ORDER BY removed_at DESC").fetchall()
+        out = []
+        for r in rows:
+            at = dt.datetime.fromisoformat(r["removed_at"])
+            d = json.loads(r["definition"])
+            out.append({"removal_id": r["id"], "child_id": r["entity_id"], "name": r["name"], "ip": d["meta"].get("ip"), "removed_at": r["removed_at"],
+                        "restorable_until": (at + dt.timedelta(hours=self.REMOVAL_UNDO_HOURS)).isoformat(timespec="seconds"), "removed_by": (json.loads(r["removed_by"]).get("acting") or {}).get("person")
+                        or json.loads(r["removed_by"]).get("name")})
+        return out
+
+    def restore_child_device(self, actor, rid):
+        """Admin only. Re-creates a removed device from its stored definition (same id, windows, guardrails, flags, lists, still-active exceptions) - within 24 h of the
+        removal, and only if its id, name, ip and mac are still free."""
+        s = _s()
+        if actor["role"] != "admin":
+            raise s.Forbidden("restoring a child device is admin-only")
+        now = self._now()
+        if not any(x["removal_id"] == rid for x in self.child_removed(now)):
+            raise s.NotFound(rid)
+        with self._tx():
+            row = self.db.execute("SELECT * FROM child_removed WHERE id=?", (rid,)).fetchone()
+            d = json.loads(row["definition"])
+            eid, meta = d["id"], d["meta"]
+            probs = []
+            for e in self.child_devices():
+                if e["id"] == eid or e["name"].lower() == d["name"].lower():
+                    probs.append(model.problem("duplicate", "name", "a device named %r exists now" % e["name"]))
+                if e["meta"].get("ip") == meta.get("ip"):
+                    probs.append(model.problem("duplicate", "ip", "%s belongs to %s now" % (meta.get("ip"), e["name"])))
+                if meta.get("mac") and (e["meta"].get("mac") or "") == meta["mac"]:
+                    probs.append(model.problem("duplicate", "mac", "%s belongs to %s now" % (meta["mac"], e["name"])))
+            if self.db.execute("SELECT 1 FROM entities WHERE id=?", (eid,)).fetchone():
+                probs.append(model.problem("duplicate", "id", "the id %s is taken by another entity" % eid))
+            ip_prob = child_invariants.device_ip_problem(meta.get("ip"))
+            if ip_prob:
+                probs.append(model.problem("protected_ip", "ip", ip_prob))
+            rules, rp = model.validate_rules({"id": eid, "kind": "child_window", "guardrails": d["guardrails"]}, d["rules"])
+            probs += rp
+            if probs:
+                raise model.ValidationError(probs)
+            pos = (self.db.execute("SELECT COALESCE(MAX(position), 0) m FROM entities").fetchone()["m"]) + 1
+            self.db.execute("INSERT INTO entities(id,kind,name,ha_target,managed,flags,guardrails,position,meta) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (eid, "child_window", d["name"], None, 0, s.canon(d["flags"]), s.canon(d["guardrails"]), pos, s.canon(meta)))
+            self.db.execute("INSERT INTO schedules(entity_id,version,tz,rules,updated_at) VALUES (?,?,?,?,?)", (eid, 1, model.TZ_NAME, s.canon(rules), self.clock()))
+            for kind, doms in (d.get("domains") or {}).items():
+                for dom in doms:
+                    self.db.execute("INSERT INTO child_domains(entity_id,kind,domain,added_by,added_at) VALUES (?,?,?,?,?)", (eid, kind, dom, s.canon(actor), self.clock()))
+            kept = 0
+            for x in d.get("exceptions") or []:
+                if dt.datetime.fromisoformat(x["expires_at"]) > now:
+                    self.db.execute("INSERT INTO child_exceptions(id,entity_id,target,created_at,expires_at,created_by,status,ended_at) VALUES (?,?,?,?,?,?,?,?)",
+                                    ("c" + uuid.uuid4().hex[:10], eid, x["target"], x["created_at"], x["expires_at"], s.canon({"token": "-", "name": "restored", "role": "admin"}), "active", None))
+                    kept += 1
+            self.db.execute("DELETE FROM child_removed WHERE id=?", (rid,))
+            seq = self._audit(actor, "child_device_restore", eid, {"removal": rid}, {"name": d["name"], "ip": meta.get("ip"), "exceptions_kept": kept})
+        self._mirror_audit(seq)
+        self.publish()
+        return self.child_detail(eid)

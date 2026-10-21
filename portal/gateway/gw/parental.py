@@ -234,8 +234,9 @@ class Parental:
                 "dns_seen": bool(q) if q is not None else False}
 
     def _summary(self, c, status, hostnames):
-        kind = device_kind(c["name"])
-        return {"id": c["id"], "name": c["name"], "icon": kind, "device_kind": kind, "identity": self._identity(c, hostnames), "status": status}
+        icon = c.get("icon") or ""                                   # chosen when the device was added; older devices: guessed from the name
+        kind = {"phone": "phone", "tablet": "tablet"}.get(icon) or (device_kind(c["name"]) if not icon else "other")
+        return {"id": c["id"], "name": c["name"], "icon": icon or kind, "device_kind": kind, "identity": self._identity(c, hostnames), "status": status}
 
     async def children(self, p):
         self._need(p, view_only=True)

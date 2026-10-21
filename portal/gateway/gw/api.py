@@ -36,9 +36,9 @@ def err_response(e):
 
 
 class App:
-    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None):
+    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None, devices=None):
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
-        self.parental, self.filters = parental, filters
+        self.parental, self.filters, self.devices = parental, filters, devices
         self.bad = defaultdict(deque)                    # failed bearer attempts per address
 
     # ── principal ─────────────────────────────────────────────────────────────
@@ -653,6 +653,65 @@ class App:
         st, body = await self.idem(request, p, "par.dundo:" + cid, go)
         return JSONResponse(body, status_code=st)
 
+    # ── child devices: add / remove / restore / candidates / checklist (Task 29b; admin only except the checklist) ──
+    def _dv(self, p, admin=True):
+        self._pm()._need(p, admin=admin)
+        if not getattr(self, "devices", None):
+            raise GwError(404, "not_available", "the device module is not configured")
+        return self.devices
+
+    async def p_candidates(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._dv(p).candidates(p))
+
+    async def p_child_add(self, request):
+        p = self.authenticate(request)
+        dv = self._dv(p)
+        raw = await request.body()
+        b = jload(raw)
+        if (set(b) - {"name", "device_label", "ip", "mac", "icon", "template"} or not isinstance(b.get("name"), str) or not isinstance(b.get("ip"), str)
+                or any(k in b and not isinstance(b[k], str) for k in ("device_label", "mac", "icon", "template"))
+                or b.get("icon", "other") not in ("phone", "tablet", "laptop", "console", "tv", "other")):
+            raise GwError(400, "bad_body", "name and ip are required; optional device_label, mac, icon (phone, tablet, laptop, console, tv, other), template (closed or copy:<id>)")
+        body = {"name": b["name"], "ip": b["ip"], "mac": b.get("mac", ""), "label": b.get("device_label", ""), "icon": b.get("icon", "other"), "template": b.get("template", "closed")}
+
+        async def go():
+            return 200, await dv.add(p, body)
+        st, out = await self.idem(request, p, "par.cadd", go, body_bytes=raw)
+        return JSONResponse(out, status_code=st)
+
+    async def p_child_remove(self, request):
+        p = self.authenticate(request)
+        dv = self._dv(p)
+        cid = request.path_params["id"]
+        raw = await request.body()
+        b = jload(raw)
+        if set(b) != {"confirm"} or not isinstance(b["confirm"], str):
+            raise GwError(400, "bad_body", "an object with confirm (the exact name of the device) is required")
+
+        async def go():
+            return 200, await dv.remove(p, cid, b)
+        st, out = await self.idem(request, p, "par.cdel:" + cid, go, body_bytes=raw)
+        return JSONResponse(out, status_code=st)
+
+    async def p_removed_list(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._dv(p).removed(p))
+
+    async def p_removed_restore(self, request):
+        p = self.authenticate(request)
+        dv = self._dv(p)
+        rid = request.path_params["rid"]
+
+        async def go():
+            return 200, await dv.restore(p, rid)
+        st, out = await self.idem(request, p, "par.crestore:" + rid, go)
+        return JSONResponse(out, status_code=st)
+
+    async def p_checklist(self, request):
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse(await self._dv(p, admin=False).checklist(p, request.path_params["id"]))
+
     async def p_health(self, request):
         p = self.authenticate(request, csrf=False)
         return JSONResponse(await self._pm().health(p))
@@ -804,7 +863,13 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/events", a.events, methods=["GET"]),
         Route("/v1/audit", a.audit, methods=["GET"]),
         Route("/v1/parental/children", a.p_children, methods=["GET"]),
+        Route("/v1/parental/children", a.p_child_add, methods=["POST"]),
+        Route("/v1/parental/candidates", a.p_candidates, methods=["GET"]),
+        Route("/v1/parental/removed-children", a.p_removed_list, methods=["GET"]),
+        Route("/v1/parental/removed-children/{rid}/restore", a.p_removed_restore, methods=["POST"]),
         Route("/v1/parental/children/{id}", a.p_child, methods=["GET"]),
+        Route("/v1/parental/children/{id}", a.p_child_remove, methods=["DELETE"]),
+        Route("/v1/parental/children/{id}/setup-checklist", a.p_checklist, methods=["GET"]),
         Route("/v1/parental/children/{id}/windows", a.p_windows_get, methods=["GET"]),
         Route("/v1/parental/children/{id}/windows", a.p_windows_put, methods=["PUT"]),
         Route("/v1/parental/children/{id}/windows/preview", a.p_windows_preview, methods=["POST"]),

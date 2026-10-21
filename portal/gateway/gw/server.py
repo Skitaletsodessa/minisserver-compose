@@ -4,11 +4,11 @@ import contextlib
 import sys
 import time
 
-from . import agh as aghmod, api, config, core as coremod, db as dbmod, filterlists, ha as hamod, hub as hubmod, parental as parentalmod, people as peoplemod, sched as schedmod, web
+from . import agh as aghmod, api, childdevices, config, core as coremod, db as dbmod, filterlists, ha as hamod, hub as hubmod, parental as parentalmod, people as peoplemod, sched as schedmod, web
 
 
 def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_admin=None, sched_household=None, clock=time.time, start_background=True,
-         agh_url=None, agh_password_file=None, parity_state=None, oui_file=None, filter_opts=None):
+         agh_url=None, agh_password_file=None, parity_state=None, oui_file=None, filter_opts=None, device_opts=None):
     db = dbmod.DB(data_dir or config.DATA, clock=clock)
     hub = hubmod.Hub(clock=clock)
     ha = hamod.HA(ha_url or config.HA_URL, ha_token_file or config.HA_TOKEN_FILE, hub=hub, clock=clock)
@@ -22,7 +22,10 @@ def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_a
     parental = parentalmod.Parental(sched, agh, None, db, clock=clock, parity_state=opts["parity_state"], oui_file=oui_file or config.OUI_FILE)
     filters = filterlists.FilterLists(agh, db, clock, children=parental.child_ips, **opts)
     parental.filters = filters
-    app_obj = api.App(db, people, core, hub, sched, ha, clock=clock, parental=parental, filters=filters)
+    dev_opts = {"arp_file": config.ARP_FILE, "oui_file": oui_file or config.OUI_FILE}
+    dev_opts.update(device_opts or {})
+    devices = childdevices.ChildDevices(parental, agh, db, clock, **dev_opts)
+    app_obj = api.App(db, people, core, hub, sched, ha, clock=clock, parental=parental, filters=filters, devices=devices)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
@@ -48,7 +51,7 @@ def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_a
             await ha.stop()
 
     app = api.build(app_obj, extra_routes=web.routes(app_obj), lifespan=lifespan)
-    app.state.objs = {"db": db, "people": people, "core": core, "hub": hub, "ha": ha, "sched": sched, "app": app_obj, "agh": agh, "parental": parental, "filters": filters}
+    app.state.objs = {"db": db, "people": people, "core": core, "hub": hub, "ha": ha, "sched": sched, "app": app_obj, "agh": agh, "parental": parental, "filters": filters, "devices": devices}
     return app
 
 

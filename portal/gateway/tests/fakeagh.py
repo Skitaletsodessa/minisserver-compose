@@ -1,5 +1,6 @@
 """Test doubles for AdGuard Home (Task 29 Part 2): a fake control API with real HTTP and basic auth, and a fake DNS for the probes."""
 import base64
+import time
 import json
 import os
 
@@ -29,6 +30,7 @@ class FakeAgh:
         self.child_ips = set()
         self.querylog = []                      # newest first: time, client, question{name,type}, reason
         self.auto_clients = []
+        self.clients = []                       # configured clients (name, ids, use_global_settings, safe_search): what the host job creates for each child
         self.stats = {"top_queried_domains": [], "top_blocked_domains": []}
         self.down = False
         self.reject_add = set()                 # urls for which add_url answers 400
@@ -142,7 +144,10 @@ class FakeAgh:
         if path == "/blocked_services/all":
             return JSONResponse({"blocked_services": [{"id": k, "rules": v} for k, v in self.service_rules.items()]})
         if path == "/clients":
-            return JSONResponse({"clients": [], "auto_clients": self.auto_clients})
+            return JSONResponse({"clients": [dict(c) for c in self.clients], "auto_clients": self.auto_clients})
+        if path == "/clients/delete":
+            self.clients = [c for c in self.clients if c["name"] != body.get("name")]
+            return JSONResponse({})
         if path == "/stats":
             return JSONResponse(self.stats)
         if path == "/querylog":
@@ -183,3 +188,47 @@ class FakeDns:
         if name.endswith(".invalid"):                              # a name that does not exist: NXDOMAIN whether or not a list mentions it in the default mode
             return {"rcode": 3, "addrs": []}
         return {"rcode": 0, "addrs": ["93.184.216.34"]}
+
+
+class FakeJob:
+    """The host policy job in miniature: every `period` seconds it renders the REAL service's policy with the REAL renderer into the fake AdGuard's user_rules, makes the
+    child IPs catch-all (check_host), and creates a client entry per device (the real job never deletes one: that is the gap the portal now closes)."""
+    def __init__(self, env, period=0.15):
+        import threading
+        self.env, self.period = env, period
+        self.enabled, self.stop_flag = True, False
+        self.client_flags = {"use_global_settings": False, "safe_search": {"enabled": True, "google": True, "youtube": True}}
+        self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def stop(self):
+        self.stop_flag = True
+        self.thread.join(timeout=3)
+
+    def run(self):
+        while not self.stop_flag:
+            if self.enabled:
+                try:
+                    self.apply()
+                except Exception:                                  # noqa: BLE001 - the store may be mid-write
+                    pass
+            time.sleep(self.period)
+
+    def apply(self):
+        import datetime as dt
+        from sched import child_render, model
+        store, agh = self.env.sched.store, self.env.agh
+        pol = store.child_policy()
+        now = dt.datetime.now(model.TZ)
+        sd = {k: [r[2:-1] for r in v] for k, v in agh.service_rules.items()}
+        ips = {d["ip"]: d for d in pol["devices"]}
+        ov = [{"client": ips_by_id, "target": x["target"]} for x in store.child_exceptions() for ips_by_id in [next((d["ip"] for d in pol["devices"] if d["id"] == x["entity"]), None)] if ips_by_id]
+        block = child_render.render_block(pol, sd, now, ov)
+        agh.user_rules = ["||other.example.org^"] + block
+        agh.child_ips = set(ips)
+        for d in pol["devices"]:
+            if not any(c["name"] == d["name"] for c in agh.clients):
+                agh.clients.append({"name": d["name"], "ids": [d["ip"]], **json.loads(json.dumps(self.client_flags))})

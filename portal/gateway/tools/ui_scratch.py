@@ -28,6 +28,15 @@ def now_utc(minutes_ago=0):
 def main(outdir):
     os.makedirs(outdir, exist_ok=True)
     e = Env()
+    from fakeagh import FakeJob                                       # Task 29b: the miniature host job, so adding a device can be verified in the scratch stack
+    e.job = FakeJob(e).start()
+    e.arp = os.path.join(outdir, "arp")
+    with open(e.arp, "w") as f:
+        f.write("IP address HW type Flags HW address Mask Device" + chr(10))
+        for ip, mac in (("192.168.31.1", "9c:9d:7e:74:f6:7d"), ("192.168.31.60", "20:36:d0:14:8d:5a"), ("192.168.31.61", "4a:11:22:33:44:55"), ("192.168.31.70", "4a:11:22:33:44:99"), ("192.168.31.71", "20:36:d0:55:66:77")):
+            f.write("%s 0x1 0x2 %s * eno1" % (ip, mac) + chr(10))
+    e.o["devices"].arp_file = e.arp
+    e.o["devices"].apply_timeout_s = 20
     a = {"person_id": "scratch", "phone_id": None, "ip": "scratch"}
     seeds = {}
     for name, role in (("Webadmin", "admin"), ("Marta", "household")):
@@ -75,6 +84,7 @@ def main(outdir):
     e.parity_runs = True
     e._write_parity(time.time())
     e.o["filters"].replica_wait_s, e.o["filters"].parity_wait_s = 2.0, 2.0
+    e.agh.auto_clients = [{"ip": "192.168.31.60", "name": "a-phone.lan", "source": "ARP"}, {"ip": "192.168.31.70", "name": "anna-phone.lan", "source": "ARP"}]
     noon = dt.datetime.now(dt.timezone.utc).astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
     e.sched.store.clock = lambda: noon.isoformat(timespec="seconds")
     with open(os.path.join(outdir, "port.txt"), "w") as f:

@@ -397,20 +397,31 @@ class App:
         data, e = await self.body(request)
         if e:
             return e
-        if (not isinstance(data, dict) or set(data) - {"name", "ip", "mac", "like"} or not isinstance(data.get("name"), str) or not isinstance(data.get("ip"), str)
-                or any(k in data and data[k] is not None and not isinstance(data[k], str) for k in ("mac", "like"))):
-            return err(400, "bad_body", "an object with name and ip (and optional mac, like) is required")
-        return self._guard(lambda: JSONResponse(self.store.add_child_device(who, data["name"], data["ip"], data.get("mac") or "", data.get("like")), status_code=201))
+        if (not isinstance(data, dict) or set(data) - {"name", "ip", "mac", "like", "label", "icon", "closed"} or not isinstance(data.get("name"), str) or not isinstance(data.get("ip"), str)
+                or any(k in data and data[k] is not None and not isinstance(data[k], str) for k in ("mac", "like", "label", "icon"))
+                or ("closed" in data and not isinstance(data["closed"], bool))):
+            return err(400, "bad_body", "an object with name and ip (and optional mac, like, label, icon, closed) is required")
+        return self._guard(lambda: JSONResponse(self.store.add_child_device(who, data["name"], data["ip"], data.get("mac") or "", data.get("like"), data.get("label") or "",
+                                                                             data.get("icon") or "other", bool(data.get("closed"))), status_code=201))
 
     async def child_device_remove(self, request):
         who, e = self.authenticate(request, "admin")
         if e:
             return e
+        keep = request.query_params.get("forget") not in ("1", "true")
+        return self._guard(lambda: JSONResponse(self.store.remove_child_device(who, request.path_params["id"], keep)))
 
-        def go():
-            self.store.remove_child_device(who, request.path_params["id"])
-            return Response(status_code=204)
-        return self._guard(go)
+    async def child_removed_list(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        return JSONResponse({"removed": self.store.child_removed()})
+
+    async def child_removed_restore(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        return self._guard(lambda: JSONResponse(self.store.restore_child_device(who, request.path_params["rid"]), status_code=201))
 
     async def child_exception_add(self, request):
         who, e = self.authenticate(request, "household")
@@ -620,6 +631,8 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
         Route("/v1/child", a.child_list, methods=["GET"]),
         Route("/v1/child", a.child_device_add, methods=["POST"]),
         Route("/v1/child/snapshot", a.child_snapshot_get, methods=["GET"]),
+        Route("/v1/child/removed", a.child_removed_list, methods=["GET"]),
+        Route("/v1/child/removed/{rid}/restore", a.child_removed_restore, methods=["POST"]),
         Route("/v1/child/cutover", a.child_cutover, methods=["PUT"]),
         Route("/v1/child/{id}", a.child_get, methods=["GET"]),
         Route("/v1/child/{id}", a.child_device_remove, methods=["DELETE"]),

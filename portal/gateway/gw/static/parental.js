@@ -95,6 +95,7 @@
         grid.appendChild(card);
       });
       root.appendChild(grid);
+      if (isAdmin) { root.appendChild(adminToolbar(r.json.children)); }
     });
   }
 
@@ -118,6 +119,8 @@
       root.appendChild(exceptionsBox());
       root.appendChild(domainsBox());
       root.appendChild(activityBox());
+      if (d.can.grant_exceptions) { root.appendChild(checklistBox(id)); }
+      if (isAdmin) { root.appendChild(removeBox()); }
     });
   }
 
@@ -487,6 +490,151 @@
       }
     });
     load();
+  }
+
+  // ── add / remove / restore a child device and the setup checklist (Task 29b) ───────────────────────────────────────
+  var isAdmin = root.dataset.admin === "yes";
+  var ICONS = ["phone", "tablet", "laptop", "console", "tv", "other"];
+  function stepsLine(steps) { return steps.map(function (s) { return (s.ok ? "✓ " : "✗ ") + T("par_d_step_" + s.name) + (s.detail ? " (" + s.detail + ")" : ""); }).join("; "); }
+  function warnList(ws) { return el("ul", {}, (ws || []).map(function (w) { return el("li", { "class": "meta", text: w.message }); })); }
+
+  function checklistBox(childId) {
+    var box = section(T("par_cl_title"), "par-checklist");
+    var body = el("div", {});
+    box.appendChild(body);
+    api("GET", "/v1/parental/children/" + childId + "/setup-checklist").then(function (r) {
+      if (!r.ok) { body.appendChild(el("p", { "class": "msg err", text: errText(r.json && r.json.error) })); return; }
+      body.appendChild(el("p", { "class": "meta", text: r.json.note }));
+      r.json.items.forEach(function (i) {
+        var mark = { ok: "✓", warn: "⚠", todo: "○", unknown: "?", info: "ℹ" }[i.status] || "?";
+        body.appendChild(el("div", { "class": "rule cl-" + i.status }, [
+          el("strong", { text: mark + " " + i.title }), el("p", { "class": "meta", text: i.text }), i.detail ? el("p", { text: i.detail }) : null
+        ]));
+      });
+    });
+    return box;
+  }
+
+  function addPanel() {
+    var panel = el("section", { "class": "card", id: "par-add", hidden: true });
+    var name = el("input", { type: "text", id: "add-name", maxlength: "40" });
+    var label = el("input", { type: "text", id: "add-label", maxlength: "40" });
+    var ip = el("input", { type: "text", id: "add-ip", placeholder: "192.168.31.70", maxlength: "15" });
+    var mac = el("input", { type: "text", id: "add-mac", placeholder: "aa:bb:cc:dd:ee:ff", maxlength: "17" });
+    var icon = el("select", { id: "add-icon" }, ICONS.map(function (k) { return el("option", { value: k, text: T("par_icon_" + k) }); }));
+    var tpl = el("select", { id: "add-template" }, [el("option", { value: "closed", text: T("par_tpl_closed") })]);
+    var cands = el("div", { id: "add-cands" });
+    var out = el("div", { id: "add-result", hidden: true });
+    panel.appendChild(el("h2", { text: T("par_add_title") }));
+    panel.appendChild(el("p", { "class": "meta", text: T("par_add_hint") }));
+    panel.appendChild(el("h3", { text: T("par_add_cands") }));
+    panel.appendChild(cands);
+    [["par_add_child", name], ["par_add_label", label], ["par_add_icon", icon], ["par_add_ip", ip], ["par_add_mac", mac], ["par_add_template", tpl]].forEach(function (p) { panel.appendChild(el("label", {}, [T(p[0]), p[1]])); });
+    panel.appendChild(el("button", { type: "button", "class": "primary", "data-add-go": "1", text: T("par_add_go") }));
+    panel.appendChild(out);
+    function loadCands() {
+      clear(cands);
+      cands.appendChild(el("p", { "class": "meta", text: T("par_loading") }));
+      api("GET", "/v1/parental/candidates").then(function (r) {
+        clear(cands);
+        if (!r.ok) { cands.appendChild(el("p", { "class": "msg err", text: errText(r.json && r.json.error) })); return; }
+        if (!r.json.candidates.length) { cands.appendChild(el("p", { "class": "meta", text: T("par_add_nocands") })); }
+        r.json.candidates.forEach(function (c) {
+          var txt = c.ip + " · " + c.mac + (c.vendor ? " · " + c.vendor : "") + (c.hostname ? " · " + c.hostname : "") + (c.randomised_mac ? " · " + T("par_random_mac") : "") +
+            (c.queries_today !== null ? " · " + T("par_add_queries", { q: c.queries_today }) : "") + (c.last_query_at ? " · " + T("par_last_query", { t: c.last_query_at.slice(11, 16) }) : "");
+          cands.appendChild(el("div", { "class": "row exc" }, [el("span", { text: txt }), el("button", { type: "button", "data-pick": c.ip, "data-mac": c.mac, "data-kind": c.device_kind, text: T("par_add_pick") })]));
+        });
+        cands.appendChild(el("p", { "class": "meta", text: r.json.note }));
+      });
+    }
+    panel.loadCands = loadCands;
+    panel.fillTemplates = function (kids) {
+      clear(tpl);
+      tpl.appendChild(el("option", { value: "closed", text: T("par_tpl_closed") }));
+      kids.forEach(function (k) { tpl.appendChild(el("option", { value: "copy:" + k.id, text: T("par_tpl_copy", { n: k.name }) })); });
+    };
+    panel.addEventListener("click", function (ev) {
+      var pick = ev.target.closest("button[data-pick]"), go = ev.target.closest("button[data-add-go]");
+      if (pick) { ip.value = pick.dataset.pick; mac.value = pick.dataset.mac; if (ICONS.indexOf(pick.dataset.kind) >= 0) { icon.value = pick.dataset.kind; } return; }
+      if (!go || go.disabled) { return; }
+      var body = { name: name.value.trim(), ip: ip.value.trim(), icon: icon.value, template: tpl.value };
+      if (label.value.trim()) { body.device_label = label.value.trim(); }
+      if (mac.value.trim()) { body.mac = mac.value.trim(); }
+      go.disabled = true;
+      out.hidden = false; out.className = "msg"; out.textContent = T("par_d_working");
+      api("POST", "/v1/parental/children", body).then(function (r) {
+        go.disabled = false;
+        clear(out);
+        if (!r.ok) { out.className = "msg err"; out.textContent = errText(r.json && r.json.error); return; }
+        var js = r.json;
+        out.className = js.result === "created" ? "msg" : "msg err";
+        out.appendChild(el("p", { text: js.result === "created" ? T("par_d_created") : T("par_d_reverted", { r: js.reason || "" }) }));
+        out.appendChild(el("p", { "class": "meta", text: stepsLine(js.steps) }));
+        if (js.warnings && js.warnings.length) { out.appendChild(el("h3", { text: T("par_d_warnings") })); out.appendChild(warnList(js.warnings)); }
+        if (js.result === "created") { out.appendChild(checklistBox(js.child_id)); out.appendChild(el("p", {}, [el("button", { type: "button", "data-open": js.child_id, text: T("par_open") })])); }
+      });
+    });
+    return panel;
+  }
+
+  function adminToolbar(kids) {
+    var wrap = el("div", { id: "par-admin" });
+    var panel = addPanel();
+    panel.fillTemplates(kids);
+    wrap.appendChild(el("p", {}, [el("button", { type: "button", "class": "primary", "data-add-open": "1", text: T("par_add_open") })]));
+    wrap.appendChild(panel);
+    var removed = el("div", { id: "par-removed" });
+    wrap.appendChild(removed);
+    wrap.addEventListener("click", function (ev) {
+      var o = ev.target.closest("button[data-add-open]"), rs = ev.target.closest("button[data-restore]");
+      if (o) { panel.hidden = !panel.hidden; if (!panel.hidden) { panel.loadCands(); } return; }
+      if (rs && !rs.disabled) {
+        rs.disabled = true;
+        removed.appendChild(el("p", { "class": "msg", text: T("par_d_working") }));
+        api("POST", "/v1/parental/removed-children/" + rs.dataset.restore + "/restore").then(function (r) {
+          if (!r.ok) { rs.disabled = false; removed.appendChild(el("p", { "class": "msg err", text: errText(r.json && r.json.error) })); return; }
+          removed.appendChild(el("p", { "class": r.json.result === "created" ? "msg" : "msg err", text: r.json.result === "created" ? T("par_d_restored") : T("par_d_reverted", { r: r.json.reason || "" }) }));
+          if (r.json.result === "created") { setTimeout(showChildren, 1500); }
+        });
+      }
+    });
+    api("GET", "/v1/parental/removed-children").then(function (r) {
+      if (!r.ok || !r.json.removed.length) { return; }
+      removed.appendChild(el("h3", { text: T("par_removed_title") }));
+      r.json.removed.forEach(function (x) {
+        removed.appendChild(el("div", { "class": "row exc" }, [el("span", { text: x.name + " · " + x.ip + " · " + T("par_removed_until", { t: dayhhmm(x.restorable_until) }) }),
+                                                              el("button", { type: "button", "data-restore": x.removal_id, text: T("par_removed_undo") })]));
+      });
+    });
+    return wrap;
+  }
+
+  function removeBox() {
+    var box = section(T("par_rm_title"), "par-remove");
+    var d = cur.d;
+    var inp = el("input", { type: "text", id: "rm-confirm", placeholder: d.name, maxlength: "100" });
+    var out = el("div", { id: "rm-result", hidden: true });
+    box.appendChild(el("p", { "class": "meta", text: T("par_rm_hint", { n: d.name }) }));
+    box.appendChild(el("label", {}, [T("par_rm_type"), inp]));
+    box.appendChild(el("button", { type: "button", "class": "danger", "data-rm-go": "1", text: T("par_rm_go") }));
+    box.appendChild(out);
+    box.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button[data-rm-go]");
+      if (!b || b.disabled) { return; }
+      if (inp.value.trim() !== d.name) { out.hidden = false; out.className = "msg err"; out.textContent = T("par_rm_mismatch"); return; }
+      b.disabled = true;
+      out.hidden = false; out.className = "msg"; out.textContent = T("par_d_working");
+      api("DELETE", "/v1/parental/children/" + cur.id, { confirm: inp.value.trim() }).then(function (r) {
+        b.disabled = false;
+        clear(out);
+        if (!r.ok) { out.className = "msg err"; out.textContent = errText(r.json && r.json.error); return; }
+        out.className = r.json.result === "removed" ? "msg" : "msg err";
+        out.appendChild(el("p", { text: r.json.result === "removed" ? T("par_d_removed") : T("par_d_removal_incomplete") }));
+        out.appendChild(el("p", { "class": "meta", text: stepsLine(r.json.steps) }));
+        out.appendChild(el("p", {}, [el("button", { type: "button", "data-back": "1", text: T("par_back") })]));
+      });
+    });
+    return box;
   }
 
   // ── wiring ─────────────────────────────────────────────────────────────────────────────────────────────────────

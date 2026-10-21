@@ -31,7 +31,7 @@ def call(method, path, token=None, body=None, headers=None):
         h.setdefault("Idempotency-Key", "live-" + os.urandom(6).hex())
     req = urllib.request.Request(BASE + path, data=data, method=method, headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("GW_TIMEOUT", "90"))) as r:
             raw = r.read()
             return r.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as e:

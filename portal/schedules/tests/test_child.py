@@ -235,7 +235,9 @@ class Devices(unittest.TestCase):
         self.e.req("POST", "/v1/child/child_b/domains", json={"kind": "allow", "domain": "school.example.org"})
         self.assertEqual(self.e.req("DELETE", "/v1/child/child_b", role="household").status_code, 403)
         self.assertEqual(self.e.req("DELETE", "/v1/child/nope").status_code, 404)
-        self.assertEqual(self.e.req("DELETE", "/v1/child/child_b").status_code, 204)
+        rm0 = self.e.req("DELETE", "/v1/child/child_b")
+        self.assertEqual(rm0.status_code, 200, rm0.text)
+        self.assertEqual((rm0.json()["child_id"], rm0.json()["name"]), ("child_b", "b-tablet"))
         snap = self.e.req("GET", "/v1/child/snapshot").json()
         self.assertEqual([x["id"] for x in snap["devices"]], ["child_a"])
         self.assertEqual(self.e.req("GET", "/v1/child/child_b").status_code, 404)
@@ -246,6 +248,53 @@ class Devices(unittest.TestCase):
         r = self.e.req("DELETE", "/v1/child/child_a")
         self.assertEqual((r.status_code, r.json()["error"]["code"]), (422, "validation_failed"))                 # the last device
         self.assertIn("last child device", json.dumps(r.json()))
+
+
+
+    def test_label_icon_closed_template_and_cyrillic_names(self):
+        d = self.add({"name": "Настя", "label": "планшет", "ip": "192.168.31.90", "icon": "tablet", "closed": True}).json()
+        self.assertEqual((d["id"], d["name"], d["label"], d["icon"], d["child"], d["rules"]), ("child_nastya_planshet", "Настя планшет", "планшет", "tablet", "Настя", []))
+        snap = self.e.req("GET", "/v1/child/snapshot").json()
+        mine = next(x for x in snap["devices"] if x["id"] == d["id"])
+        self.assertEqual(mine["rules"], [])                                                  # closed: no window opens anything
+        self.assertEqual(d["status"]["state"], "closed")
+        self.assertEqual(self.add({"name": "Влад", "ip": "192.168.31.91", "icon": "fridge"}).status_code, 422)
+        self.assertEqual(self.add({"name": "Влад", "ip": "192.168.31.91", "like": "child_a", "closed": True}).status_code, 422)     # a template XOR closed
+        c = self.add({"name": "Copy", "label": "phone", "ip": "192.168.31.92", "like": "child_a"}).json()
+        self.assertEqual(sorted(x["id"] for x in c["rules"]), ["maps", "yt_roblox"])
+
+    def test_copy_also_copies_the_per_child_lists(self):
+        self.e.req("POST", "/v1/child/child_a/domains", json={"kind": "allow", "domain": "school.example.org"})
+        c = self.add({"name": "Copy", "ip": "192.168.31.93", "like": "child_a"}).json()
+        self.assertEqual(c["domains"], {"allow": ["school.example.org"], "deny": ["bad.example.org"]})
+        self.assertEqual(self.e.req("GET", "/v1/child/child_a").json()["domains"]["allow"], ["school.example.org"])
+
+    def test_a_removal_can_be_undone_within_24_hours_with_everything(self):
+        self.e.req("POST", "/v1/child/child_b/domains", json={"kind": "deny", "domain": "bad.example.org"})
+        x = self.e.req("POST", "/v1/child/child_b/exceptions", json={"target": "youtube", "minutes": 30}).json()
+        g = self.e.req("GET", "/v1/schedules/child_b")
+        self.e.req("PUT", "/v1/schedules/child_b", headers={"If-Match": g.headers["ETag"]}, json={"rules": RULES[:1]})
+        rm = self.e.req("DELETE", "/v1/child/child_b").json()
+        listed = self.e.req("GET", "/v1/child/removed").json()["removed"]
+        self.assertEqual([(r["removal_id"], r["child_id"], r["ip"]) for r in listed], [(rm["removal_id"], "child_b", "192.168.31.61")])
+        self.assertEqual(self.e.req("GET", "/v1/child/removed", role="household").status_code, 403)
+        self.assertEqual(self.e.req("POST", "/v1/child/removed/%s/restore" % rm["removal_id"], role="household").status_code, 403)
+        r = self.e.req("POST", "/v1/child/removed/%s/restore" % rm["removal_id"])
+        self.assertEqual(r.status_code, 201, r.text)
+        d = r.json()
+        self.assertEqual((d["id"], d["ip"], [x["id"] for x in d["rules"]], d["domains"]["deny"], [e["target"] for e in d["exceptions"]]), ("child_b", "192.168.31.61", ["yt_roblox"], ["bad.example.org"], ["youtube"]))
+        self.assertEqual(self.e.req("GET", "/v1/child/removed").json()["removed"], [])
+        self.assertEqual(self.e.req("POST", "/v1/child/removed/%s/restore" % rm["removal_id"]).status_code, 404)           # once
+
+    def test_a_restore_is_refused_when_the_ip_was_taken_and_after_24_hours(self):
+        rm = self.e.req("DELETE", "/v1/child/child_b").json()
+        self.assertEqual(self.add({"name": "New", "ip": "192.168.31.61"}).status_code, 201)                                 # the freed IP goes to a new device
+        r = self.e.req("POST", "/v1/child/removed/%s/restore" % rm["removal_id"])
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (422, "validation_failed"))
+        import datetime as dt
+        self.assertEqual(len(self.e.store.child_removed()), 1)
+        later = self.e.store._now() + dt.timedelta(hours=25)
+        self.assertEqual(self.e.store.child_removed(later), [])                                                             # dropped after 24 h
 
 
 if __name__ == "__main__":

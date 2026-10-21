@@ -12,7 +12,7 @@
   schedctl audit [ENTITY] [LIMIT]
   schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | add ENTITY override_until HH:MM on|off | rm ID
   schedctl plug add ID "Name" switch.xxx LIKE_ID     # admin: a new plug entity with the windows/guardrails of LIKE_ID, starts unmanaged (then: managed ID on)
-  schedctl child list | add NAME IP [--mac MAC] [--like DEVICE_ID] | remove ID    # the children's devices (Task 29; add/remove are admin-only)
+  schedctl child list | add NAME IP [--mac MAC] [--like ID | --closed] [--label L] [--icon I] | remove ID [--forget] | removed | restore REMOVAL_ID    # admin: devices of the children; a removal can be undone for 24 h
   schedctl guardrails ENTITY FILE.json       # admin
   schedctl managed ENTITY on|off             # admin: the cutover switch (rendered into HA or not)
   schedctl run list [ENTITY] | start ENTITY MINUTES | extend ID MINUTES | cancel ID      # timed runs (the CALLER switches the plug; the HA side ends the run itself)
@@ -158,15 +158,24 @@ def main(a):
             body = {"name": rest[1], "ip": rest[2]}
             opts = rest[3:]
             while opts:
-                if opts[0] in ("--mac", "--like") and len(opts) >= 2:
+                if opts[0] == "--closed":
+                    body["closed"] = True
+                    opts = opts[1:]
+                elif opts[0] in ("--mac", "--like", "--label", "--icon") and len(opts) >= 2:
                     body[opts[0][2:]] = opts[1]
                     opts = opts[2:]
                 else:
-                    sys.exit("schedctl: child add NAME IP [--mac MAC] [--like DEVICE_ID]")
+                    sys.exit("schedctl: child add NAME IP [--mac MAC] [--like DEVICE_ID | --closed] [--label LABEL] [--icon phone|tablet|laptop|console|tv|other]")
             st, b, _ = call("POST", "/v1/child", body)
             return done(st, b, ok=(201,))
-        if rest[0] == "remove" and len(rest) == 2:
-            st, b, _ = call("DELETE", "/v1/child/" + rest[1])
+        if rest[0] == "removed":
+            st, b, _ = call("GET", "/v1/child/removed")
+            return done(st, b)
+        if rest[0] == "restore" and len(rest) == 2:
+            st, b, _ = call("POST", "/v1/child/removed/%s/restore" % rest[1])
+            return done(st, b, ok=(201,))
+        if rest[0] == "remove" and len(rest) in (2, 3):
+            st, b, _ = call("DELETE", "/v1/child/" + rest[1] + ("?forget=1" if rest[2:] == ["--forget"] else ""))
             return done(st, b)
     if c == "guardrails" and len(rest) == 2:
         st, b, _ = call("PUT", "/v1/entities/%s/guardrails" % rest[0], load(rest[1]))

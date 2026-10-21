@@ -6,5 +6,5 @@
 <p class="row"><span id="par-health" class="badge b-unknown"><span class="dot"></span><span class="btext">{{ t('par_loading') }}</span></span>
 {% if me.role == 'admin' %}<a class="linkbtn" href="/parental/filters">{{ t('par_filters_link') }}</a>{% endif %}</p>
 <p class="meta">{{ t('parental_bedtime_note') }}</p>
-<div id="par-root" data-mode="children"><p class="meta">{{ t('par_loading') }}</p></div>
+<div id="par-root" data-mode="children" data-admin="{{ 'yes' if me.role == 'admin' else 'no' }}"><p class="meta">{{ t('par_loading') }}</p></div>
 {% endblock %}

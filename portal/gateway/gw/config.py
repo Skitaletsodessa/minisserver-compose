@@ -19,6 +19,7 @@ AGH_PASSWORD_FILE = os.environ.get("GW_AGH_PASSWORD_FILE", "/secrets-agh/passwor
 PARITY_STATE_FILE = os.environ.get("GW_PARITY_STATE", "/ro/adguard-parity/state.json")
 OUI_FILE = os.environ.get("GW_OUI_FILE", "/ro/ieee-data/oui.txt")
 FILTER_FETCH_ALLOW_FILE = os.environ.get("GW_FILTER_FETCH_ALLOW", os.path.join(DATA, "filter-fetch-allow.txt"))   # operator-written; empty/absent in normal operation
+ARP_FILE = os.environ.get("GW_ARP_FILE", "/proc/net/arp")
 ORIGIN_DNS = os.environ.get("GW_ORIGIN_DNS", "192.168.31.2")
 REPLICA_DNS = os.environ.get("GW_REPLICA_DNS", "192.168.31.5")
 

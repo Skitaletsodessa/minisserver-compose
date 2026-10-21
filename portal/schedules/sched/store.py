@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS child_exceptions(
 CREATE TABLE IF NOT EXISTS child_domains(
   entity_id TEXT NOT NULL REFERENCES entities(id), kind TEXT NOT NULL, domain TEXT NOT NULL, added_by TEXT NOT NULL, added_at TEXT NOT NULL,
   PRIMARY KEY(entity_id, kind, domain));
+CREATE TABLE IF NOT EXISTS child_removed(
+  id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, name TEXT NOT NULL, removed_at TEXT NOT NULL, removed_by TEXT NOT NULL, definition TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tokens(
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL, sha256 TEXT NOT NULL, created TEXT NOT NULL,
   expires TEXT, last_used TEXT, revoked INTEGER NOT NULL DEFAULT 0);

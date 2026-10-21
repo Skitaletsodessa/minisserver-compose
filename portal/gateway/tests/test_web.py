@@ -175,7 +175,7 @@ class Web(BaseCase):
         ck = self.cookie(self.login("marta", ip="5.5.5.11"))
         r = self.get("/parental", ck)
         self.assertEqual(r.status_code, 200)
-        self.assertIn('id="par-root" data-mode="children"', r.text)
+        self.assertIn('id="par-root" data-mode="children" data-admin="no"', r.text)                 # household: no device controls
         self.assertIn('src="/static/parental.js"', r.text)
         self.assertIn("Mi WiFi", r.text)                                                   # bedtime lives in the router app: a one-line note, no integration
         self.assertNotIn('href="/parental/filters"', r.text)                               # household: no link to the admin page
@@ -187,6 +187,7 @@ class Web(BaseCase):
         ck3 = self.cookie(self.login("webadmin", ip="5.5.5.13"))
         r = self.get("/parental", ck3)
         self.assertIn('href="/parental/filters"', r.text)
+        self.assertIn('data-mode="children" data-admin="yes"', r.text)                                  # the admin gets the device controls
         r = self.get("/parental/filters", ck3)
         self.assertEqual(r.status_code, 200)
         self.assertIn('id="par-root" data-mode="filters"', r.text)
@@ -202,6 +203,7 @@ class Web(BaseCase):
         self.assertGreater(len(used), 40)
         self.assertEqual(sorted(k for k in used if k not in S), [], "strings the page uses but the table lacks")
         dynamic = {"par_state_": ["open", "closed", "restricted"], "par_target_": ["youtube", "roblox", "maps", "all"],
+                   "par_d_step_": ["create", "job", "verify", "rules", "parity", "revert", "internal", "remove", "client", "others"], "par_icon_": ["phone", "tablet", "laptop", "console", "tv", "other"],
                    "par_f_step_": ["validate", "apply", "probe", "replica", "parity", "revert", "probe_after_revert", "hold", "internal"],
                    "par_f_act_": ["add", "remove", "enable", "disable", "rename", "refresh", "revert"], "par_f_res_": ["applied", "reverted", "held", "failed", "running"]}
         for prefix, suffixes in dynamic.items():

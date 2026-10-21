@@ -265,7 +265,7 @@ paths:
       summary: "Admin only. Adds a child device (it starts with the windows of `like`, else the standard ones, the proposed guardrails and no exceptions). House infrastructure (router, this server, the Pi) is refused as a device: a catch-all there would cut the house's DNS"
       requestBody:
         required: true
-        content: {application/json: {schema: {type: object, required: [name, ip], additionalProperties: false, properties: {name: {type: string, maxLength: 60}, ip: {type: string}, mac: {type: string}, like: {type: string}}}}}
+        content: {application/json: {schema: {type: object, required: [name, ip], additionalProperties: false, properties: {name: {type: string, maxLength: 40}, ip: {type: string}, mac: {type: string}, like: {type: string}, label: {type: string, maxLength: 40}, icon: {type: string, enum: [phone, tablet, laptop, console, tv, other]}, closed: {type: boolean}}}}}
       responses:
         "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDeviceFull"}}}}
         "400": {$ref: "#/components/responses/Error"}
@@ -296,6 +296,27 @@ paths:
         "403": {$ref: "#/components/responses/Error"}
         "413": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+  /v1/child/removed:
+    get:
+      operationId: listRemovedChildren
+      summary: "Admin only. Removed child devices that can still be restored (24 h)"
+      responses:
+        "200": {description: removals, content: {application/json: {schema: {type: object, required: [removed], properties: {removed: {type: array, items: {$ref: "#/components/schemas/ChildRemoval"}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/child/removed/{rid}/restore:
+    post:
+      operationId: restoreChildDevice
+      summary: "Admin only. Re-creates a removed device from its stored definition (same id, windows, guardrails, lists, still-active exceptions) if the id, name, ip and mac are still free"
+      parameters: [{name: rid, in: path, required: true, schema: {type: string}}]
+      responses:
+        "201": {description: restored, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDeviceFull"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/child/{id}:
     get:
       operationId: getChildDevice
@@ -308,9 +329,9 @@ paths:
     delete:
       operationId: removeChildDevice
       summary: "Admin only. Retires a child device (its catch-all leaves AdGuard at the next job run). The audit row keeps windows, guardrails, lists and exceptions. The last device cannot be removed"
-      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      parameters: [{$ref: "#/components/parameters/EntityId"}, {name: forget, in: query, required: false, schema: {type: string, enum: ["1", "true"]}, description: "roll back a failed add: do not keep the 24 h undo record"}]
       responses:
-        "204": {description: removed}
+        "200": {description: removed; the definition is kept 24 h for the undo, content: {application/json: {schema: {$ref: "#/components/schemas/ChildRemoval"}}}}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
@@ -678,6 +699,17 @@ components:
         open_until: {type: [string, "null"]}
         opens_at: {type: [string, "null"]}
         exceptions: {type: array, items: {$ref: "#/components/schemas/ChildExceptionRec"}}
+    ChildRemoval:
+      type: object
+      required: [removal_id, child_id, name, removed_at, restorable_until]
+      properties:
+        removal_id: {type: string}
+        child_id: {type: string}
+        name: {type: string}
+        ip: {type: [string, "null"]}
+        removed_at: {type: string}
+        restorable_until: {type: string}
+        removed_by: {type: [string, "null"]}
     ChildDeviceFull:
       type: object
       required: [id, name, ip, mac, version, tz, rules, guardrails, flags, exceptions, domains, status]
@@ -687,6 +719,9 @@ components:
         ip: {type: [string, "null"]}
         mac: {type: [string, "null"]}
         version: {type: integer}
+        label: {type: string}
+        icon: {type: string}
+        child: {type: string}
         tz: {type: string}
         updated_at: {type: string}
         rules: {type: array, items: {type: object}}
