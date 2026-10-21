@@ -16,6 +16,7 @@ allowlist.conf fields (whitespace separated, `#` starts a comment):  PROTO  ADDR
 import os
 import re
 import sys
+import hashlib
 import json
 import time
 import subprocess
@@ -80,10 +81,13 @@ def load_allowlist(path, today=None):
             if rest and rest[0].startswith("until="):
                 until = datetime.date.fromisoformat(rest[0][6:])
                 rest = rest[1:]
+            intermittent = bool(rest and rest[0] == "intermittent")          # listens only part of the time (a periodic scan): allowed, but its absence is normal
+            if intermittent:
+                rest = rest[1:]
             if proto not in ("tcp", "udp") or not (port == "ephemeral" or port.isdigit()) or not rest:
                 raise ValueError("%s:%d: malformed entry: %s" % (path, n, line))
             entries.append({"proto": proto, "addr": "*" if addr in ("*", "0.0.0.0", "::") else addr, "port": port, "proc": proc,
-                            "until": until, "reason": " ".join(rest), "expired": bool(until and today > until)})
+                            "until": until, "intermittent": intermittent, "reason": " ".join(rest), "expired": bool(until and today > until)})
     return entries
 
 
@@ -105,17 +109,23 @@ def evaluate(N, listeners, entries, state):
     """Pure decision logic. state: {"alerted": [keys]} persisted between runs. Returns the new state."""
     now = normalise(listeners)
     unknown = [l for l in now if not any(matches(e, l) for e in entries)]
-    unknown_keys = {"listener-new-%s-%s-%d" % (l["proto"], l["addr"], l["port"]): l for l in unknown}
-    for key, l in unknown_keys.items():
-        N.alert(key, "listener-watch: НОВЫЙ слушающий сокет вне белого списка: %s. Если это ожидаемо - добавить в "
-                     "_system/listener-watch/allowlist.conf с причиной; если нет - выяснить, что это." % fmt(l), tier="A")
+    # Task 29a: ONE message per check for all unlisted sockets (a burst of 13 became 26 messages on 2026-10-20). The key is a hash of the SET of sockets: the same set
+    # on the next run is the same alert (watchnotify dedups, 6 h reminder), a different set is a new alert and the old one is cleared.
+    unknown_keys = {}
+    if unknown:
+        socks = sorted(fmt(l) for l in unknown)
+        gkey = "listener-new-" + hashlib.sha1("\n".join(socks).encode()).hexdigest()[:10]
+        unknown_keys[gkey] = socks
+        listing = "\n".join("  " + s for s in socks[:25]) + ("\n  ... и ещё %d" % (len(socks) - 25) if len(socks) > 25 else "")
+        N.alert(gkey, "listener-watch: НОВЫЕ слушающие сокеты вне белого списка (%d):\n%s\nЕсли это ожидаемо - добавить в "
+                      "_system/listener-watch/allowlist.conf с причиной; если нет - выяснить, что это." % (len(socks), listing), tier="A")
     for key in state.get("alerted", []):
         if key not in unknown_keys:
-            N.clear(key, "listener-watch: сокет больше не слушает или внесён в белый список")
+            N.clear(key, "listener-watch: сокеты больше не слушают или внесены в белый список")
     # expected fixed-port listeners that are missing -> quiet
     missing_now = []
     for e in entries:
-        if e["port"] == "ephemeral" or e["expired"] or e["until"]:        # a time-limited exception is not an expectation
+        if e["port"] == "ephemeral" or e["expired"] or e["until"] or e.get("intermittent"):        # a time-limited exception is not an expectation
             continue
         if not any(matches(e, l) for l in now):
             missing_now.append(e)
