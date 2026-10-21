@@ -1,5 +1,5 @@
 # GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
-# snapshot checksum: 7aa3c4f98f77f440
+# snapshot checksum: e0d9fb83f36c1f96
 # nastia-tablet-lenovo (192.168.31.30)
 # allow:
 
