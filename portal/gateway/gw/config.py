@@ -52,7 +52,7 @@ DEVICE_SEED = {
     "plant_rack1":     {"name": "Свет для растений — стеллаж 1", "kind": "lamp",  "power_sensor": "sensor.living_room_rack_power", "household_switchable": 1},
     "plant_rack2":     {"name": "Свет для растений — стеллаж 2", "kind": "lamp",  "power_sensor": "sensor.livingroom_rack_big_power", "household_switchable": 1},
     "plant_orchids":   {"name": "Свет для орхидей", "kind": "lamp",  "power_sensor": None, "household_switchable": 1},          # fake meter (always 0): no value shown
-    "plant_citrus":    {"name": "Свет для цитрусов — 2 этаж", "kind": "lamp",  "power_sensor": "sensor.citrus_2nd_floor_power", "household_switchable": 1},
+    "plant_citrus":    {"name": "Свет для цитрусов — 2 этаж", "kind": "lamp",  "power_sensor": "sensor.smartplug_citrus_2ndfloor_power", "household_switchable": 1},
     "plant_cacti":     {"name": "Свет для кактусов (фитолампа)", "kind": "lamp",  "power_sensor": "sensor.minisserver_power", "household_switchable": 1},
     "parrot_uv":       {"name": "УФ-лампа для попугая", "switch_mode": "timed", "kind": "uv",    "power_sensor": "sensor.bedroom_parrot_power", "household_switchable": 1},
 }

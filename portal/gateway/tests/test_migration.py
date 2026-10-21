@@ -44,7 +44,7 @@ class Migration(unittest.TestCase):
         db.x("UPDATE device_meta SET household_switchable=0, display_name='Моё' WHERE device_id='plant_rack1'")   # edits made by hand
         core.seed()
         c = db.q1("SELECT * FROM device_meta WHERE device_id='plant_citrus'")
-        self.assertEqual((c["kind"], c["power_sensor"], c["household_switchable"], c["switch_mode"]), ("lamp", "sensor.citrus_2nd_floor_power", 1, "plain"))
+        self.assertEqual((c["kind"], c["power_sensor"], c["household_switchable"], c["switch_mode"]), ("lamp", "sensor.smartplug_citrus_2ndfloor_power", 1, "plain"))
         r = db.q1("SELECT * FROM device_meta WHERE device_id='plant_rack1'")
         self.assertEqual((r["household_switchable"], r["display_name"]), (0, "Моё"))                 # never overwritten
 
