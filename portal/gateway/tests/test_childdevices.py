@@ -150,7 +150,7 @@ class Add(D):
         r = self.add({"name": "Влад", "device_label": "планшет", "ip": "192.168.31.71", "icon": "tablet", "template": "copy:child_a"})
         self.assertEqual(r.json()["result"], "created", r.text)
         d = e.req("GET", BASE + "/" + r.json()["child_id"], who="dasha").json()
-        self.assertEqual(sorted(x["id"] for x in d["windows"]["rules"]), ["maps", "yt_roblox"])
+        self.assertEqual(sorted(x["id"] for x in d["windows"]["rules"]), ["yt_roblox"])
         self.assertEqual(d["domains"]["allow"], ["school.example.org"])
 
     def test_refusals_change_nothing(self):
@@ -278,7 +278,7 @@ class Remove(D):
         self.assertEqual((r.status_code, js["result"], js["child_id"]), (200, "created", cid), r.text)
         self.assertEqual([s["name"] for s in js["steps"]], ["create", "job", "verify", "rules", "parity"])
         d = e.req("GET", BASE + "/" + cid, who="ivan").json()
-        self.assertEqual((sorted(x["id"] for x in d["windows"]["rules"]), d["domains"]["deny"], [x["target"] for x in d["exceptions"]]), (["maps", "yt_roblox"], ["bad.example.org"], ["youtube"]))
+        self.assertEqual((sorted(x["id"] for x in d["windows"]["rules"]), d["domains"]["deny"], [x["target"] for x in d["exceptions"]]), (["yt_roblox"], ["bad.example.org"], ["youtube"]))
         self.assertEqual(e.req("GET", "/v1/parental/removed-children", who="ivan").json()["removed"], [])
         self.assertEqual(e.req("POST", "/v1/parental/removed-children/%s/restore" % rid, who="ivan").status_code, 404)
 

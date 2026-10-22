@@ -100,6 +100,9 @@ class Parental:
     def _acting(p):
         return {"person": p["person_id"], "phone": p.get("phone_id") or "-"}
 
+    def _now(self):
+        return dt.datetime.fromtimestamp(self.clock(), TZ)
+
     def _cached(self, key, ttl):
         hit = self._cache.get(key)
         return hit[1] if hit and self.clock() - hit[0] < ttl else None
@@ -201,7 +204,7 @@ class Parental:
             rules = st.get("user_rules") or []
             live = rules[rules.index(BEGIN):rules.index(END) + 1] if BEGIN in rules and END in rules else []
             sd = await self._service_domains()
-            now = dt.datetime.now(TZ)
+            now = self._now()
             ov = [{"client": c["ip"], "target": x["target"]} for c in children for x in c.get("exceptions") or []]
             exp = []
             for at in (now, now - dt.timedelta(seconds=75)):
@@ -238,16 +241,51 @@ class Parental:
     def _summary(self, c, status, hostnames):
         icon = c.get("icon") or ""                                   # chosen when the device was added; older devices: guessed from the name
         kind = {"phone": "phone", "tablet": "tablet"}.get(icon) or (device_kind(c["name"]) if not icon else "other")
-        return {"id": c["id"], "name": c["name"], "icon": icon or kind, "device_kind": kind, "identity": self._identity(c, hostnames), "status": status}
+        return {"id": c["id"], "name": c["name"], "display_name": c.get("display_name") or "", "icon": icon or kind, "device_kind": kind, "identity": self._identity(c, hostnames), "status": status}
+
+    async def _always_open(self):
+        """Which kinds of services are always open for the children, from the data (so the quiet line on the tile is true): telegram, weather, maps, android."""
+        hit = self._cached("always_open", 60)
+        if hit is not None:
+            return hit
+        try:
+            js, _ = await self._svc(None, "GET", "/v1/child-policy", role="admin")
+        except GwError:
+            return []
+        always = set((js.get("lists") or {}).get("allow_always") or [])
+        out = []
+        if "telegram" in (js.get("always_services") or []):
+            out.append("telegram")
+        if "accuweather.com" in always:
+            out.append("weather")
+        if {"maps.google.com", "maps.googleapis.com", "maps.gstatic.com"} <= always:
+            out.append("maps")
+        if "connectivitycheck.android.com" in always:
+            out.append("android")
+        return self._put("always_open", out)
+
+    def _tile(self, p, c, summary):
+        g = c.get("guardrails") or {}
+        summary["windows"] = {"rules": from_service_rules(c["rules"]), "can_edit": self._can(p, c)["edit_windows"], "version": c["version"],
+                              "guardrails": {"allowed_from": g.get("allowed_from"), "allowed_to": g.get("allowed_to"), "max_open_minutes_per_day": g.get("max_open_minutes_per_day")}}
+        summary["eod"] = {"normal": g.get("exception_latest_end") or "23:59", "all": g.get("all_latest_end") or "23:59"}
+        summary["can"] = self._can(p, c) if p["role"] != "readonly" else {k: False for k in ("edit_windows", "grant_exceptions", "edit_domains", "edit_guardrails", "edit_filter_lists")}
+        return summary
 
     async def children(self, p):
         self._need(p, view_only=True)
         kids = await self._children_raw(p)
-        policy, host = await asyncio.gather(self._policy(kids), self._agh_clients())
+        policy, host, always = await asyncio.gather(self._policy(kids), self._agh_clients(), self._always_open())
         out = []
         for c in kids:
-            out.append(self._summary(c, await self._status(c, policy, host), host))
-        return {"children": out}
+            out.append(self._tile(p, c, self._summary(c, await self._status(c, policy, host), host)))
+        return {"children": out, "always_open": always, "now": self._now().isoformat(timespec="seconds")}
+
+    async def child_display(self, p, cid, body):
+        """Admin, web sign-in only (like every admin action since Task 30): the name and icon a parent sees. Display data of the schedule service; AdGuard is not involved."""
+        self._need(p, admin=True)
+        js, _ = await self._svc(p, "PATCH", "/v1/child/%s" % urllib.parse.quote(cid, safe=""), body, role="admin")
+        return {"id": cid, "display_name": js.get("display_name") or "", "icon": js.get("icon") or ""}
 
     def _can(self, p, c):
         edit = p["role"] == "admin" or (p["role"] == "household" and bool((c.get("flags") or {}).get("household_editable")))
@@ -270,7 +308,8 @@ class Parental:
         out = self._summary(c, await self._status(c, policy, host), host)
         out.update({"windows": self._windows(p, c), "exceptions": [self._exc(x) for x in c.get("exceptions") or []], "domains": c.get("domains") or {"allow": [], "deny": []},
                     "can": self._can(p, c) if p["role"] != "readonly" else {k: False for k in ("edit_windows", "grant_exceptions", "edit_domains", "edit_guardrails", "edit_filter_lists")},
-                    "note": S["parental_bedtime_note"]})
+                    "note": S["parental_bedtime_note"], "eod": {"normal": (c.get("guardrails") or {}).get("exception_latest_end") or "23:59", "all": (c.get("guardrails") or {}).get("all_latest_end") or "23:59"},
+                    "always_open": await self._always_open(), "now": self._now().isoformat(timespec="seconds")})
         return out
 
     # ── windows ───────────────────────────────────────────────────────────────────────────────────────────────────

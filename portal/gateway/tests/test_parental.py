@@ -70,8 +70,7 @@ class P(BaseCase):
         return next(r for r in rules if r["id"] == "yt_roblox")
 
     def rules(self, yt_start="16:00", yt_end="19:00"):
-        return [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": yt_start, "end": yt_end, "opens": ["youtube", "roblox"]},
-                {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "opens": ["maps"]}]
+        return [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": yt_start, "end": yt_end, "opens": ["youtube", "roblox"]}]
 
     def put_windows(self, who, cid, rules, etag=None, **kw):
         if etag is None:
@@ -251,6 +250,25 @@ class Exceptions(P):
             self.assertEqual(e.req("POST", BASE + A + "/exceptions", who="ivan", json=bad).status_code, 400, bad)
         r = e.req("POST", BASE + A + "/exceptions", who="ivan", json={"target": "youtube"})                  # neither minutes nor end of day
         self.assertEqual(r.status_code, 422)
+
+    def test_maps_is_always_open_so_it_has_no_exception_and_no_window_an_old_client_gets_a_clear_400(self):
+        e = self.e
+        r = e.req("POST", BASE + A + "/exceptions", who="ivan", json={"target": "maps", "minutes": 30})
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (400, "maps_always_open"))
+        etag = e.req("GET", BASE + A + "/windows", who="ivan").headers["ETag"]
+        for opens in (["maps"], ["youtube", "maps"]):
+            r = e.req("PUT", BASE + A + "/windows", who="ivan", headers={"If-Match": etag},
+                      json={"rules": [{"id": "r", "days": [1], "start": "16:00", "end": "17:00", "opens": opens}]})
+            self.assertEqual((r.status_code, r.json()["error"]["code"]), (400, "maps_always_open"), opens)
+        self.assertEqual(e.req("GET", BASE + A, who="ivan").json()["status"]["exceptions"], [])           # nothing was stored by the refusals
+
+    def test_the_four_presets_are_accepted_including_sixty_minutes(self):
+        e = self.e
+        for minutes in (30, 60, 120):
+            r = e.req("POST", BASE + A + "/exceptions", who="ivan", json={"target": "youtube", "minutes": minutes})
+            self.assertEqual(r.status_code, 201, (minutes, r.text))
+        r = e.req("POST", BASE + A + "/exceptions", who="ivan", json={"target": "roblox", "until_end_of_day": True})
+        self.assertEqual(r.status_code, 201, r.text)
 
     def test_a_repeat_with_the_same_idempotency_key_is_the_same_exception(self):
         e = self.e
@@ -475,3 +493,29 @@ class Health(P):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DisplayName(P):
+    """Task 31: the name a parent sees on the tile. Admin with a web sign-in only; display data, AdGuard and the policy are not involved."""
+    def test_admin_renames_the_tile_and_nobody_else_may(self):
+        e = self.e
+        r = e.req("PATCH", BASE + A, who="ivan", json={"display_name": "Влад · телефон", "icon": "phone"})
+        self.assertEqual((r.status_code, r.json()["display_name"], r.json()["icon"]), (200, "Влад · телефон", "phone"))
+        self.assertEqual(e.req("GET", "/v1/parental/children", who="dasha").json()["children"][0]["display_name"], "Влад · телефон")
+        for who in ("dasha", "rita"):
+            self.assertEqual(e.req("PATCH", BASE + A, who=who, json={"display_name": "X1"}).status_code, 403, who)
+        for bad in ({}, {"name": "x"}, {"display_name": 5}):
+            self.assertEqual(e.req("PATCH", BASE + A, who="ivan", json=bad).status_code, 400, bad)
+        self.assertEqual(e.req("PATCH", BASE + A, who="ivan", json={"display_name": "---"}).status_code, 422)
+        self.assertEqual(e.req("PATCH", BASE + A, who="ivan", json={"display_name": ""}).json()["display_name"], "")
+        self.assertEqual(e.req("PATCH", BASE + "nothing", who="ivan", json={"display_name": "Anna"}).status_code, 404)
+
+    def test_the_list_carries_what_the_tile_needs(self):
+        js = self.e.req("GET", "/v1/parental/children", who="dasha").json()
+        self.assertEqual(sorted(js["always_open"]), ["android", "maps", "telegram", "weather"])
+        self.assertRegex(js["now"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
+        k = js["children"][0]
+        self.assertEqual(sorted(k["windows"]["guardrails"]), ["allowed_from", "allowed_to", "max_open_minutes_per_day"])
+        self.assertEqual(k["eod"], {"normal": "23:59", "all": "23:59"})
+        self.assertTrue(k["can"]["grant_exceptions"])
+        self.assertFalse(self.e.req("GET", "/v1/parental/children", who="rita").json()["children"][0]["can"]["grant_exceptions"])

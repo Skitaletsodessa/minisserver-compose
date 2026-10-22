@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ t('settings') }}{% endblock %}
 {% block body %}
-<h1>{{ t('editor_title', n=ent.name) }}</h1>
+<h1>{{ t('hh_title', n=ent.name) }}</h1>
 <p><a class="back" href="/home">&larr; {{ t('nav_home') }}</a></p>
 <script type="application/json" id="doc">{{ doc_json|safe }}</script>
-{% if not can_edit %}<p class="msg warn">{{ t('cannot_edit') }}</p>{% endif %}
-<section id="guard" class="meta"></section>
-<form id="editor" {% if not can_edit %}data-readonly="yes"{% endif %}>
+{% if not can_edit %}<p class="msg warn">{{ t('hh_no_edit') }}</p>{% endif %}
+<p id="guard" class="meta"></p>
+<form id="editor" data-name="{{ ent.name }}" {% if not can_edit %}data-readonly="yes"{% endif %}>
   <div id="rules"></div>
   <div class="row">
-    <button type="button" id="add-rule" {% if not can_edit %}disabled{% endif %}>{{ t('add_rule') }}</button>
-    <button type="button" id="preview" {% if not can_edit %}disabled{% endif %}>{{ t('preview') }}</button>
-    <button type="button" id="save" class="primary" {% if not can_edit %}disabled{% endif %}>{{ t('save') }}</button>
-    <button type="button" id="undo" {% if not can_edit %}disabled{% endif %}>{{ t('undo') }}</button>
+    <button type="button" id="add-rule" {% if not can_edit %}disabled{% endif %}>{{ t('hh_add') }}</button>
+    <button type="button" id="preview" {% if not can_edit %}disabled{% endif %}>{{ t('hh_check') }}</button>
+    <button type="button" id="save" class="primary" {% if not can_edit %}disabled{% endif %}>{{ t('hh_save') }}</button>
+    <button type="button" id="undo" {% if not can_edit %}disabled{% endif %}>{{ t('hh_undo') }}</button>
   </div>
 </form>
 <p class="msg" id="editor-msg" role="status" hidden></p>
-<section id="preview-box" hidden><h2>{{ t('preview_title') }}</h2><ul id="preview-list"></ul></section>
+<section id="preview-box" hidden><h2>{{ t('hh_week') }}</h2><ul id="preview-list"></ul></section>
 {% endblock %}

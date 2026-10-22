@@ -222,7 +222,7 @@ class FakeJob:
         from sched import child_render, model
         store, agh = self.env.sched.store, self.env.agh
         pol = store.child_policy()
-        now = dt.datetime.now(model.TZ)
+        now = self.env.now_fn() if getattr(self.env, "now_fn", None) else dt.datetime.now(model.TZ)
         sd = {k: [r[2:-1] for r in v] for k, v in agh.service_rules.items()}
         ips = {d["ip"]: d for d in pol["devices"]}
         ov = [{"client": ips_by_id, "target": x["target"]} for x in store.child_exceptions() for ips_by_id in [next((d["ip"] for d in pol["devices"] if d["id"] == x["entity"]), None)] if ips_by_id]

@@ -185,7 +185,8 @@
     }
   }
 
-  // ── schedule editor ────────────────────────────────────────────────────────
+  // ── schedule editor of a device (plug, vacuum plan): plain words, day chips, times in 15-minute steps (Task 31 Part D) ─────────────────────────────
+  // Behaviour and API are unchanged: the same PUT with If-Match, preview and undo; the guardrails are still enforced by the service, the controls just do not offer what it would refuse.
   function initEditor() {
     var doc = JSON.parse(document.getElementById("doc").textContent);
     var isPlug = doc.kind === "plug";
@@ -195,34 +196,76 @@
     var readonly = !!q("#editor[data-readonly]");
     var rules = JSON.parse(JSON.stringify(doc.schedule.rules));
     var g = doc.schedule.guardrails || {};
-    var parts = [];
-    if (g.max_on_minutes) { parts.push(T("guard_max_on", { m: g.max_on_minutes })); }
-    if (g.allowed_from) { parts.push(T("guard_range", { a: g.allowed_from, b: g.allowed_to })); }
-    if (g.min_gap_minutes) { parts.push(T("guard_gap", { g: g.min_gap_minutes })); }
-    q("#guard").textContent = parts.length ? T("guardrails") + ": " + parts.join("; ") : "";
+    var name = (q("#editor") && q("#editor").dataset.name) || T("hh_name_fallback");
+    function mins(hm) { return parseInt(hm.slice(0, 2), 10) * 60 + parseInt(hm.slice(3), 10); }
+    function fmt(m) { return (m < 600 ? "0" : "") + Math.floor(m / 60) + ":" + (m % 60 < 10 ? "0" : "") + (m % 60); }
+    function plural(n, f) { var a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) { return f[2]; } if (b > 1 && b < 5) { return f[1]; } if (b === 1) { return f[0]; } return f[2]; }
+    function span(m) {                                                    // 120 -> "2 часа", 90 -> "1 час 30 минут"
+      var h = Math.floor(m / 60), r = m % 60, out = [];
+      if (h) { out.push(h + " " + plural(h, I.S.hh_unit_hour)); }
+      if (r || !h) { out.push(r + " " + plural(r, I.S.hh_unit_min)); }
+      return out.join(" ");
+    }
+    var lo = g.allowed_from ? mins(g.allowed_from) : 0, hi = g.allowed_to ? mins(g.allowed_to) : 1425;
+    var parts = [];                                                       // the guardrails as plain sentences
+    if (g.max_on_minutes) { parts.push(T("hh_guard_max", { name: name, m: span(g.max_on_minutes) })); }
+    if (g.min_gap_minutes) { parts.push(T("hh_guard_gap", { g: span(g.min_gap_minutes) })); }
+    if (g.allowed_from) { parts.push(T("hh_guard_range", { a: g.allowed_from, b: g.allowed_to })); }
+    if (g.max_triggers_per_day) { parts.push(T("hh_guard_trig", { n: g.max_triggers_per_day })); }
+    q("#guard").textContent = parts.join(" ");
     function say(text, kind) { msg.hidden = !text; msg.textContent = text || ""; msg.className = "msg" + (kind ? " " + kind : ""); }
+    function options(current) {
+      var out = [];
+      for (var m = lo; m <= hi; m += 15) { if (m >= 120 && m < 240) { continue; } out.push(m); }          // 02:00-03:59 is never used (clock changes)
+      if (current !== null && out.indexOf(current) < 0) { out.push(current); out.sort(function (a, b) { return a - b; }); }
+      return out;
+    }
+    function timeField(label, key, r) {
+      var cur = r[key] ? mins(r[key]) : null;
+      var lab = document.createElement("label");
+      lab.appendChild(document.createTextNode(label));
+      var sel = document.createElement("select");
+      options(cur).forEach(function (m) { var o = document.createElement("option"); o.value = fmt(m); o.textContent = fmt(m); sel.appendChild(o); });
+      if (cur !== null) { sel.value = fmt(cur); }
+      sel.disabled = readonly;
+      sel.addEventListener("change", function () { r[key] = sel.value; });
+      lab.appendChild(sel);
+      return lab;
+    }
     function render() {
-      rulesBox.innerHTML = "";
+      rulesBox.textContent = "";
       rules.forEach(function (r, i) {
         var d = document.createElement("div");
         d.className = "rule";
-        var days = I.S.dow.map(function (n, k) {
-          return '<label><input type="checkbox" data-day="' + (k + 1) + '"' + (r.days.indexOf(k + 1) >= 0 ? " checked" : "") + (readonly ? " disabled" : "") + "> " + n + "</label>";
-        }).join("");
-        d.innerHTML = '<strong>' + T("rule") + ' ' + (i + 1) + '</strong><div class="days">' + days + '</div><div class="times"><label>' + T("from") +
-          '<input type="time" data-f="start" value="' + (r.start || "") + '"' + (readonly ? " disabled" : "") + '></label>' +
-          (isPlug ? '<label>' + T("to") + '<input type="time" data-f="end" value="' + (r.end || "") + '"' + (readonly ? " disabled" : "") + "></label>" : "") +
-          '</div>' + (readonly ? "" : '<button type="button" class="danger" data-del="' + i + '">×</button>');
+        if (rules.length > 1) { var h = document.createElement("strong"); h.textContent = T("hh_window_n", { n: i + 1 }); d.appendChild(h); }
+        var chips = document.createElement("div");
+        chips.className = "daychips";
+        chips.setAttribute("role", "group");
+        chips.setAttribute("aria-label", T("hh_days"));
+        I.S.dow.forEach(function (n, k) {
+          var b = document.createElement("button");
+          b.type = "button"; b.className = "daychip"; b.textContent = n; b.disabled = readonly;
+          b.setAttribute("aria-pressed", r.days.indexOf(k + 1) >= 0 ? "true" : "false");
+          b.addEventListener("click", function () {
+            var j = r.days.indexOf(k + 1);
+            if (j >= 0) { r.days.splice(j, 1); } else { r.days.push(k + 1); r.days.sort(function (a, c) { return a - c; }); }
+            b.setAttribute("aria-pressed", r.days.indexOf(k + 1) >= 0 ? "true" : "false");
+          });
+          chips.appendChild(b);
+        });
+        d.appendChild(chips);
+        var times = document.createElement("div");
+        times.className = "times";
+        times.appendChild(timeField(T(isPlug ? "hh_on" : "hh_trigger"), "start", r));
+        if (isPlug) { times.appendChild(timeField(T("hh_off"), "end", r)); }
+        d.appendChild(times);
+        if (!readonly && rules.length > 1) {
+          var rm = document.createElement("button");
+          rm.type = "button"; rm.className = "danger"; rm.textContent = T("hh_remove"); rm.dataset.del = String(i);
+          d.appendChild(rm);
+        }
         rulesBox.appendChild(d);
       });
-    }
-    function collect() {
-      qa(".rule", rulesBox).forEach(function (el, i) {
-        rules[i].days = qa("[data-day]", el).filter(function (c) { return c.checked; }).map(function (c) { return parseInt(c.dataset.day, 10); });
-        rules[i].start = q('[data-f="start"]', el).value;
-        if (isPlug) { rules[i].end = q('[data-f="end"]', el).value; }
-      });
-      return rules;
     }
     function problems(e) {
       if (!e) { return T("err_generic", { m: "?" }); }
@@ -230,48 +273,58 @@
       var head = (I.E && I.E[e.code]) || e.message;
       return head + (list.length ? " " + list.map(function (p) { return ((I.E && I.E[p.code]) || "") + " (" + p.message + ")"; }).join(" ") : "");
     }
+    function check() {
+      for (var i = 0; i < rules.length; i++) {
+        if (!rules[i].days.length) { return T("sch_err_days"); }
+        if (isPlug && mins(rules[i].end) <= mins(rules[i].start)) { return T("sch_err_range"); }
+      }
+      return null;
+    }
     rulesBox.addEventListener("click", function (ev) {
       var del = ev.target.closest("[data-del]");
-      if (del) { collect(); rules.splice(parseInt(del.dataset.del, 10), 1); render(); }
+      if (del) { rules.splice(parseInt(del.dataset.del, 10), 1); render(); }
     });
     q("#add-rule").addEventListener("click", function () {
-      collect();
       var n = 1;
       while (rules.some(function (r) { return r.id === "r" + n; })) { n++; }
-      rules.push({ id: "r" + n, days: [1, 2, 3, 4, 5, 6, 7], start: "08:00", end: isPlug ? "09:00" : null, level: null, variables: null });
+      var s = Math.max(lo, 8 * 60);
+      rules.push({ id: "r" + n, days: [], start: fmt(s), end: isPlug ? fmt(Math.min(hi, s + 60)) : null, level: null, variables: null });
       render();
     });
     q("#preview").addEventListener("click", function () {
-      api("POST", "/v1/schedules/" + doc.id + "/preview", { rules: collect() }).then(function (r) {
+      var bad = check(); if (bad) { say(bad, "err"); return; }
+      api("POST", "/v1/schedules/" + doc.id + "/preview", { rules: rules }).then(function (r) {
         var box = q("#preview-box"), list = q("#preview-list");
         if (!r.ok) { say(problems(r.json && r.json.error), "err"); box.hidden = true; return; }
         if (!r.json.valid) { say(r.json.problems.map(function (p) { return (I.E[p.code] || "") + " " + p.message; }).join(" "), "err"); box.hidden = true; return; }
         say("");
-        list.innerHTML = "";
+        list.textContent = "";
         r.json.next_7_days.forEach(function (e) {
           var li = document.createElement("li");
-          li.textContent = e.at.slice(0, 10) + " " + hhmm(e.at) + " — " + e.action + " (" + e.rule + ")";
+          var day = I.S.dow[(new Date(e.at.slice(0, 10) + "T12:00:00Z").getUTCDay() + 6) % 7];
+          li.textContent = day + " " + e.at.slice(8, 10) + "." + e.at.slice(5, 7) + ", " + hhmm(e.at) + " — " + T("hh_a_" + e.action);
           list.appendChild(li);
         });
         box.hidden = false;
       });
     });
+    function saved(r) {
+      etag = r.headers.get("ETag") || etag;
+      rules = r.json.rules;
+      render();
+      say(T("hh_saved"), "");
+    }
     q("#save").addEventListener("click", function () {
-      api("PUT", "/v1/schedules/" + doc.id, { rules: collect() }, { "If-Match": etag }).then(function (r) {
+      var bad = check(); if (bad) { say(bad, "err"); return; }
+      api("PUT", "/v1/schedules/" + doc.id, { rules: rules }, { "If-Match": etag }).then(function (r) {
         if (!r.ok) { say(problems(r.json && r.json.error), "err"); return; }
-        etag = r.headers.get("ETag") || etag;
-        rules = r.json.rules;
-        render();
-        say(T("saved"), "");
+        saved(r);
       });
     });
     q("#undo").addEventListener("click", function () {
       api("POST", "/v1/schedules/" + doc.id + "/undo").then(function (r) {
         if (!r.ok) { say(problems(r.json && r.json.error), "err"); return; }
-        etag = r.headers.get("ETag") || etag;
-        rules = r.json.rules;
-        render();
-        say(T("saved"), "");
+        saved(r);
       });
     });
     render();

@@ -53,6 +53,14 @@ def main(outdir):
         with open(path, "w") as f:
             f.write(cookie)
         os.chmod(path, 0o600)
+    # an APP session of the admin (a phone token traded for a web session, as the app does): the admin-only entries must be absent in it
+    code, _c = e.people.create_enrolment_code(a, "webadmin")
+    dev = e.people.enrol(code, {"label": "scratch-phone"}, "1.1.1.1")
+    princ = e.people.phone_principal(dev["token"])
+    raw_app, _view = e.people.create_app_session(princ, "127.0.0.1")
+    with open(os.path.join(outdir, "session-app-admin.txt"), "w") as f:
+        f.write(raw_app)
+    os.chmod(os.path.join(outdir, "session-app-admin.txt"), 0o600)
     # the scratch AdGuard: the house lists, some activity of the child at .60, a bad list the proof can add by URL
     base = "https://l.example/base.txt"
     e.agh.add_list("AdGuard DNS filter", base, ["doubleclick.net", "ads.example.org", "tracker.example.org"])
@@ -85,8 +93,15 @@ def main(outdir):
     e._write_parity(time.time())
     e.o["filters"].replica_wait_s, e.o["filters"].parity_wait_s = 2.0, 2.0
     e.agh.auto_clients = [{"ip": "192.168.31.60", "name": "a-phone.lan", "source": "ARP"}, {"ip": "192.168.31.70", "name": "anna-phone.lan", "source": "ARP"}]
-    noon = dt.datetime.now(dt.timezone.utc).astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
-    e.sched.store.clock = lambda: noon.isoformat(timespec="seconds")
+    # a clock that starts at SCRATCH_AT (default 12:00 local) and then runs at normal speed: the service, the fake job and the gateway all read it, so sentences and read-backs agree
+    hh, mm = (os.environ.get("SCRATCH_AT") or "12:00").split(":")
+    start = dt.datetime.now(dt.timezone.utc).astimezone().replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    shift = start.timestamp() - time.time()
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/Prague")
+    e.now_fn = lambda: dt.datetime.fromtimestamp(time.time() + shift, tz)
+    e.sched.store.clock = lambda: e.now_fn().isoformat(timespec="seconds")
+    e.o["parental"].clock = lambda: time.time() + shift
     with open(os.path.join(outdir, "port.txt"), "w") as f:
         f.write(str(e.port))
     print("scratch gateway on 127.0.0.1:%d (sessions in %s)" % (e.port, outdir), flush=True)

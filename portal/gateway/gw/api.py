@@ -541,10 +541,12 @@ class App:
         if not isinstance(b, dict) or set(b) != {"rules"} or not isinstance(b["rules"], list):
             raise GwError(400, "bad_body", "an object with 'rules' (a list) is required")
         for r in b["rules"]:
+            if isinstance(r, dict) and isinstance(r.get("opens"), list) and "maps" in r["opens"]:
+                raise GwError(400, "maps_always_open", "Maps is always open: it has no window")
             if (not isinstance(r, dict) or set(r) != {"id", "days", "start", "end", "opens"} or not isinstance(r["id"], str) or not isinstance(r["days"], list)
                     or not isinstance(r["start"], str) or not isinstance(r["end"], str)
-                    or not isinstance(r["opens"], list) or not r["opens"] or any(o not in ("youtube", "roblox", "maps") for o in r["opens"])):
-                raise GwError(400, "bad_body", "every rule needs id, days, start, end and opens (youtube, roblox, maps)")
+                    or not isinstance(r["opens"], list) or not r["opens"] or any(o not in ("youtube", "roblox") for o in r["opens"])):
+                raise GwError(400, "bad_body", "every rule needs id, days, start, end and opens (youtube, roblox)")
         return b
 
     async def p_children(self, request):
@@ -611,10 +613,12 @@ class App:
         cid = request.path_params["id"]
         raw = await request.body()
         b = jload(raw)
-        if (set(b) - {"target", "minutes", "until_end_of_day"} or b.get("target") not in ("youtube", "roblox", "maps", "all")
+        if isinstance(b, dict) and b.get("target") == "maps":
+            raise GwError(400, "maps_always_open", "Maps is always open: no exception is needed")
+        if (set(b) - {"target", "minutes", "until_end_of_day"} or b.get("target") not in ("youtube", "roblox", "all")
                 or ("minutes" in b and (isinstance(b["minutes"], bool) or not isinstance(b["minutes"], int) or b["minutes"] < 1))
                 or ("until_end_of_day" in b and not isinstance(b["until_end_of_day"], bool))):
-            raise GwError(400, "bad_body", "target (youtube, roblox, maps, all) and minutes or until_end_of_day are required")
+            raise GwError(400, "bad_body", "target (youtube, roblox, all) and minutes or until_end_of_day are required")
 
         async def go():
             try:
@@ -728,6 +732,16 @@ class App:
             return 200, await dv.add(p, body)
         st, out = await self.idem(request, p, "par.cadd", go, body_bytes=raw)
         return JSONResponse(out, status_code=st)
+
+    async def p_child_patch(self, request):
+        p = self.authenticate(request)
+        raw = await request.body()
+        b = jload(raw)
+        if not isinstance(b, dict) or not b or set(b) - {"display_name", "icon"} or any(not isinstance(v, str) for v in b.values()):
+            raise GwError(400, "bad_body", "an object with display_name and/or icon (strings) is required")
+        out = await self._pm().child_display(p, request.path_params["id"], b)
+        self._paudit(p, "parental_child_display", request.path_params["id"], {"display_name": out["display_name"][:40], "icon": out["icon"]})
+        return JSONResponse(out)
 
     async def p_child_remove(self, request):
         p = self.authenticate(request)
@@ -920,6 +934,7 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/parental/removed-children", a.p_removed_list, methods=["GET"]),
         Route("/v1/parental/removed-children/{rid}/restore", a.p_removed_restore, methods=["POST"]),
         Route("/v1/parental/children/{id}", a.p_child, methods=["GET"]),
+        Route("/v1/parental/children/{id}", a.p_child_patch, methods=["PATCH"]),
         Route("/v1/parental/children/{id}", a.p_child_remove, methods=["DELETE"]),
         Route("/v1/parental/children/{id}/setup-checklist", a.p_checklist, methods=["GET"]),
         Route("/v1/parental/children/{id}/windows", a.p_windows_get, methods=["GET"]),

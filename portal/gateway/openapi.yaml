@@ -558,7 +558,7 @@ paths:
       operationId: listChildren
       summary: "The children's devices with their status. Parents only: a person who is not a parent gets 403"
       responses:
-        "200": {description: children, content: {application/json: {schema: {type: object, required: [children], properties: {children: {type: array, items: {$ref: "#/components/schemas/ChildSummary"}}}}}}}
+        "200": {description: children, content: {application/json: {schema: {type: object, required: [children], properties: {children: {type: array, items: {$ref: "#/components/schemas/ChildSummary"}}, always_open: {type: array, items: {type: string, enum: [telegram, weather, maps, android]}, description: "the kinds of services that are always open (read from the data)"}, now: {type: string, description: "server local time, for the tile sentences"}}}}}}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
@@ -597,6 +597,22 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: patchChild
+      summary: "Admin, web sign-in only (an app session gets 403 web_login_required). The name and icon a parent sees on the tile (display data only; the device name never changes). Empty display_name clears it"
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, minProperties: 1, properties: {display_name: {type: string, maxLength: 40}, icon: {type: string, enum: [phone, tablet, laptop, console, tv, other]}}}}}
+      responses:
+        "200": {description: saved, content: {application/json: {schema: {type: object, required: [id, display_name, icon], properties: {id: {type: string}, display_name: {type: string}, icon: {type: string}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
     delete:
       operationId: removeChildDevice
       summary: "Admin only. Removes a child device. Needs `confirm` = the exact device name. Removes the policy, waits for the host job (the IP is an ordinary client again), deletes the AdGuard client entry (the sync carries it to the replica), verifies that the other children did not move; the definition is kept 24 h for the undo. Result `removed` or `removal_incomplete` (steps say what is left)"
@@ -695,11 +711,11 @@ paths:
         "502": {$ref: "#/components/responses/Error"}
     post:
       operationId: grantChildException
-      summary: "Opens a target for a while (youtube, roblox, maps or all = no restrictions). minutes OR until_end_of_day. Guardrails: max length, latest end, the latest end of all. Replaces an earlier exception of the same target. Expires by itself (the host job drops it, also with the service down)"
+      summary: "Opens a target for a while (youtube, roblox or all = no restrictions; Maps is always open - 400 maps_always_open). minutes OR until_end_of_day. Guardrails: max length, latest end, the latest end of all. Replaces an earlier exception of the same target. Expires by itself (the host job drops it, also with the service down)"
       parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
       requestBody:
         required: true
-        content: {application/json: {schema: {type: object, required: [target], additionalProperties: false, properties: {target: {type: string, enum: [youtube, roblox, maps, all]}, minutes: {type: integer, minimum: 1}, until_end_of_day: {type: boolean}}}}}
+        content: {application/json: {schema: {type: object, required: [target], additionalProperties: false, properties: {target: {type: string, enum: [youtube, roblox, all]}, minutes: {type: integer, minimum: 1}, until_end_of_day: {type: boolean}}}}}
       responses:
         "201": {description: granted, content: {application/json: {schema: {$ref: "#/components/schemas/ChildException"}}}}
         "400": {$ref: "#/components/responses/Error"}
@@ -1102,7 +1118,7 @@ components:
       required: [id, target, created_at, expires_at, created_by, remaining_s]
       properties:
         id: {type: string}
-        target: {type: string, enum: [youtube, roblox, maps, all]}
+        target: {type: string, enum: [youtube, roblox, all]}
         created_at: {type: string}
         expires_at: {type: string}
         created_by: {type: string}
@@ -1112,7 +1128,7 @@ components:
       required: [state, open_services, open_until, opens_at, exceptions, policy_ok, dns_seen]
       properties:
         state: {type: string, enum: [open, closed, restricted], description: "open = YouTube and Roblox (or everything) open now; restricted = only one of them; closed = only the always-on baseline"}
-        open_services: {type: array, items: {type: string, enum: [youtube, roblox, maps, all]}}
+        open_services: {type: array, items: {type: string, enum: [youtube, roblox, all]}}
         open_until: {type: [string, "null"], description: "when the current open stretch ends (window end or exception end)"}
         opens_at: {type: [string, "null"], description: "when it next opens (window start), if closed"}
         exceptions: {type: array, items: {$ref: "#/components/schemas/ChildException"}}
@@ -1190,6 +1206,10 @@ components:
       properties:
         id: {type: string}
         name: {type: string}
+        display_name: {type: string, description: "what a parent sees on the tile; empty = use the device name (Task 31)"}
+        windows: {type: object, description: "the device windows in the list answer (rules, version, can_edit, the three guardrail numbers the editor needs)"}
+        eod: {type: object, description: "latest end of a normal and of an everything exception today (default 23:59)"}
+        can: {type: object}
         icon: {type: string}
         device_kind: {type: string, enum: [phone, tablet, other]}
         identity: {$ref: "#/components/schemas/ChildIdentity"}
@@ -1213,7 +1233,7 @@ components:
         days: {type: array, items: {type: integer, minimum: 1, maximum: 7}}
         start: {type: string}
         end: {type: string, description: "HH:MM, or 24:00 for the end of the day"}
-        opens: {type: array, items: {type: string, enum: [youtube, roblox, maps]}, minItems: 1}
+        opens: {type: array, items: {type: string, enum: [youtube, roblox]}, minItems: 1}
     ChildWindows:
       type: object
       required: [child, version, tz, rules, guardrails, can_edit]
@@ -1248,6 +1268,10 @@ components:
       properties:
         id: {type: string}
         name: {type: string}
+        display_name: {type: string}
+        eod: {type: object}
+        always_open: {type: array, items: {type: string, enum: [telegram, weather, maps, android]}}
+        now: {type: string}
         icon: {type: string}
         device_kind: {type: string, enum: [phone, tablet, other]}
         identity: {$ref: "#/components/schemas/ChildIdentity"}

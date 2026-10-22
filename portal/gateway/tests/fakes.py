@@ -204,12 +204,11 @@ class SchedHarness:
         self.store.seed(os.path.join(SCHED_SRC, "seed", "initial.json"), {"token": "-", "name": "seed", "role": "admin"})
         self.sys = {"token": "-", "name": "harness", "role": "admin"}
         from sched import child_invariants
-        rules = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}},
-                 {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]
+        rules = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
         self.store.import_child_policy(self.sys, {
             "devices": [{"id": "child_a", "name": "a-phone", "ip": "192.168.31.60", "mac": "20:36:d0:14:8d:5a", "rules": rules},
                         {"id": "child_b", "name": "b-tablet", "ip": "192.168.31.61", "mac": "4a:11:22:33:44:55", "rules": rules}],
-            "lists": {"allow_always": sorted(child_invariants.REQUIRED_ALWAYS), "allow_weekdays": ["maps.example.com"], "allow_extra": [], "deny_extra": []},
+            "lists": {"allow_always": sorted(child_invariants.REQUIRED_ALWAYS) + ["maps.google.com", "maps.googleapis.com", "maps.gstatic.com"], "allow_weekdays": [], "allow_extra": [], "deny_extra": []},
             "always_services": ["telegram"]})
         _i, self.admin_secret = self.store.create_token(self.sys, "gw-admin", "admin", gateway=True)
         _i, self.house_secret = self.store.create_token(self.sys, "gw-household", "household", gateway=True)
