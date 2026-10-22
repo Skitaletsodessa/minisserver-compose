@@ -8,12 +8,11 @@ from sched import child_render, model
 from tests.helpers import Env, SYSTEM
 
 MON_SAT = [1, 2, 3, 4, 5, 6]
-RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}},
-         {"id": "maps", "days": MON_SAT, "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]
+RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
 from sched.child_invariants import REQUIRED_ALWAYS  # noqa: E402
 PAYLOAD = {"devices": [{"id": "child_a", "name": "a-phone", "ip": "192.168.31.60", "mac": "20:36:D0:14:8D:5A", "rules": RULES},
                        {"id": "child_b", "name": "b-tablet", "ip": "192.168.31.61", "mac": "", "rules": RULES}],
-           "lists": {"allow_always": sorted(REQUIRED_ALWAYS) + ["example.org", "time.example.net"], "allow_weekdays": ["maps.example.com"], "allow_extra": [], "deny_extra": ["bad.example.org"]},
+           "lists": {"allow_always": sorted(REQUIRED_ALWAYS) + ["example.org", "time.example.net", "maps.example.com"], "allow_weekdays": ["weekday.example.com"], "allow_extra": [], "deny_extra": ["bad.example.org"]},
            "always_services": ["telegram"]}
 SD = {"telegram": ["t.me", "telegram.org"], "youtube": ["youtube.com", "ytimg.com"], "roblox": ["roblox.com"]}
 
@@ -90,7 +89,7 @@ class Import(unittest.TestCase):
         _n, p = model.validate_rules(plug, [{"id": "a", "days": [1], "start": "05:00", "end": "24:00"}])
         self.assertTrue(p)                                         # 24:00 is rejected for a plug
         child = {"id": "c", "kind": "child_window", "guardrails": {}}
-        self.assertEqual(model.validate_rules(child, RULES)[1], [])     # yt window inside the all-day maps window: different targets, no overlap
+        self.assertEqual(model.validate_rules(child, RULES)[1], [])     # one window: no overlap
         clash = RULES + [{"id": "yt2", "days": [1], "start": "18:00", "end": "20:00", "variables": {"opens": "youtube"}}]
         self.assertEqual([x["code"] for x in model.validate_rules(child, clash)[1]], ["overlap"])
 
@@ -122,8 +121,11 @@ class Render(unittest.TestCase):
         self.assertIn("roblox.com", self.allowed(at(0, 18, 59)))
         self.assertNotIn("youtube.com", self.allowed(at(0, 19, 0)))
         self.assertNotIn("youtube.com", self.allowed(at(6, 17, 0)))                  # Sunday: no window
-        self.assertIn("maps.example.com", self.allowed(at(5, 23, 59)))                # Saturday evening still Maps
-        self.assertNotIn("maps.example.com", self.allowed(at(6, 0, 0)))               # Sunday: Maps dropped
+        for day in range(7):                                                           # Maps is always open: every day, every hour, Sunday included
+            for h in (0, 8, 12, 23):
+                self.assertIn("maps.example.com", self.allowed(at(day, h)), (day, h))
+        self.assertIn("weekday.example.com", self.allowed(at(5, 23, 59)))             # the weekday mechanism still exists: Monday-Saturday ...
+        self.assertNotIn("weekday.example.com", self.allowed(at(6, 0, 0)))            # ... and not on Sunday
         self.assertIn("t.me", self.allowed(at(6, 12)))                                # Telegram every day
 
     def test_overrides_and_deny(self):
@@ -168,7 +170,7 @@ class AgainstTheRunningCode(unittest.TestCase):
             for day in range(7):
                 for minute in range(0, 1440, 30):
                     now = dt.datetime(2026, 10, 19 + day, minute // 60, minute % 60, tzinfo=model.TZ)
-                    for ov in ([], [{"client": clients[0][0], "target": "all"}], [{"client": clients[1][0], "target": "maps"}, {"client": clients[1][0], "target": "roblox"}]):
+                    for ov in ([], [{"client": clients[0][0], "target": "all"}], [{"client": clients[1][0], "target": "youtube"}, {"client": clients[1][0], "target": "roblox"}]):
                         self.assertEqual(cp.render_block(Stub(), clients, now, ov), child_render.render_block(pol, SD, now, ov), (now, ov))
                         n += 1
             self.assertGreater(n, 900)
@@ -192,7 +194,7 @@ class Devices(unittest.TestCase):
         self.assertEqual(r.status_code, 201, r.text)
         d = r.json()
         self.assertEqual((d["id"], d["name"], d["ip"], d["mac"]), ("child_anna_s_phone", "Anna's phone", "192.168.31.70", "aa:bb:cc:00:11:22"))
-        self.assertEqual(sorted(x["id"] for x in d["rules"]), ["maps", "yt_roblox"])
+        self.assertEqual(sorted(x["id"] for x in d["rules"]), ["yt_roblox"])
         self.assertFalse(d["flags"]["guardrails_proposed"])
         snap = self.e.req("GET", "/v1/child/snapshot").json()
         self.assertIn("192.168.31.70", [x["ip"] for x in snap["devices"]])
@@ -244,7 +246,7 @@ class Devices(unittest.TestCase):
         rows = self.e.req("GET", "/v1/audit?limit=5").json()["audit"]
         rm = next(r for r in rows if r["action"] == "child_device_remove")
         self.assertEqual(rm["before"]["domains"]["allow"], ["school.example.org"])                               # what is needed to re-create it by hand
-        self.assertEqual(rm["before"]["rules"][0]["id"] in ("maps", "yt_roblox"), True)
+        self.assertEqual(rm["before"]["rules"][0]["id"], "yt_roblox")
         r = self.e.req("DELETE", "/v1/child/child_a")
         self.assertEqual((r.status_code, r.json()["error"]["code"]), (422, "validation_failed"))                 # the last device
         self.assertIn("last child device", json.dumps(r.json()))
@@ -261,7 +263,7 @@ class Devices(unittest.TestCase):
         self.assertEqual(self.add({"name": "Влад", "ip": "192.168.31.91", "icon": "fridge"}).status_code, 422)
         self.assertEqual(self.add({"name": "Влад", "ip": "192.168.31.91", "like": "child_a", "closed": True}).status_code, 422)     # a template XOR closed
         c = self.add({"name": "Copy", "label": "phone", "ip": "192.168.31.92", "like": "child_a"}).json()
-        self.assertEqual(sorted(x["id"] for x in c["rules"]), ["maps", "yt_roblox"])
+        self.assertEqual(sorted(x["id"] for x in c["rules"]), ["yt_roblox"])
 
     def test_copy_also_copies_the_per_child_lists(self):
         self.e.req("POST", "/v1/child/child_a/domains", json={"kind": "allow", "domain": "school.example.org"})

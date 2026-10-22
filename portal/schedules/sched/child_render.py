@@ -5,8 +5,9 @@ Model (what the import stores):
   devices   : [{"id", "ip", "name", "mac", "rules": [{"id","days","start","end","variables":{"opens": "youtube,roblox"}}]}]
   lists     : {"allow_always": [...], "allow_weekdays": [...], "allow_extra": [...], "deny_extra": [...]}
   always_services : ["telegram"]            (domains come from AdGuard's own service catalogue at render time)
-  overrides : [{"client": ip, "target": "youtube"|"roblox"|"maps"|"all"}]   (runtime exceptions, supplied by the caller)
-A rule opens its `opens` targets while now (local) is inside its day/time window; 'maps' is the Monday-Saturday allow list.
+  overrides : [{"client": ip, "target": "youtube"|"roblox"|"all"}]   (runtime exceptions, supplied by the caller)
+A rule opens its `opens` targets while now (local) is inside its day/time window. Maps is not a target any more (Task 31, 2026-10-22): its domains sit in allow_always.
+`allow_weekdays` is kept as a mechanism - domains allowed Monday-Saturday, dropped on Sunday, no window or exception needed - and is EMPTY.
 """
 import re
 
@@ -24,7 +25,7 @@ def _minutes(s):
 
 
 def open_targets(rules, now):
-    """Set of targets (youtube/roblox/maps) opened by the device's rules at the local time `now`."""
+    """Set of targets (youtube/roblox) opened by the device's rules at the local time `now`."""
     iso, t = now.isoweekday(), now.hour * 60 + now.minute
     out = set()
     for r in rules:
@@ -39,7 +40,7 @@ def render_block(policy, service_domains, now, overrides=()):
     base = set(lists["allow_always"])
     for svc in policy["always_services"]:
         base |= set(service_domains[svc])
-    maps = set(lists["allow_weekdays"])
+    weekdays = set(lists["allow_weekdays"])
     gated = {t: set(service_domains[t]) for t in GATED}
     extra_allow_global = set(lists.get("allow_extra") or [])
     deny_global = set(lists.get("deny_extra") or [])
@@ -55,8 +56,8 @@ def render_block(policy, service_domains, now, overrides=()):
             continue
         opened = open_targets(dev["rules"], now)
         allowed = set(base) | extra_allow
-        if "maps" in opened or "maps" in targets:
-            allowed |= maps
+        if now.isoweekday() != 7:
+            allowed |= weekdays
         for t in GATED:
             if t in opened or t in targets:
                 allowed |= gated[t]

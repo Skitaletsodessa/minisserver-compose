@@ -39,11 +39,10 @@ spec.loader.exec_module(cc)
 
 TZ = model.TZ
 SYSTEM = {"token": "-", "name": "test", "role": "admin"}
-RULES = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}},
-         {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]
+RULES = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
 SD = {"blocked_services": [{"id": "telegram", "rules": ["||t.me^", "||telegram.org^"]}, {"id": "youtube", "rules": ["||youtube.com^", "||ytimg.com^"]},
                            {"id": "roblox", "rules": ["||roblox.com^"]}]}
-ALLOW_ALWAYS = sorted(child_invariants.REQUIRED_ALWAYS) + ["extra-always.example.org"]
+ALLOW_ALWAYS = sorted(child_invariants.REQUIRED_ALWAYS) + ["extra-always.example.org", "maps.example.com"]
 
 
 class FakeAgh:
@@ -96,12 +95,12 @@ class Base(unittest.TestCase):
         self.store.seed(os.path.join(PORTAL, "seed", "initial.json"), SYSTEM)
         self.store.import_child_policy(SYSTEM, {"devices": [{"id": "child_a", "name": "a-phone", "ip": "192.168.31.60", "mac": "20:36:d0:14:8d:5a", "rules": RULES},
                                                             {"id": "child_b", "name": "b-tablet", "ip": "192.168.31.61", "mac": "", "rules": RULES}],
-                                               "lists": {"allow_always": ALLOW_ALWAYS, "allow_weekdays": ["maps.example.com"], "allow_extra": [], "deny_extra": []},
+                                               "lists": {"allow_always": ALLOW_ALWAYS, "allow_weekdays": ["weekday.example.com"], "allow_extra": [], "deny_extra": []},
                                                "always_services": ["telegram"]})
         self.store.publish()
         shutil.copyfile(os.path.join(self.store.out, "child-policy.json"), os.environ["CHILD_SNAPSHOT"])
         pol = os.path.join(TMP, "policy")
-        for name, lines in (("allow-always.txt", ALLOW_ALWAYS), ("allow-weekdays.txt", ["maps.example.com"]), ("allow-extra.txt", []), ("deny-extra.txt", []),
+        for name, lines in (("allow-always.txt", ALLOW_ALWAYS), ("allow-weekdays.txt", ["weekday.example.com"]), ("allow-extra.txt", []), ("deny-extra.txt", []),
                             ("clients.conf", ["192.168.31.60 a-phone 20:36:d0:14:8d:5a", "192.168.31.61 b-tablet"]), ("source.conf", ["files"])):
             open(os.path.join(pol, name), "w").write("\n".join(lines) + "\n")
         childpolicy.POLICY = type(childpolicy.POLICY)(pol)

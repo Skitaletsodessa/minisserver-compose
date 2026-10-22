@@ -340,11 +340,11 @@ paths:
   /v1/child/{id}/exceptions:
     post:
       operationId: addChildException
-      summary: "A time-boxed exception: target youtube|roblox|maps|all, minutes XOR until_end_of_day. By default NO cap and NO ceiling (today's behaviour: a minute up to the end of the day, 23:59, everything included; crossing midnight is refused); the optional guardrails max_exception_minutes, exception_latest_end, all_latest_end apply only when an admin sets them (rejected with reasons, never clamped). Replaces an active exception of the same target"
+      summary: "A time-boxed exception: target youtube|roblox|all (Maps is always open, no exception: 422 maps_always_open), minutes XOR until_end_of_day. By default NO cap and NO ceiling (today's behaviour: a minute up to the end of the day, 23:59, everything included; crossing midnight is refused); the optional guardrails max_exception_minutes, exception_latest_end, all_latest_end apply only when an admin sets them (rejected with reasons, never clamped). Replaces an active exception of the same target"
       parameters: [{$ref: "#/components/parameters/EntityId"}]
       requestBody:
         required: true
-        content: {application/json: {schema: {type: object, required: [target], additionalProperties: false, properties: {target: {type: string, enum: [youtube, roblox, maps, all]}, minutes: {type: integer, minimum: 1}, until_end_of_day: {type: boolean}}}}}
+        content: {application/json: {schema: {type: object, required: [target], additionalProperties: false, properties: {target: {type: string, enum: [youtube, roblox, all]}, minutes: {type: integer, minimum: 1}, until_end_of_day: {type: boolean}}}}}
       responses:
         "201": {description: granted, content: {application/json: {schema: {$ref: "#/components/schemas/ChildExceptionRec"}}}}
         "400": {$ref: "#/components/responses/Error"}
@@ -677,7 +677,7 @@ components:
       properties:
         id: {type: string}
         entity: {type: string}
-        target: {type: string, enum: [youtube, roblox, maps, all]}
+        target: {type: string, enum: [youtube, roblox, all]}
         created_at: {type: string}
         expires_at: {type: string}
         expires_ts: {type: integer}

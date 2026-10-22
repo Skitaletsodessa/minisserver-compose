@@ -23,9 +23,11 @@ RULE_KEYS = {"id", "days", "start", "end", "level", "variables"}
 GUARDRAIL_KEYS = ("max_on_minutes", "max_level", "min_gap_minutes", "allowed_from", "allowed_to", "max_triggers_per_day",
                   "max_open_minutes_per_day", "max_exception_minutes", "exception_latest_end", "all_latest_end")      # the last four: child policy (Task 29)
 FLAG_KEYS = ("household_editable", "guardrails_proposed")
-CHILD_TARGETS = ("youtube", "roblox", "maps")      # what a child-policy window opens (the policy job's GATED services + the weekday Maps list)
+CHILD_TARGETS = ("youtube", "roblox")                # what a child-policy window / exception opens: the policy job's GATED services (Maps left this set 2026-10-22, Task 31: it is always open)
+LEGACY_TARGETS = ("maps",)                           # no longer accepted anywhere; a clear 400 for an old client, removed from stored data by migrate_maps_always_open
 GATED_TARGETS = ("youtube", "roblox")                # the services a window/exception opens that the guardrails bound
 EXCEPTION_TARGETS = CHILD_TARGETS + ("all",)         # "all" = lift the catch-all for the device
+MAPS_ALWAYS_OPEN_MESSAGE = "Maps is always open (it is on the house-wide always-open list): it has no window and no exception, nothing to set"
 MAX_RULES = 12
 DST_FORBIDDEN = range(2 * 60, 4 * 60)          # 02:00 .. 03:59
 WEEK = 7 * 1440
@@ -187,6 +189,9 @@ def validate_rules(entity, rules):
             if kind == "child_window":
                 opens = (r.get("variables") or {}).get("opens")
                 targets = opens.split(",") if isinstance(opens, str) else []
+                if any(t in LEGACY_TARGETS for t in targets):
+                    probs.append(problem("maps_always_open", fld + ".variables", MAPS_ALWAYS_OPEN_MESSAGE))
+                    continue
                 if not targets or any(t not in CHILD_TARGETS for t in targets):
                     probs.append(problem("variables", fld + ".variables", "a child window needs variables.opens: a comma list of %s" % ", ".join(CHILD_TARGETS)))
                     continue
@@ -266,7 +271,7 @@ def validate_rules(entity, rules):
         if worst > g["max_triggers_per_day"]:
             probs.append(problem("max_triggers", "rules", "%d triggers on one day, the guardrail max_triggers_per_day is %d" % (worst, g["max_triggers_per_day"])))
     if kind == "child_window" and any(k in g for k in ("allowed_from", "allowed_to", "max_open_minutes_per_day")):
-        # Task 29: what the windows may open. Only the gated services (YouTube, Roblox) are bounded; the Maps weekday list is not an "open window" in this sense.
+        # Task 29: what the windows may open. Only the gated services (YouTube, Roblox) are bounded.
         lo = parse_hhmm(g["allowed_from"]) if "allowed_from" in g else 0
         hi = parse_hhmm(g["allowed_to"]) if "allowed_to" in g else 1440
         per_day = {}
@@ -502,6 +507,8 @@ def validate_child_exception(entity, target, minutes, until_eod, now):
     crosses midnight."""
     probs = []
     g = entity.get("guardrails", {})
+    if target in LEGACY_TARGETS:
+        return None, [problem("maps_always_open", "target", MAPS_ALWAYS_OPEN_MESSAGE)]
     if target not in EXCEPTION_TARGETS:
         return None, [problem("target", "target", "target must be one of %s" % ", ".join(EXCEPTION_TARGETS))]
     if until_eod and minutes is not None:

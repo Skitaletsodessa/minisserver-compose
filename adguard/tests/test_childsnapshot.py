@@ -32,8 +32,7 @@ from sched import store as storemod, model, child_invariants  # noqa: E402
 
 TZ = model.TZ
 MON_SAT = [1, 2, 3, 4, 5, 6]
-RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}},
-         {"id": "maps", "days": MON_SAT, "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]
+RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
 SYSTEM = {"token": "-", "name": "test", "role": "admin"}
 SD_CATALOGUE = {"blocked_services": [{"id": "telegram", "rules": ["||t.me^", "||telegram.org^"]}, {"id": "youtube", "rules": ["||youtube.com^", "||ytimg.com^"]},
                                        {"id": "roblox", "rules": ["||roblox.com^"]}]}
@@ -42,7 +41,7 @@ SD_CATALOGUE = {"blocked_services": [{"id": "telegram", "rules": ["||t.me^", "||
 def payload():
     return {"devices": [{"id": "child_a", "name": "a-phone", "ip": "192.168.31.60", "mac": "20:36:d0:14:8d:5a", "rules": RULES},
                         {"id": "child_b", "name": "b-tablet", "ip": "192.168.31.61", "mac": "", "rules": RULES}],
-            "lists": {"allow_always": sorted(child_invariants.REQUIRED_ALWAYS) + ["extra-always.example.org"], "allow_weekdays": ["maps.example.com"],
+            "lists": {"allow_always": sorted(child_invariants.REQUIRED_ALWAYS) + ["extra-always.example.org", "maps.example.com"], "allow_weekdays": ["weekday.example.com"],
                       "allow_extra": [], "deny_extra": []}, "always_services": ["telegram"]}
 
 
@@ -138,9 +137,10 @@ class SnapshotMode(Base):
         for h, m, want in ((15, 59, False), (16, 0, True), (18, 59, True), (19, 0, False)):
             childpolicy.run(self.at(0, h, m))
             self.assertEqual("youtube.com" in self.allowed("192.168.31.60"), want, "%02d:%02d" % (h, m))
-        childpolicy.run(self.at(6, 17))                                              # Sunday: no window, Maps dropped
+        childpolicy.run(self.at(6, 17))                                              # Sunday: no window; Maps stays (always open), the weekday list is dropped
         self.assertNotIn("youtube.com", self.allowed("192.168.31.60"))
-        self.assertNotIn("maps.example.com", self.allowed("192.168.31.60"))
+        self.assertIn("maps.example.com", self.allowed("192.168.31.60"))
+        self.assertNotIn("weekday.example.com", self.allowed("192.168.31.60"))
         self.assertEqual(self.status()["source"], "snapshot")
 
     def test_the_block_equals_the_services_own_renderer_exactly(self):
@@ -244,7 +244,7 @@ class Shadow(Base):
         shadow = os.path.join(TMP, "files-policy")
         os.makedirs(shadow)
         for name in ("allow-always.txt", "allow-weekdays.txt", "allow-extra.txt", "deny-extra.txt"):
-            open(os.path.join(shadow, name), "w").write("\n".join({"allow-always.txt": payload()["lists"]["allow_always"], "allow-weekdays.txt": ["maps.example.com"]}.get(name, [])) + "\n")
+            open(os.path.join(shadow, name), "w").write("\n".join({"allow-always.txt": payload()["lists"]["allow_always"], "allow-weekdays.txt": ["weekday.example.com"]}.get(name, [])) + "\n")
         open(os.path.join(shadow, "clients.conf"), "w").write("192.168.31.60 a-phone 20:36:d0:14:8d:5a\n192.168.31.61 b-tablet\n")
         childpolicy.POLICY = type(childpolicy.POLICY)(shadow)
         try:

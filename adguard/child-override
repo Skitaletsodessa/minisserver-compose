@@ -2,8 +2,8 @@
 """Temporary exceptions to the children's DNS policy.
 
   child-override list
-  child-override open <youtube|roblox|maps|all> <30m|2h|eod> [--client 192.168.31.60]
-  child-override close [youtube|roblox|maps|all] [--client 192.168.31.60]
+  child-override open <youtube|roblox|all> <30m|2h|eod> [--client 192.168.31.60]
+  child-override close [youtube|roblox|all] [--client 192.168.31.60]
 
 `eod` = until the latest permitted end of that target today (the device's guardrail: 22:00, 21:00 for `all`).
 
@@ -29,7 +29,7 @@ import overrides  # noqa: E402
 
 SERVICE = os.environ.get("SCHEDCTL_URL", "http://127.0.0.1:16444")
 TOKEN_FILE = os.environ.get("SCHEDCTL_TOKEN_FILE", os.path.expanduser("~/.config/schedctl/token"))
-TARGETS = ("youtube", "roblox", "maps", "all")
+TARGETS = ("youtube", "roblox", "all")        # Maps is always open since 2026-10-22 (Task 31): no exception target
 
 
 def parse_duration(s):

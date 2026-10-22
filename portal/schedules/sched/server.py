@@ -13,6 +13,12 @@ def main():
     if HOST not in ("127.0.0.1", "::1"):
         sys.exit("refusing to bind %r: the schedule service listens on loopback only (Caddy publishes it on the tailnet)" % HOST)
     st = store.Store(DATA)
+    try:                                           # Task 31: Maps moved to the always-open set; idempotent, audited, a no-op once done
+        done = st.migrate_maps_always_open()
+        if done:
+            print("maps-always-open migration applied: %s" % done, flush=True)
+    except Exception as ex:                        # the service still starts; /v1/health shows the unpublished snapshot
+        print("maps-always-open migration FAILED: %s: %s" % (type(ex).__name__, ex), file=sys.stderr, flush=True)
     seed = os.environ.get("PORTAL_SEED", "/app/seed/initial.json")
     if not st.entities() and os.path.exists(seed):
         st.seed(seed, {"token": "-", "name": "seed", "role": "admin"})

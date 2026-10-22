@@ -50,9 +50,9 @@ def main():
     ok = sorted(c[0] for c in clients) == sorted(d[0] for d in ips_portal)
     print("service domains: telegram %d, youtube %d, roblox %d" % tuple(len(sd[k]) for k in ("telegram", "youtube", "roblox")))
     ip0 = clients[0][0]
-    combos = [[], [{"client": ip0, "target": "youtube"}], [{"client": ip0, "target": "roblox"}], [{"client": ip0, "target": "maps"}],
+    combos = [[], [{"client": ip0, "target": "youtube"}], [{"client": ip0, "target": "roblox"}], [{"client": ip0, "target": "youtube"}, {"client": ip0, "target": "roblox"}],
               [{"client": ip0, "target": "all"}], [{"client": c[0], "target": "all"} for c in clients],
-              [{"client": clients[-1][0], "target": "youtube"}, {"client": clients[-1][0], "target": "maps"}]]
+              [{"client": clients[-1][0], "target": "youtube"}, {"client": clients[-1][0], "target": "roblox"}]]
     monday = dt.date(2026, 10, 19)
     checked = bad = 0
     for dayoff in range(7):

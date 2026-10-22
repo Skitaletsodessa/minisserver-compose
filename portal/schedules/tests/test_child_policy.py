@@ -11,11 +11,10 @@ from sched.child_invariants import REQUIRED_ALWAYS
 from tests.helpers import Env, SYSTEM
 
 MON_SAT = [1, 2, 3, 4, 5, 6]
-RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}},
-         {"id": "maps", "days": MON_SAT, "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]
+RULES = [{"id": "yt_roblox", "days": MON_SAT, "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
 PAYLOAD = {"devices": [{"id": "child_a", "name": "a-phone", "ip": "192.168.31.60", "mac": "20:36:d0:14:8d:5a", "rules": RULES},
                        {"id": "child_b", "name": "b-tablet", "ip": "192.168.31.61", "mac": "", "rules": RULES}],
-           "lists": {"allow_always": sorted(REQUIRED_ALWAYS), "allow_weekdays": ["maps.example.com"], "allow_extra": [], "deny_extra": []},
+           "lists": {"allow_always": sorted(REQUIRED_ALWAYS) + ["maps.example.com"], "allow_weekdays": ["weekday.example.com"], "allow_extra": [], "deny_extra": []},
            "always_services": ["telegram"]}
 TZ = model.TZ
 
@@ -68,7 +67,7 @@ class ImportAndSnapshot(Base):
         self.e.store.publish()
         self.assertEqual(snap_file(self.e)["checksum"], before)
         g = self.req("GET", "/v1/schedules/child_a")
-        self.req("PUT", "/v1/schedules/child_a", headers={"If-Match": g.headers["ETag"]}, json={"rules": RULES[:1]})
+        self.req("PUT", "/v1/schedules/child_a", headers={"If-Match": g.headers["ETag"]}, json={"rules": [{**RULES[0], "start": "15:00"}]})
         self.assertNotEqual(snap_file(self.e)["checksum"], before)
 
     def test_import_dry_run_reports_and_stores_nothing(self):
@@ -125,7 +124,7 @@ class Windows(Base):
         return self.req("PUT", "/v1/schedules/" + cid, role=role, headers={"If-Match": g.headers["ETag"]}, json={"rules": rules})
 
     def yt(self, start, end, days=MON_SAT, opens="youtube,roblox", rid="yt_roblox"):
-        return [{"id": rid, "days": days, "start": start, "end": end, "variables": {"opens": opens}}, RULES[1]]
+        return [{"id": rid, "days": days, "start": start, "end": end, "variables": {"opens": opens}}]
 
     def test_a_parent_may_edit_within_the_guardrails(self):
         r = self.put(self.yt("15:00", "18:00"))
@@ -140,12 +139,15 @@ class Windows(Base):
         r = self.put(self.yt("14:00", "19:30"))                                    # 330 min > 240
         self.assertEqual(r.json()["error"]["problems"][0]["code"], "max_open")
         two = self.yt("09:00", "12:00") + [{"id": "evening", "days": MON_SAT, "start": "15:00", "end": "17:00", "variables": {"opens": "roblox"}}]
-        two = [two[0], two[2], RULES[1]]
         self.assertEqual(self.put(two).json()["error"]["problems"][0]["code"], "max_open")      # 180 + 120 > 240 on the same day
         self.assertEqual([r["start"] for r in self.req("GET", "/v1/schedules/child_a").json()["rules"] if r["id"] == "yt_roblox"], ["16:00"])   # nothing changed
 
-    def test_maps_windows_are_not_bounded_by_the_open_window_guardrails(self):
-        self.assertEqual(self.put([RULES[0], {**RULES[1], "days": [1, 2, 3, 4, 5, 6, 7]}]).status_code, 200)
+    def test_maps_has_no_window_any_more_a_clear_refusal_not_a_silent_accept(self):
+        r = self.put([RULES[0], {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}])
+        self.assertEqual((r.status_code, r.json()["error"]["problems"][0]["code"]), (422, "maps_always_open"))
+        r = self.put(self.yt("16:00", "18:00", opens="youtube,maps"))                             # a combined target is refused as well
+        self.assertEqual((r.status_code, r.json()["error"]["problems"][0]["code"]), (422, "maps_always_open"))
+        self.assertEqual(self.put(self.yt("16:00", "18:00", days=[1, 2, 3, 4, 5, 6, 7])).status_code, 200)
 
     def test_roles(self):
         self.assertEqual(self.put(self.yt("15:00", "18:00"), role="readonly").status_code, 403)
@@ -195,8 +197,10 @@ class Exceptions(Base):
         self.assertEqual(self.req("GET", "/v1/child/child_a").json()["exceptions"][0]["id"], x["id"])
         y = self.grant("youtube", minutes=60).json()                                    # replaces
         self.assertEqual([e["id"] for e in self.req("GET", "/v1/child/child_a").json()["exceptions"]], [y["id"]])
-        z = self.grant("maps", minutes=30).json()
+        z = self.grant("roblox", minutes=30).json()
         self.assertEqual(len(self.req("GET", "/v1/child/child_a").json()["exceptions"]), 2)
+        m = self.grant("maps", minutes=30)
+        self.assertEqual((m.status_code, m.json()["error"]["problems"][0]["code"]), (422, "maps_always_open"))
         self.assertEqual(self.req("DELETE", "/v1/child/child_a/exceptions/%s" % y["id"], role="household").status_code, 204)
         self.assertEqual([e["id"] for e in self.req("GET", "/v1/child/child_a").json()["exceptions"]], [z["id"]])
         self.assertEqual(self.req("DELETE", "/v1/child/child_a/exceptions/%s" % y["id"], role="household").status_code, 404)
@@ -208,7 +212,7 @@ class Exceptions(Base):
         self.assertEqual(self.grant("roblox", minutes=600).status_code, 201)                      # 10 h: ends 22:00, no 360 cap, no 22:00 ceiling
         r = self.grant("all", until_end_of_day=True)
         self.assertEqual((r.status_code, r.json()["expires_at"][:19]), (201, "2026-10-19T23:59:00"))
-        r = self.grant("maps", minutes=700)                                                       # would end 23:40... 12:00 + 11 h 40 = 23:40: fine
+        r = self.grant("youtube", minutes=700)                                                    # 12:00 + 11 h 40 = 23:40: fine
         self.assertEqual(r.status_code, 201)
         r = self.grant("youtube", minutes=720)                                                    # 24:00 = next day
         self.assertEqual(r.json()["error"]["problems"][0]["code"], "midnight")
@@ -258,7 +262,7 @@ class Exceptions(Base):
 
     def test_status_follows_windows_and_exceptions(self):
         st = self.req("GET", "/v1/child/child_a").json()["status"]
-        self.assertEqual((st["state"], st["open_services"], st["opens_at"][11:16]), ("closed", ["maps"], "16:00"))
+        self.assertEqual((st["state"], st["open_services"], st["opens_at"][11:16]), ("closed", [], "16:00"))
         self.set_clock(17, 0)
         st = self.req("GET", "/v1/child/child_a").json()["status"]
         self.assertEqual((st["state"], st["open_until"][11:16]), ("open", "19:00"))

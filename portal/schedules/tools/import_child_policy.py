@@ -25,10 +25,9 @@ def slug(name):
 def build_payload():
     import childpolicy as cp
     start, end = cp.WINDOW
-    rules = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "%02d:00" % start, "end": "%02d:00" % end, "variables": {"opens": ",".join(cp.GATED)}},
-             {"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}}]   # Sunday: Maps dropped
+    rules = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "%02d:00" % start, "end": "%02d:00" % end, "variables": {"opens": ",".join(cp.GATED)}}]   # Task 31: Maps has no window (always open)
     devices = [{"id": slug(name), "name": name, "ip": ip, "mac": mac, "rules": rules} for ip, name, mac in cp.load_clients()]
-    lists = {"allow_always": cp.read_list("allow-always.txt"), "allow_weekdays": cp.read_list("allow-weekdays.txt"),
+    lists = {"allow_always": sorted(set(cp.read_list("allow-always.txt")) | set(cp.read_list("allow-weekdays.txt"))), "allow_weekdays": [],   # Task 31: the Maps domains are always open
              "allow_extra": cp.extra_list("allow"), "deny_extra": cp.extra_list("deny")}
     import overrides
     exceptions = [{"client": e["client"], "target": e["target"], "expires": e["expires"]} for e in overrides.active()]

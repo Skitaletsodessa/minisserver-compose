@@ -369,6 +369,107 @@ class ChildMixin:
         self.publish()
         return summary
 
+    # ── Task 31 (Ivan, 2026-10-22): Maps moved to the always-open set - one audited data migration, run when the service starts ────────────────────────────
+    MAPS_DOMAINS = ("maps.google.com", "maps.googleapis.com", "maps.gstatic.com")
+    MAPS_ACTION = "child_maps_always_open"
+    MAPS_ROLLBACK_ACTION = "child_maps_always_open_rollback"
+    SYSTEM_ACTOR = {"token": "-", "name": "migration", "role": "admin"}
+
+    def _maps_state(self):
+        stored = self.child_house_lists()
+        rules = {}
+        for e in self.child_devices():
+            rs = self.schedule(e["id"])["rules"]
+            if any("maps" in r["variables"]["opens"].split(",") for r in rs):
+                rules[e["id"]] = rs
+        exs = [x for x in self.child_exceptions(active_only=False) if x["target"] == "maps" and x["status"] == "active"]
+        return stored, rules, exs
+
+    def maps_migration_pending(self):
+        """True while the data still carries the old Maps arrangement (a `maps` rule or exception, domains in allow_weekdays) or lacks the Maps domains in allow_always."""
+        with self.lock:
+            if not self.db.execute("SELECT 1 FROM meta WHERE key='child_lists'").fetchone():
+                return False                                                            # no child policy imported yet: nothing to migrate
+            stored, rules, exs = self._maps_state()
+        lists = stored["lists"]
+        return bool(rules or exs or lists.get("allow_weekdays") or not set(self.MAPS_DOMAINS) <= set(lists.get("allow_always") or []))
+
+    def migrate_maps_always_open(self, actor=None):
+        """The one-time, idempotent data migration. Removes the `maps` target from every window (a rule that opened only Maps is deleted), cancels active `maps`
+        exceptions (they are no-ops now), moves the `allow_weekdays` domains and the three Maps domains into `allow_always`, leaves `allow_weekdays` EMPTY. One
+        audit row holds the complete before-state (the rollback reads it). Returns the summary, or None when there was nothing to do."""
+        s = _s()
+        actor = actor or self.SYSTEM_ACTOR
+        with self._tx():
+            if not self.db.execute("SELECT 1 FROM meta WHERE key='child_lists'").fetchone():
+                return None
+            stored, with_maps, exs = self._maps_state()
+            lists = dict(stored["lists"])
+            always, weekdays = set(lists.get("allow_always") or []), set(lists.get("allow_weekdays") or [])
+            want = always | weekdays | set(self.MAPS_DOMAINS)
+            if not with_maps and not exs and not weekdays and want == always:
+                return None
+            now = self._now().isoformat(timespec="seconds")
+            before = {"allow_always": sorted(always), "allow_weekdays": sorted(weekdays), "rules": {eid: rs for eid, rs in with_maps.items()},
+                      "versions": {eid: self.schedule(eid)["version"] for eid in with_maps},
+                      "exceptions": [{"id": x["id"], "entity": x["entity"], "target": x["target"], "created_at": x["created_at"], "expires_at": x["expires_at"]} for x in exs]}
+            new_rules_by = {}
+            for eid, rs in with_maps.items():
+                new = []
+                for r in rs:
+                    opens = r["variables"]["opens"].split(",")
+                    kept = [t for t in opens if t != "maps"]
+                    if kept == opens:
+                        new.append(r)
+                    elif kept:
+                        new.append({**r, "variables": {**r["variables"], "opens": ",".join(kept)}})
+                ent = self.entity(eid)
+                good, probs = model.validate_rules(ent, new)
+                if probs:
+                    raise model.ValidationError(probs)
+                ver = self.schedule(eid)["version"] + 1
+                self.db.execute("UPDATE schedules SET version=?, rules=?, updated_at=? WHERE entity_id=?", (ver, s.canon(good), self.clock(), eid))
+                new_rules_by[eid] = good
+            for x in exs:
+                self.db.execute("UPDATE child_exceptions SET status='cancelled', ended_at=? WHERE id=?", (now, x["id"]))
+            lists["allow_always"], lists["allow_weekdays"] = sorted(want), []
+            self.db.execute("UPDATE meta SET value=? WHERE key='child_lists'", (s.canon({"lists": lists, "always_services": stored["always_services"]}),))
+            after = {"allow_always": sorted(want), "allow_weekdays": [], "rules": new_rules_by, "exceptions_cancelled": [x["id"] for x in exs],
+                     "maps_domains": list(self.MAPS_DOMAINS)}
+            seq = self._audit(actor, self.MAPS_ACTION, None, before, after)
+        self._mirror_audit(seq)
+        self.publish()
+        return {"rules_changed": sorted(with_maps), "exceptions_cancelled": len(exs), "moved_from_weekdays": sorted(weekdays), "allow_always_added": sorted(want - always), "audit_seq": seq}
+
+    def rollback_maps_always_open(self, actor=None):
+        """Restores the data to the state before the LAST migration (rules and their versions' content, the lists, still-active `maps` exceptions) as a new audited change.
+        It does NOT publish: this code refuses a `maps` rule, so the data is meant to be read by the PREVIOUS code (deploy the old image, then start it - it publishes).
+        Used by the live-apply script's auto-revert and by the rehearsal. Returns None when no migration is on record."""
+        s = _s()
+        actor = actor or self.SYSTEM_ACTOR
+        with self._tx():
+            row = next((r for r in self.audit(limit=500) if r["action"] == self.MAPS_ACTION), None)
+            if not row:
+                return None
+            b = row["before"]
+            now = self._now()
+            for eid, rs in b["rules"].items():
+                ver = self.schedule(eid)["version"] + 1
+                self.db.execute("UPDATE schedules SET version=?, rules=?, updated_at=? WHERE entity_id=?", (ver, s.canon(rs), self.clock(), eid))
+            stored = self.child_house_lists()
+            lists = dict(stored["lists"])
+            lists["allow_always"], lists["allow_weekdays"] = sorted(b["allow_always"]), sorted(b["allow_weekdays"])
+            self.db.execute("UPDATE meta SET value=? WHERE key='child_lists'", (s.canon({"lists": lists, "always_services": stored["always_services"]}),))
+            revived = 0
+            for x in b["exceptions"]:
+                if dt.datetime.fromisoformat(x["expires_at"]) > now:
+                    self.db.execute("UPDATE child_exceptions SET status='active', ended_at=NULL WHERE id=?", (x["id"],))
+                    revived += 1
+            seq = self._audit(actor, self.MAPS_ROLLBACK_ACTION, None, {"migration_seq": row["seq"]}, {"rules_restored": sorted(b["rules"]), "exceptions_revived": revived,
+                                                                                                    "allow_weekdays": sorted(b["allow_weekdays"])})
+        self._mirror_audit(seq)
+        return {"migration_seq": row["seq"], "rules_restored": sorted(b["rules"]), "exceptions_revived": revived, "audit_seq": seq}
+
     # ── admin: the set of child DEVICES (after the cutover a re-import is refused, so this is how a device is added or retired) ──────────────────────────────
     REMOVAL_UNDO_HOURS = 24
     ICONS = ("phone", "tablet", "laptop", "console", "tv", "other")
@@ -383,7 +484,7 @@ class ChildMixin:
 
     def add_child_device(self, actor, name, ip, mac="", like=None, label="", icon="other", closed=False):
         """Admin only. `name` is the CHILD, `label` the device ("телефон"); the entity is called "<name> <label>". A new device starts with the windows and the per-child
-        lists of `like` (another device), else with the standard windows (16:00-19:00 Mon-Sat YouTube/Roblox, Maps all day), else - `closed=True` - with NO windows at all
+        lists of `like` (another device), else with the standard window (16:00-19:00 Mon-Sat YouTube/Roblox; Maps is always open, it has no window), else - `closed=True` - with NO windows at all
         (catch-all + the always-on list only: nothing opens until a parent sets a window). Proposed guardrails, no exceptions. Refused: house infrastructure as a device,
         a duplicate name/ip/mac. The AdGuard side (client entry, rules) is the host job's, from the next snapshot."""
         s = _s()
@@ -431,8 +532,7 @@ class ChildMixin:
             elif closed:
                 rules = []
             else:
-                rules = [{"id": "maps", "days": [1, 2, 3, 4, 5, 6], "start": "00:00", "end": "24:00", "variables": {"opens": "maps"}},
-                         {"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
+                rules = [{"id": "yt_roblox", "days": [1, 2, 3, 4, 5, 6], "start": "16:00", "end": "19:00", "variables": {"opens": "youtube,roblox"}}]
             rules, rp = model.validate_rules({"id": eid, "kind": "child_window", "guardrails": guard}, rules)
             probs += rp
             if probs:
