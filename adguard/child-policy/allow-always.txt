@@ -1,5 +1,5 @@
 # GENERATED from the schedule service's child-policy snapshot (Task 29) - do not edit; change it in the portal.
-# snapshot checksum: 408fbf61b168fda3
+# snapshot checksum: c7768944f13cae51
 accuweather.com
 android.apis.google.com
 android.googleapis.com
@@ -10,6 +10,9 @@ deviceintegritytokens-pa.googleapis.com
 fcm.googleapis.com
 firebaseinstallations.googleapis.com
 kidsmanagement-pa.googleapis.com
+maps.google.com
+maps.googleapis.com
+maps.gstatic.com
 mtalk.google.com
 play-fe.googleapis.com
 play.googleapis.com
