@@ -78,7 +78,7 @@ class ChildMixin:
         now = now or self._now()
         ent = self._child_entity(eid)
         sch = self.schedule(eid)
-        return {"id": eid, "name": ent["name"], "ip": ent["meta"].get("ip"), "mac": ent["meta"].get("mac"), "label": ent["meta"].get("label") or "", "icon": ent["meta"].get("icon") or "",
+        return {"id": eid, "name": ent["name"], "ip": ent["meta"].get("ip"), "mac": ent["meta"].get("mac"), "label": ent["meta"].get("label") or "", "icon": ent["meta"].get("icon") or "", "display_name": ent["meta"].get("display_name") or "",
                 "child": ent["meta"].get("child") or "", "version": sch["version"], "tz": sch["tz"],
                 "updated_at": sch["updated_at"], "rules": sch["rules"], "guardrails": ent["guardrails"], "flags": ent["flags"],
                 "exceptions": self.child_exceptions(eid, now=now), "domains": self.child_domains(eid), "status": self.child_status(eid, now)}
@@ -549,6 +549,37 @@ class ChildMixin:
                                                                    "rules": rules})
         self._mirror_audit(seq)
         self.publish()
+        return self.child_detail(eid)
+
+    def set_child_display(self, actor, eid, display_name=None, icon=None):
+        """Admin only (Task 31): the name a parent SEES on the tile ("Влад · планшет") and the icon. Display data only: the entity name (= the AdGuard client name the host job
+        uses) never changes here, so nothing is published and nothing reaches AdGuard. display_name "" clears it (the tile falls back to the device name)."""
+        s = _s()
+        if actor["role"] != "admin":
+            raise s.Forbidden("renaming a child device is admin-only")
+        probs = []
+        if display_name is not None and (not isinstance(display_name, str) or len(display_name.strip()) > 40 or (display_name.strip() and not any(ch.isalnum() for ch in display_name))):
+            probs.append(model.problem("name", "display_name", "the display name must be at most 40 characters with a letter or digit (empty clears it)"))
+        if icon is not None and icon not in self.ICONS:
+            probs.append(model.problem("icon", "icon", "icon must be one of %s" % ", ".join(self.ICONS)))
+        if probs:
+            raise model.ValidationError(probs)
+        with self._tx():
+            ent = self._child_entity(eid)
+            meta = dict(ent["meta"])
+            before = {k: meta.get(k) for k in ("display_name", "icon")}
+            if display_name is not None:
+                if display_name.strip():
+                    meta["display_name"] = display_name.strip()
+                else:
+                    meta.pop("display_name", None)
+            if icon is not None:
+                meta["icon"] = icon
+            if meta == ent["meta"]:
+                return self.child_detail(eid)
+            self.db.execute("UPDATE entities SET meta=? WHERE id=?", (s.canon(meta), eid))
+            seq = self._audit(actor, "child_device_display", eid, before, {k: meta.get(k) for k in ("display_name", "icon")})
+        self._mirror_audit(seq)
         return self.child_detail(eid)
 
     def _definition(self, eid, ent):

@@ -326,6 +326,21 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: patchChildDevice
+      summary: "Admin only (Task 31). The name a parent sees on the tile and the icon: display data only, the device name (the AdGuard client name) never changes. display_name empty clears it"
+      parameters: [{$ref: "#/components/parameters/EntityId"}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, minProperties: 1, properties: {display_name: {type: string, maxLength: 40}, icon: {type: string, enum: [phone, tablet, laptop, console, tv, other]}}}}}
+      responses:
+        "200": {description: the device, content: {application/json: {schema: {$ref: "#/components/schemas/ChildDeviceFull"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
     delete:
       operationId: removeChildDevice
       summary: "Admin only. Retires a child device (its catch-all leaves AdGuard at the next job run). The audit row keeps windows, guardrails, lists and exceptions. The last device cannot be removed"
@@ -721,6 +736,7 @@ components:
         version: {type: integer}
         label: {type: string}
         icon: {type: string}
+        display_name: {type: string}
         child: {type: string}
         tz: {type: string}
         updated_at: {type: string}

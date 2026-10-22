@@ -404,6 +404,17 @@ class App:
         return self._guard(lambda: JSONResponse(self.store.add_child_device(who, data["name"], data["ip"], data.get("mac") or "", data.get("like"), data.get("label") or "",
                                                                              data.get("icon") or "other", bool(data.get("closed"))), status_code=201))
 
+    async def child_device_patch(self, request):
+        who, e = self.authenticate(request, "admin")
+        if e:
+            return e
+        data, e = await self.body(request)
+        if e:
+            return e
+        if not isinstance(data, dict) or not data or set(data) - {"display_name", "icon"} or any(not isinstance(v, str) for v in data.values()):
+            return err(400, "bad_body", "an object with display_name and/or icon (strings) is required")
+        return self._guard(lambda: JSONResponse(self.store.set_child_display(who, request.path_params["id"], data.get("display_name"), data.get("icon"))))
+
     async def child_device_remove(self, request):
         who, e = self.authenticate(request, "admin")
         if e:
@@ -635,6 +646,7 @@ def build(store, apply_status_path=None, clock=time.time, background=True):
         Route("/v1/child/removed/{rid}/restore", a.child_removed_restore, methods=["POST"]),
         Route("/v1/child/cutover", a.child_cutover, methods=["PUT"]),
         Route("/v1/child/{id}", a.child_get, methods=["GET"]),
+        Route("/v1/child/{id}", a.child_device_patch, methods=["PATCH"]),
         Route("/v1/child/{id}", a.child_device_remove, methods=["DELETE"]),
         Route("/v1/child/{id}/exceptions", a.child_exception_add, methods=["POST"]),
         Route("/v1/child/{id}/exceptions/{xid}", a.child_exception_cancel, methods=["DELETE"]),
