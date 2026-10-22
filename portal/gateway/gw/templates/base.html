@@ -2,32 +2,47 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#1b6ef3">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="csrf" content="{{ csrf }}">
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/app/icon-192.png">
+<link rel="apple-touch-icon" href="/app/icon-192.png">
 <title>{% block title %}{{ t('app_name') }}{% endblock %}</title>
 <link rel="stylesheet" href="/static/app.css">
 <script type="application/json" id="i18n">{{ i18n_json|safe }}</script>
 <script src="/static/app.js" defer></script>
 {% block head %}{% endblock %}
 </head>
-<body data-page="{{ nav_active }}">
+<body data-page="{{ nav_active }}"{% if me and me.app %} data-app="yes"{% endif %}>
 {% if me %}
 <header class="top">
-  <nav aria-label="{{ t('menu') }}">
-    <a href="/home" {% if nav_active == 'home' %}aria-current="page"{% endif %}>{{ t('nav_home') }}</a>
+  <nav aria-label="{{ t('menu') }}" class="topnav">
+    <a class="tab" href="/home" {% if nav_active == 'home' %}aria-current="page"{% endif %}>{{ t('nav_home') }}</a>
     <a href="/services" {% if nav_active == 'services' %}aria-current="page"{% endif %}>{{ t('nav_services') }}</a>
-    {% if me.parent %}<a href="/parental" {% if nav_active == 'parental' %}aria-current="page"{% endif %}>{{ t('nav_parental') }}</a>{% endif %}
-    {% if me.role == 'admin' %}
+    {% if me.parent %}<a class="tab" href="/parental" {% if nav_active == 'parental' %}aria-current="page"{% endif %}>{{ t('nav_parental') }}</a>{% endif %}
+    {% if me.role == 'admin' and not me.app %}
     <a href="/people" {% if nav_active == 'people' %}aria-current="page"{% endif %}>{{ t('nav_people') }}</a>
     <a href="/audit" {% if nav_active == 'audit' %}aria-current="page"{% endif %}>{{ t('nav_audit') }}</a>
     {% endif %}
   </nav>
-  <form method="post" action="/logout" class="logout"><input type="hidden" name="csrf" value="{{ csrf }}"><span class="who">{{ me.name }}</span><button type="submit">{{ t('logout') }}</button></form>
+  <div class="topright">
+    <button type="button" class="iconbtn" id="refresh" aria-label="{{ t('refresh') }}" title="{{ t('refresh') }}">&#8635;</button>
+    {% if not me.app %}<form method="post" action="/logout" class="logout"><input type="hidden" name="csrf" value="{{ csrf }}"><span class="who">{{ me.name }}</span><button type="submit">{{ t('logout') }}</button></form>{% else %}<span class="who">{{ me.name }}</span>{% endif %}
+  </div>
 </header>
+<p class="netbanner" id="net-banner" role="alert" hidden><span>{{ t('net_down') }}</span> <button type="button" id="net-retry">{{ t('retry') }}</button></p>
 {% endif %}
 <main>
 {% block body %}{% endblock %}
 </main>
+{% if me %}
+<nav class="bottomnav" aria-label="{{ t('menu') }}">
+  <a href="/home" {% if nav_active == 'home' %}aria-current="page"{% endif %}><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#nav_home"/></svg><span>{{ t('nav_home') }}</span></a>
+  {% if me.parent %}<a href="/parental" {% if nav_active == 'parental' %}aria-current="page"{% endif %}><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#nav_parental"/></svg><span>{{ t('nav_parental') }}</span></a>{% endif %}
+</nav>
+{% endif %}
 </body>
 </html>

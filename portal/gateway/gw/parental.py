@@ -87,6 +87,8 @@ class Parental:
             raise GwError(403, "forbidden", "parental control is for parents only", {"role": p["role"]})
         if admin and p["role"] != "admin":
             raise GwError(403, "forbidden", "only the administrator may do this", {"role": p["role"]})
+        if admin and p.get("app"):                                       # Task 30: a stolen unlocked phone must not open the filters or add devices (ADR 0009)
+            raise GwError(403, "web_login_required", "this action needs a web sign-in with password and code")
         if p["role"] not in (("admin", "household", "readonly") if view_only else ("admin", "household")):
             raise GwError(403, "forbidden", "your role may not do this", {"role": p["role"]})
 

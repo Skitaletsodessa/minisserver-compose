@@ -80,8 +80,10 @@ class People:
         with self.db.tx():
             self.db.x("UPDATE people SET name=?, role=?, parent=?, active=?, web_login=? WHERE id=?",
                       (new["name"], new["role"], 1 if new["parent"] else 0, 1 if new["active"] else 0, 1 if new["web_login_enabled"] else 0, pid))
-            if not new["active"] or not new["web_login_enabled"]:
+            if not new["active"]:
                 self.db.x("DELETE FROM sessions WHERE person_id=?", (pid,))
+            elif not new["web_login_enabled"]:                               # app sessions do not depend on web login
+                self.db.x("DELETE FROM sessions WHERE person_id=? AND phone_id IS NULL", (pid,))
             if not new["active"]:                                            # a deactivated person's phones stop working at once
                 for r in self.db.q("SELECT id FROM phones WHERE person_id=? AND revoked=0", (pid,)):
                     self.db.x("UPDATE phones SET revoked=1 WHERE id=?", (r["id"],))
@@ -129,10 +131,14 @@ class People:
         seed = self.db.meta_get("setupseed:" + r["id"])
         if not seed:
             raise GwError(409, "setup_not_started", "open the setup page first")
-        step = auth.verify_totp(seed, (code or "").strip(), 0, now=self.clock())
-        if step is None:
-            self.db.audit("setup_failed", person=r["person_id"], ok=False, ip=ip)
-            raise GwError(422, "bad_totp", "the code from the authenticator app does not match")
+        person = self.db.q1("SELECT role FROM people WHERE id=?", (r["person_id"],))
+        if person["role"] != "admin" and not (code or "").strip():
+            seed, step = None, 0                       # Task 30 (ADR 0009): the authenticator is optional for household/readonly - the phone's fingerprint is their second factor; admin keeps it mandatory
+        else:
+            step = auth.verify_totp(seed, (code or "").strip(), 0, now=self.clock())
+            if step is None:
+                self.db.audit("setup_failed", person=r["person_id"], ok=False, ip=ip)
+                raise GwError(422, "bad_totp", "the code from the authenticator app does not match")
         with self.db.tx():
             self.db.x("INSERT INTO credentials(person_id,pw_hash,totp_seed,totp_last_step,updated) VALUES (?,?,?,?,?) "
                       "ON CONFLICT(person_id) DO UPDATE SET pw_hash=excluded.pw_hash, totp_seed=excluded.totp_seed, totp_last_step=excluded.totp_last_step, updated=excluded.updated",
@@ -172,6 +178,53 @@ class People:
 
     def login(self, username, password, totp, ip):
         """Returns (session cookie value, session dict). Unknown account, wrong password and wrong code all answer the same 401."""
+        r, step = self._check_login(username, password, totp, ip)
+        raw = auth.token(32)
+        now = self.clock()
+        csrf = auth.token(16)
+        self.db.x("INSERT INTO sessions(id,person_id,csrf,created,last,abs_exp,ip) VALUES (?,?,?,?,?,?,?)", (sha(raw), r["id"], csrf, now, now, now + config.SESSION_ABS_S, ip))
+        self.db.audit("login", person=r["id"], ip=ip)
+        return raw, self.session_view(sha(raw))
+
+    def app_login(self, username, password, totp, device, ip):
+        """Task 30 (ADR 0009, amends ADR 0007): the app signs in ONCE with the person's own credentials - the SAME check, throttles, TOTP rule and audit as the web login
+        (_check_login) - and receives a device token (shown once). Same table, same limits as an enrolment: sliding 90 days, per-person and total device limits."""
+        label = (device or {}).get("name")
+        if not isinstance(label, str) or not 1 <= len(label.strip()) <= 60:
+            raise GwError(400, "invalid_device", "device.name (1-60 characters) is required")
+        r, step = self._check_login(username, password, totp, ip)
+        if self._active_phones(r["id"]) >= config.MAX_PHONES_PER_PERSON or self._active_phones() >= config.MAX_PHONES_TOTAL:
+            self.db.audit("app_login_refused", person=r["id"], ok=False, ip=ip, after={"reason": "device_limit"})
+            raise GwError(409, "device_limit", "the device limit is reached: an admin must revoke a phone first",
+                          {"per_person": config.MAX_PHONES_PER_PERSON, "total": config.MAX_PHONES_TOTAL})
+        now = self.clock()
+        raw = auth.token(32)
+        phone_id = "p-" + auth.token(5).lower().replace("_", "x").replace("-", "y")[:8]
+        exp = now + config.PHONE_SLIDING_S
+        self.db.x("INSERT INTO phones(id,person_id,label,model,platform,app_version,token_hash,created,last_seen,expires,revoked) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+                  (phone_id, r["id"], label.strip(), str((device or {}).get("model") or "")[:60] or None, "android", str((device or {}).get("app_version") or "")[:30] or None,
+                   sha(raw), now, now, exp))
+        self.db.audit("app_login", person=r["id"], phone=phone_id, target=label.strip()[:60], ip=ip)
+        return {"phone_id": phone_id, "token": raw, "person": {"id": r["id"], "name": r["name"], "role": r["role"], "parent": bool(r["parent"])}, "expires_at": iso(exp)}
+
+    def app_logout(self, principal):
+        """Task 30: revokes ONLY the calling device's own token (identified by the token itself), closes its sessions and streams."""
+        phone_id = principal["phone_id"]
+        self.db.x("UPDATE phones SET revoked=1 WHERE id=?", (phone_id,))
+        self.db.x("DELETE FROM sessions WHERE phone_id=?", (phone_id,))
+        if self.hub:
+            self.hub.kick(phone_id)
+        self.db.audit("app_logout", person=principal["person_id"], phone=phone_id, ip=principal.get("ip"))
+
+    def recent_new_phones(self, hours=48):
+        """For the host-side watcher (via /v1/health): devices created in the last hours, so one Telegram message per new device can be sent."""
+        rows = self.db.q("SELECT ph.id, ph.label, ph.model, ph.created, p.name AS pname FROM phones ph JOIN people p ON p.id=ph.person_id WHERE ph.created>? AND ph.revoked=0 AND ph.expires>? ORDER BY ph.created",
+                         (self.clock() - hours * 3600, self.clock()))
+        return [{"id": r["id"], "person": r["pname"], "device": r["label"], "model": r["model"], "created_at": iso(r["created"])} for r in rows]
+
+    def _check_login(self, username, password, totp, ip):
+        """The ONE credential check (web login and app login): throttles per source and per account, scrypt, TOTP (required for admins and for anyone who has a seed),
+        the person must be active with web login enabled. Returns (person row, accepted TOTP step or None); raises the same 401 for every kind of failure."""
         account = (username or "").strip().lower()[:60]
         self._throttle(account, ip)
         r = self.db.q1("SELECT * FROM people WHERE id=? OR lower(name)=?", (account, account))
@@ -195,18 +248,30 @@ class People:
             raise GwError(401, "invalid_credentials", "invalid username, password or code")
         if step:
             self.db.x("UPDATE credentials SET totp_last_step=? WHERE person_id=?", (step, r["id"]))
-        raw = auth.token(32)
+        return r, step
+
+    def create_app_session(self, principal, ip):
+        """Task 30 (ADR 0009): the app trades its DEVICE TOKEN (already checked by phone_principal) for a web session. No password, no TOTP: the phone's lock is the
+        second factor. The session lives no longer than the token and dies with it (revocation, expiry, a deactivated person) on its next request."""
+        r = self.db.q1("SELECT * FROM phones WHERE id=?", (principal["phone_id"],))
         now = self.clock()
+        raw = auth.token(32)
         csrf = auth.token(16)
-        self.db.x("INSERT INTO sessions(id,person_id,csrf,created,last,abs_exp,ip) VALUES (?,?,?,?,?,?,?)", (sha(raw), r["id"], csrf, now, now, now + config.SESSION_ABS_S, ip))
-        self.db.audit("login", person=r["id"], ip=ip)
+        self.db.x("DELETE FROM sessions WHERE phone_id=? AND (abs_exp<? OR last<?)", (r["id"], now, now - config.SESSION_IDLE_S))      # tidy this phone's dead sessions
+        self.db.x("INSERT INTO sessions(id,person_id,csrf,created,last,abs_exp,ip,phone_id) VALUES (?,?,?,?,?,?,?,?)",
+                  (sha(raw), principal["person_id"], csrf, now, now, min(now + config.SESSION_ABS_S, r["expires"]), ip, r["id"]))
+        self.db.audit("app_session", person=principal["person_id"], phone=r["id"], ip=ip)
         return raw, self.session_view(sha(raw))
+
+    def _phone_ok(self, phone_id):
+        r = self.db.q1("SELECT ph.revoked, ph.expires, p.active FROM phones ph JOIN people p ON p.id=ph.person_id WHERE ph.id=?", (phone_id,))
+        return bool(r and not r["revoked"] and r["expires"] >= self.clock() and r["active"])
 
     def session_view(self, sid):
         s = self.db.q1("SELECT * FROM sessions WHERE id=?", (sid,))
         p = self.db.q1("SELECT * FROM people WHERE id=?", (s["person_id"],))
         return {"person": {"id": p["id"], "name": p["name"], "role": p["role"], "parent": bool(p["parent"])}, "csrf": s["csrf"],
-                "expires_at": iso(s["abs_exp"]), "idle_expires_at": iso(min(s["abs_exp"], s["last"] + config.SESSION_IDLE_S))}
+                "expires_at": iso(s["abs_exp"]), "idle_expires_at": iso(min(s["abs_exp"], s["last"] + config.SESSION_IDLE_S)), "app": bool(s["phone_id"])}
 
     def session_principal(self, raw):
         """Cookie value -> principal dict or None. Applies the idle and absolute timeouts and slides the idle clock."""
@@ -221,12 +286,17 @@ class People:
             self.db.x("DELETE FROM sessions WHERE id=?", (sid,))
             return None
         p = self.db.q1("SELECT * FROM people WHERE id=?", (s["person_id"],))
-        if not p or not p["active"] or not p["web_login"]:
+        if s["phone_id"]:                                                    # an app session: valid exactly as long as its device token (web login is NOT needed)
+            if not p or not self._phone_ok(s["phone_id"]):
+                self.db.x("DELETE FROM sessions WHERE id=?", (sid,))
+                return None
+        elif not p or not p["active"] or not p["web_login"]:
             self.db.x("DELETE FROM sessions WHERE id=?", (sid,))
             return None
         if now - s["last"] > 60:
             self.db.x("UPDATE sessions SET last=? WHERE id=?", (now, sid))
-        return {"person_id": p["id"], "name": p["name"], "role": p["role"], "parent": bool(p["parent"]), "phone_id": None, "via": "session", "csrf": s["csrf"], "sid": sid}
+        return {"person_id": p["id"], "name": p["name"], "role": p["role"], "parent": bool(p["parent"]), "phone_id": s["phone_id"], "app": bool(s["phone_id"]),
+                "via": "session", "csrf": s["csrf"], "sid": sid}
 
     def logout(self, principal):
         if principal.get("sid"):
@@ -312,7 +382,7 @@ class People:
     def session_principal_raw_valid(self, sid):
         s = self.db.q1("SELECT * FROM sessions WHERE id=?", (sid,))
         now = self.clock()
-        return bool(s and now <= s["abs_exp"] and now <= s["last"] + config.SESSION_IDLE_S)
+        return bool(s and now <= s["abs_exp"] and now <= s["last"] + config.SESSION_IDLE_S and (not s["phone_id"] or self._phone_ok(s["phone_id"])))
 
     def phones(self, only_person=None):
         q = "SELECT ph.*, p.name AS pname FROM phones ph JOIN people p ON p.id=ph.person_id"
@@ -331,6 +401,7 @@ class People:
         if actor["role"] != "admin" and r["person_id"] != actor["person_id"]:
             raise GwError(403, "forbidden", "you may revoke only your own phones")
         self.db.x("UPDATE phones SET revoked=1 WHERE id=?", (phone_id,))
+        self.db.x("DELETE FROM sessions WHERE phone_id=?", (phone_id,))
         if self.hub:
             self.hub.kick(phone_id)
         self.db.audit("phone_revoke", person=actor.get("person_id"), phone=actor.get("phone_id"), target=phone_id, before={"person": r["person_id"], "label": r["label"]}, ip=actor.get("ip"))

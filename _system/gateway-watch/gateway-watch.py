@@ -114,6 +114,22 @@ def evaluate(N, state, public, full, token_ok, addrs):
             N.clear("gateway-filter-revert-" + fid, "")
     state["fl_alerted"] = sorted(now_ids)
 
+    # Task 30 (ADR 0009): a phone can now be added by its owner signing in (no admin action), so every new device is announced ONCE (tier B). /v1/health lists the
+    # devices created in the last 48 h that are still valid. The first run only records what exists (no flood of messages for devices that were already there).
+    if "new_devices" in full:
+        nd = {d["id"]: d for d in full.get("new_devices") or []}
+        if "nd_alerted" not in state:
+            state["nd_alerted"] = sorted(nd)
+        else:
+            for did, d in nd.items():
+                if did not in state["nd_alerted"]:
+                    N.alert("gateway-new-device-" + did, "Новое устройство в портале: %s, %s%s. Если это не вы - отзовите его: «Люди и устройства» на сайте."
+                            % (d.get("person") or "?", d.get("device") or "?", (" (" + d["model"] + ")") if d.get("model") else ""), tier="B")
+            for did in state["nd_alerted"]:
+                if did not in nd:
+                    N.clear("gateway-new-device-" + did, "")
+            state["nd_alerted"] = sorted(nd)
+
     if full.get("status") == "degraded":
         state["degraded"] = state.get("degraded", 0) + 1
         if state["degraded"] >= DEGRADED_AFTER:

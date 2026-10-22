@@ -15,7 +15,7 @@ from .strings import S, ERRORS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; "
-       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; manifest-src 'self'")
 HEADERS = {"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Frame-Options": "DENY"}
 ENV = Environment(loader=FileSystemLoader(os.path.join(HERE, "templates")), autoescape=select_autoescape(["html"]), undefined=StrictUndefined, trim_blocks=True, lstrip_blocks=True)
 
@@ -118,8 +118,8 @@ def routes(app):
         p, r = me_or_redirect(request)
         if r:
             return r
-        if p["role"] != "admin":
-            return page(request, "message.html", status=403, me=p, title=S["nav_people"], text="403")
+        if p["role"] != "admin" or p.get("app"):
+            return page(request, "message.html", status=403, me=p, title=S["nav_people"], text=ERRORS["web_login_required"] if p.get("app") else "403")
         return page(request, "people.html", me=p, people=a.people.list(), phones=a.people.phones(), roles=("admin", "household", "readonly"))
 
     async def audit(request):
@@ -144,8 +144,8 @@ def routes(app):
         p, r = me_or_redirect(request)
         if r:
             return r
-        if not p["parent"] or p["role"] != "admin":
-            return page(request, "message.html", status=403, me=p, title=S["par_f_title"], text="403")
+        if not p["parent"] or p["role"] != "admin" or p.get("app"):
+            return page(request, "message.html", status=403, me=p, title=S["par_f_title"], text=ERRORS["web_login_required"] if p.get("app") and p["role"] == "admin" else "403")
         return page(request, "parental_filters.html", me=p, nav_active="parental")
 
     async def setup_get(request):
@@ -174,6 +174,20 @@ def routes(app):
             return page(request, "setup.html", status=422, me=None, person=person, qr=buf.getvalue().decode(), seed=seed, token=raw, error=ERRORS.get(e.code) or e.message, done=False)
         return page(request, "message.html", me=None, title=S["setup_title"], text=S["setup_done"])
 
+    async def manifest(request):                                       # Task 30: the PWA. Public on purpose (browsers fetch it without credentials); holds no family data
+        doc = {"name": S["app_name"], "short_name": S["app_short"], "lang": "ru", "start_url": "/home", "scope": "/", "display": "standalone", "orientation": "portrait",
+               "background_color": "#0f1216", "theme_color": "#1b6ef3",
+               "icons": [{"src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"}, {"src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                         {"src": "/app/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
+        return Response(json.dumps(doc, ensure_ascii=False), media_type="application/manifest+json", headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"})
+
+    async def app_icon(request):
+        name = request.path_params["name"]
+        full = os.path.join(HERE, "static", "app", name)
+        if name not in ("icon-192.png", "icon-512.png", "icon-maskable-512.png") or not os.path.isfile(full):
+            return Response("not found", status_code=404, media_type="text/plain")
+        return FileResponse(full, media_type="image/png", headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"})
+
     async def static(request):
         rel = request.path_params["path"]
         full = os.path.normpath(os.path.join(HERE, "static", rel))
@@ -187,5 +201,6 @@ def routes(app):
         Route("/logout", logout_post, methods=["POST"]), Route("/home", home, methods=["GET"]), Route("/settings/{id}", settings, methods=["GET"]),
         Route("/services", services, methods=["GET"]), Route("/people", people, methods=["GET"]), Route("/audit", audit, methods=["GET"]),
         Route("/parental", parental, methods=["GET"]), Route("/parental/filters", parental_filters, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
+        Route("/app/manifest.webmanifest", manifest, methods=["GET"]), Route("/app/{name}", app_icon, methods=["GET"]),
         Route("/static/{path:path}", static, methods=["GET"]),
     ]

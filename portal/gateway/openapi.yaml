@@ -51,6 +51,39 @@ paths:
         "200": {description: the session, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+  /v1/app/login:
+    post:
+      operationId: appLogin
+      summary: "Task 30 (ADR 0009, amends ADR 0007): the app signs in ONCE with the person's own name and password (+ the 6-digit code for admins). The SAME check, throttles and audit as /v1/auth/login. Returns a device token, shown once"
+      security: []
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/AppLoginRequest"}}}
+      responses:
+        "201": {description: signed in; the device token is in the body and never repeated, content: {application/json: {schema: {$ref: "#/components/schemas/EnrolResult"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/app/session:
+    post:
+      operationId: appSession
+      summary: "The app trades its device token for a web session (cookie + CSRF) for its WebView. Valid exactly as long as the device token; a revoked device loses it on the next request. Device token only"
+      security: [{deviceToken: []}]
+      responses:
+        "200": {description: the session; the cookie is set, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/app/logout:
+    post:
+      operationId: appLogout
+      summary: "Revokes ONLY the calling device's own token (the one in the Authorization header) and closes its sessions and streams. Device token only"
+      security: [{deviceToken: []}]
+      responses:
+        "204": {description: this device is signed out and revoked}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/enrol:
     post:
       operationId: enrol
@@ -908,6 +941,7 @@ components:
         schedule_service: {type: object, properties: {link: {type: string}, in_sync: {type: [boolean, "null"]}}}
         probes: {type: object, properties: {last_run_age_s: {type: [number, "null"]}}}
         audit_chain: {type: object, properties: {ok: {type: boolean}, rows: {type: integer}}}
+        new_devices: {type: array, description: "devices created in the last 48 h (for the host-side watcher's one Telegram message per device)", items: {type: object, properties: {id: {type: string}, person: {type: string}, device: {type: string}, model: {type: [string, "null"]}, created_at: {type: string}}}}
     Session:
       type: object
       required: [person, csrf, expires_at]
@@ -916,6 +950,7 @@ components:
         csrf: {type: string}
         expires_at: {type: string}
         idle_expires_at: {type: string}
+        app: {type: boolean, description: "true for a session made by the app from its device token (admin-only actions answer 403 web_login_required)"}
     PersonRef:
       type: object
       required: [id, name, role, parent]
@@ -953,6 +988,15 @@ components:
       properties:
         code: {type: string}
         device: {type: object, required: [label], properties: {label: {type: string, maxLength: 60}, model: {type: string, maxLength: 60}, platform: {type: string, maxLength: 30}, app_version: {type: string, maxLength: 30}}}
+    AppLoginRequest:
+      type: object
+      required: [username, password, device]
+      additionalProperties: false
+      properties:
+        username: {type: string}
+        password: {type: string}
+        totp: {type: string, description: "required for the admin account; a failed attempt never says which of name, password or code was wrong"}
+        device: {type: object, required: [name], properties: {name: {type: string, maxLength: 60}, model: {type: string, maxLength: 60}, app_version: {type: string, maxLength: 30}}}
     EnrolResult:
       type: object
       required: [phone_id, token, person, expires_at]
@@ -984,6 +1028,7 @@ components:
         modules: {type: object, required: [parental, cameras], properties: {parental: {type: boolean}, cameras: {type: boolean}}}
         limits: {type: object, properties: {max_devices_total: {type: integer}, max_devices_per_person: {type: integer}}}
         can: {type: object, properties: {switch: {type: boolean}, edit_schedules: {type: boolean}, start_vacuum: {type: boolean}, manage_people: {type: boolean}, see_audit: {type: boolean}}}
+        app_session: {type: boolean}
         gateway: {type: object, properties: {version: {type: string}}}
     Device:
       type: object

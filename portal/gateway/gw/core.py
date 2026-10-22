@@ -636,5 +636,6 @@ class Core:
                 "modules": dict(config.FEATURES),
                 "limits": {"max_devices_total": config.MAX_PHONES_TOTAL, "max_devices_per_person": config.MAX_PHONES_PER_PERSON},
                 "can": {"switch": role in ("admin", "household"), "edit_schedules": role in ("admin", "household"), "start_vacuum": role in ("admin", "household"),
-                        "manage_people": role == "admin", "see_audit": True},
+                        "manage_people": role == "admin" and not principal.get("app"), "see_audit": True},
+                "app_session": bool(principal.get("app")),
                 "gateway": {"version": config.VERSION}}

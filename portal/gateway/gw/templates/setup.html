@@ -5,12 +5,12 @@
   <h1>{{ t('setup_title') }}: {{ person.name }}</h1>
   <p>{{ t('setup_intro') }}</p>
   {% if error %}<p class="msg err" role="alert">{{ error }}</p>{% endif %}
-  <p>{{ t('setup_scan') }}</p>
+  {% if person.role == 'admin' %}<p>{{ t('setup_scan') }}</p>{% else %}<p>{{ t('setup_optional') }}</p>{% endif %}
   <div class="qr">{{ qr|safe }}</div>
   <p><code class="seed">{{ seed }}</code></p>
   <form method="post" action="/setup/{{ token }}" autocomplete="off">
     <label>{{ t('setup_password') }}<input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
-    <label>{{ t('setup_code') }}<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"></label>
+    <label>{{ t('setup_code') }}{% if person.role != 'admin' %} ({{ t('optional') }}){% endif %}<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" {% if person.role == 'admin' %}required{% endif %} autocomplete="one-time-code"></label>
     <button class="primary" type="submit">{{ t('save') }}</button>
   </form>
 </section>

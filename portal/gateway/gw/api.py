@@ -6,6 +6,7 @@ import time
 from collections import defaultdict, deque
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -78,6 +79,14 @@ class App:
         if principal["role"] not in roles:
             raise GwError(403, "forbidden", "your role may not do this", {"role": principal["role"]})
 
+    @staticmethod
+    def need_web(principal):
+        """Task 30 / ADR 0009: minting devices, changing roles, the people list and (in the parental module) the filters and device management stay behind the
+        web sign-in (password + TOTP), even for the admin. A session made by the app from its device token is refused: a stolen, unlocked phone must not be
+        able to hand out more access."""
+        if principal.get("app"):
+            raise GwError(403, "web_login_required", "this action needs a web sign-in with password and code")
+
     async def body(self, request):
         raw = await request.body()
         if len(raw) > MAX_BODY:
@@ -128,7 +137,8 @@ class App:
                              "schedule_service": {"link": sh["link"], "in_sync": sh.get("in_sync")},
                              "probes": {"last_run_age_s": round(self.clock() - self.core.probe_ts, 1) if self.core.probe_ts else None},
                              "audit_chain": {"ok": ok, "rows": rows},
-                             "filter_reverts": self.filters.recent_reverts() if self.filters else []})
+                             "filter_reverts": self.filters.recent_reverts() if self.filters else [],
+                             "new_devices": self.people.recent_new_phones()})
 
     async def login(self, request):
         b = await self.body(request)
@@ -152,6 +162,37 @@ class App:
             raise GwError(401, "unauthorized", "this endpoint is for web sessions")
         return JSONResponse(self.people.session_view(p["sid"]))
 
+    async def app_login(self, request):
+        """POST /v1/app/login: sign in ONCE from the app (name + password [+ TOTP]); returns the device token once. Same check as the web login."""
+        b = await self.body(request)
+        if not isinstance(b, dict) or not isinstance(b.get("username"), str) or not isinstance(b.get("password"), str) or not isinstance(b.get("device"), dict):
+            raise GwError(400, "bad_body", "username, password and device are required")
+        totp = b.get("totp")
+        if totp is not None and not isinstance(totp, str):
+            raise GwError(400, "bad_body", "totp must be a string")
+        res = self.people.app_login(b["username"], b["password"], totp, b["device"], self.ip(request))
+        return JSONResponse(res, status_code=201, headers={"Cache-Control": "no-store"})
+
+    async def app_logout(self, request):
+        """POST /v1/app/logout: revokes ONLY the calling device's own token (the one in the Authorization header)."""
+        h = request.headers.get("authorization", "")
+        if not h.lower().startswith("bearer "):
+            raise GwError(401, "unauthorized", "a device token is required", headers={"WWW-Authenticate": "Bearer"})
+        p = self.authenticate(request, csrf=False)
+        self.people.app_logout(p)
+        return Response(status_code=204)
+
+    async def app_session(self, request):
+        """POST /v1/app/session: the app (Bearer device token) gets a web session for its WebView. Only the token is accepted here."""
+        h = request.headers.get("authorization", "")
+        if not h.lower().startswith("bearer "):
+            raise GwError(401, "unauthorized", "a device token is required", headers={"WWW-Authenticate": "Bearer"})
+        p = self.authenticate(request, csrf=False)
+        raw, sess = self.people.create_app_session(p, self.ip(request))
+        r = JSONResponse(sess, headers={"Cache-Control": "no-store"})
+        r.set_cookie(COOKIE, raw, httponly=True, secure=True, samesite="strict", max_age=config.SESSION_ABS_S, path="/")
+        return r
+
     async def enrol(self, request):
         b = await self.body(request)
         if not isinstance(b, dict) or not isinstance(b.get("code"), str) or not isinstance(b.get("device"), dict):
@@ -168,11 +209,13 @@ class App:
     async def people_list(self, request):
         p = self.authenticate(request, csrf=False)
         self.need(p, "admin")
+        self.need_web(p)
         return JSONResponse({"people": self.people.list()})
 
     async def people_create(self, request):
         p = self.authenticate(request)
         self.need(p, "admin")
+        self.need_web(p)
         raw = await request.body()
         b = jload(raw)
 
@@ -186,6 +229,7 @@ class App:
     async def people_patch(self, request):
         p = self.authenticate(request)
         self.need(p, "admin")
+        self.need_web(p)
         raw = await request.body()
         b = jload(raw)
         pid = request.path_params["id"]
@@ -198,6 +242,7 @@ class App:
     async def enrol_code_create(self, request):
         p = self.authenticate(request)
         self.need(p, "admin")
+        self.need_web(p)
         pid = request.path_params["id"]
 
         async def go():
@@ -215,6 +260,7 @@ class App:
     async def setup_link_create(self, request):
         p = self.authenticate(request)
         self.need(p, "admin")
+        self.need_web(p)
         pid = request.path_params["id"]
 
         async def go():
@@ -230,6 +276,8 @@ class App:
     async def phone_revoke(self, request):
         p = self.authenticate(request)
         pid = request.path_params["id"]
+        if p.get("app") and pid != p.get("phone_id"):
+            self.need_web(p)                                     # revoking ANOTHER device needs the web sign-in; the device itself may always sign itself out
 
         async def go():
             self.people.revoke_phone(p, pid)
@@ -832,6 +880,9 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/auth/logout", a.logout, methods=["POST"]),
         Route("/v1/auth/session", a.session, methods=["GET"]),
         Route("/v1/enrol", a.enrol, methods=["POST"]),
+        Route("/v1/app/login", a.app_login, methods=["POST"]),
+        Route("/v1/app/session", a.app_session, methods=["POST"]),
+        Route("/v1/app/logout", a.app_logout, methods=["POST"]),
         Route("/v1/capabilities", a.capabilities, methods=["GET"]),
         Route("/v1/people", a.people_list, methods=["GET"]),
         Route("/v1/people", a.people_create, methods=["POST"]),
@@ -906,6 +957,24 @@ def build(app_obj, extra_routes=(), lifespan=None):
     async def server_error(request, exc):
         return err_response(GwError(500, "internal_error", "internal error"))        # no detail: an exception text could contain a secret
 
-    app = Starlette(routes=routes, lifespan=lifespan, exception_handlers={GwError: gw_error, 404: not_found, 405: method_not_allowed, Exception: server_error})
+    class NoStore:
+        """Task 30: no API answer is ever cacheable (a stale "OFF" on a heater switch is worse than an error). Adds the header where a handler did not set one."""
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http" or not scope["path"].startswith("/v1/"):
+                return await self.app(scope, receive, send)
+
+            async def send2(message):
+                if message["type"] == "http.response.start":
+                    hs = list(message.get("headers") or [])
+                    if not any(k.lower() == b"cache-control" for k, _v in hs):
+                        hs.append((b"cache-control", b"no-store"))
+                    message = dict(message, headers=hs)
+                await send(message)
+            return await self.app(scope, receive, send2)
+
+    app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(NoStore)], exception_handlers={GwError: gw_error, 404: not_found, 405: method_not_allowed, Exception: server_error})
     app.state.core = a
     return app

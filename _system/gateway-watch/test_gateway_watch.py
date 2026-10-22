@@ -92,5 +92,17 @@ check("reverts older than 48 h leave the list: both cleared", ("clear", "gateway
 n, _ = run(full=dict(HEALTH))
 check("a gateway that does not report reverts (older build): no alert", n.alerts() == [])
 
+nd1 = {"id": "p-aaa", "person": "Дарья", "device": "Pixel Daria", "model": "Pixel 8", "created_at": "2026-10-23T09:00:00+0200"}
+n, st = run(full=dict(HEALTH, new_devices=[nd1]))
+check("the first run only records the devices that already exist: no message", n.alerts() == [] and st["nd_alerted"] == ["p-aaa"])
+n, st = run(state=st, full=dict(HEALTH, new_devices=[nd1, dict(nd1, id="p-bbb")]))
+check("a device that appears later: ONE tier-B message", n.alerts() == [("gateway-new-device-p-bbb", "B")])
+n, st = run(state=st, full=dict(HEALTH, new_devices=[nd1, dict(nd1, id="p-bbb")]))
+check("the same device is not announced again", n.alerts() == [])
+n, st = run(state=st, full=dict(HEALTH, new_devices=[dict(nd1, id="p-bbb")]))
+check("a device that left the list (revoked or older than 48 h) is cleared quietly", ("clear", "gateway-new-device-p-aaa") in n.calls and n.alerts() == [])
+n, _ = run(state={"nd_alerted": []}, full=dict(HEALTH))
+check("a gateway build that does not report new devices: no alert", n.alerts() == [])
+
 print("\n%d failed" % len(FAILS))
 sys.exit(1 if FAILS else 0)

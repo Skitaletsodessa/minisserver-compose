@@ -20,11 +20,28 @@
     Object.keys(extra || {}).forEach(function (k) { h[k] = extra[k]; });
     return fetch(path, { method: method, headers: h, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin" })
       .then(function (r) {
+        netBanner(false);
         if (r.status === 401) { location.href = "/login"; return new Promise(function () {}); }
         if (r.status === 204) { return { ok: true, status: 204, json: null, headers: r.headers }; }
         return r.json().then(function (j) { return { ok: r.ok, status: r.status, json: j, headers: r.headers }; }, function () { return { ok: r.ok, status: r.status, json: null, headers: r.headers }; });
+      }, function () {                                    // fetch itself failed: no route to the house (Tailscale off, server down) - say so, never freeze
+        netBanner(true);
+        return { ok: false, status: 0, json: { error: { code: "network", message: T("net_down_short") } }, headers: new Headers() };
       });
   }
+  function netBanner(on) { var b = document.getElementById("net-banner"); if (b) { b.hidden = !on; } }
+  (function lifecycle() {                               // Task 30: a phone sleeps and wakes; never show a frozen, stale page
+    var hiddenAt = 0;
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > 30000) { location.reload(); }          // the event stream may be dead and the states old: reload what the page shows
+    });
+    window.addEventListener("offline", function () { netBanner(true); });
+    window.addEventListener("online", function () { location.reload(); });
+    document.addEventListener("click", function (ev) {
+      if (ev.target.closest("#refresh,#net-retry")) { location.reload(); }
+    });
+  }());
   function q(sel, root) { return (root || document).querySelector(sel); }
   function qa(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
   function hhmm(iso) { return iso ? iso.slice(11, 16) : ""; }
@@ -134,6 +151,11 @@
   function listen(handlers) {
     if (!window.EventSource) { return; }
     var es = new EventSource("/v1/events");
+    es.onopen = function () { netBanner(false); };
+    es.onerror = function () {                                         // the browser retries by itself (retry: 3000); until it succeeds the page says it is not live
+      netBanner(true);
+      if (es.readyState === 2) { api("GET", "/v1/auth/session"); }     // closed for good: an expired or revoked session answers 401 here and sends the page to /login
+    };
     Object.keys(handlers).forEach(function (t) { es.addEventListener(t, function (ev) { try { handlers[t](JSON.parse(ev.data)); } catch (e) { /* ignore a malformed event */ } }); });
     return es;
   }
