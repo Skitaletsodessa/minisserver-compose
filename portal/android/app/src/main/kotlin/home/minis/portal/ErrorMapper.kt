@@ -7,7 +7,7 @@ object ErrorMapper {
     data class Screen(val kind: Kind, val title: String, val text: String, val showTailscale: Boolean, val showRetry: Boolean, val showSignIn: Boolean)
 
     fun forStartup(e: GatewayError): Screen = when (e) {
-        is GatewayError.Network -> Screen(Kind.NETWORK, Texts.NET_TITLE, Texts.NET_TEXT, showTailscale = true, showRetry = true, showSignIn = false)
+        is GatewayError.Network -> Screen(Kind.NETWORK, Texts.NET_TITLE, Texts.NET_TEXT, showTailscale = false, showRetry = true, showSignIn = false)
         is GatewayError.Tls -> Screen(Kind.TLS, Texts.TLS_TITLE, Texts.TLS_TEXT, showTailscale = false, showRetry = true, showSignIn = false)
         is GatewayError.Revoked -> Screen(Kind.SIGN_IN_AGAIN, Texts.BTN_SIGN_IN_AGAIN, Texts.RELOGIN_REVOKED, showTailscale = false, showRetry = false, showSignIn = true)
         is GatewayError.Throttled, is GatewayError.Server, is GatewayError.Protocol, is GatewayError.BadLogin, is GatewayError.DeviceLimit ->

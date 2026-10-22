@@ -528,3 +528,14 @@ class Download(AppBase):
         _r, ck = self.app_session(res["token"])
         self.assertIn('href="/app/about"', self.with_cookie("GET", "/home", ck).text)
         self.assertNotIn('href="/app/about"', self.with_cookie("GET", "/home", self.web).text)
+
+
+class FailedLogins(AppBase):
+    def test_health_counts_failed_sign_ins_of_the_last_hour_and_their_addresses(self):
+        before = self.e.req("GET", "/v1/health", who="ivan").json()["failed_logins_1h"]
+        for i in range(3):
+            self.app_login("ghost", password="bad password 000000", totp=None, ip="8.8.%d.1" % i)
+        after = self.e.req("GET", "/v1/health", who="ivan").json()["failed_logins_1h"]
+        self.assertEqual(after["count"] - before["count"], 3)
+        self.assertGreaterEqual(after["addresses"], 3)
+        self.assertNotIn("ghost", json.dumps(after))

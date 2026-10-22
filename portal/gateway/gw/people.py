@@ -216,6 +216,11 @@ class People:
             self.hub.kick(phone_id)
         self.db.audit("app_logout", person=principal["person_id"], phone=phone_id, ip=principal.get("ip"))
 
+    def failed_login_stats(self, seconds=3600):
+        """For the watcher (via /v1/health): failed sign-in attempts of the last hour (web and app) and from how many addresses - the public door makes guessing visible."""
+        rows = self.db.q("SELECT ip FROM login_attempts WHERE ok=0 AND account<>'enrol' AND ts>?", (self.clock() - seconds,))
+        return {"count": len(rows), "addresses": len({r["ip"] for r in rows})}
+
     def recent_new_phones(self, hours=48):
         """For the host-side watcher (via /v1/health): devices created in the last hours, so one Telegram message per new device can be sent."""
         rows = self.db.q("SELECT ph.id, ph.label, ph.model, ph.created, p.name AS pname FROM phones ph JOIN people p ON p.id=ph.person_id WHERE ph.created>? AND ph.revoked=0 AND ph.expires>? ORDER BY ph.created",

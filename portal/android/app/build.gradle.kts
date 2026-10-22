@@ -20,8 +20,8 @@ android {
         applicationId = "home.minis.portal"
         minSdk = 30              // Android 11: fingerprint-bound Keystore keys that the device PIN can also unlock through the system prompt
         targetSdk = 36           // Android 16
-        versionCode = 2          // must go up with every build and never down: an update installs only over a lower versionCode with the same signing key
-        versionName = "1.0.1"
+        versionCode = 3          // must go up with every build and never down: an update installs only over a lower versionCode with the same signing key
+        versionName = "1.0.2"
     }
 
     signingConfigs {

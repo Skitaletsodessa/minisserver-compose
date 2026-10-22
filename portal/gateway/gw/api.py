@@ -138,7 +138,8 @@ class App:
                              "probes": {"last_run_age_s": round(self.clock() - self.core.probe_ts, 1) if self.core.probe_ts else None},
                              "audit_chain": {"ok": ok, "rows": rows},
                              "filter_reverts": self.filters.recent_reverts() if self.filters else [],
-                             "new_devices": self.people.recent_new_phones()})
+                             "new_devices": self.people.recent_new_phones(),
+                             "failed_logins_1h": self.people.failed_login_stats()})
 
     async def login(self, request):
         b = await self.body(request)

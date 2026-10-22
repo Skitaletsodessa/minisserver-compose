@@ -81,9 +81,9 @@ class LockPolicyTest {
 }
 
 class ErrorMapperTest {
-    @Test fun `no connection offers Tailscale and retry`() {
+    @Test fun `no connection offers a retry (no VPN is needed any more)`() {
         val s = ErrorMapper.forStartup(GatewayError.Network("x"))
-        assertEquals(Texts.NET_TITLE, s.title); assertTrue(s.showTailscale && s.showRetry && !s.showSignIn)
+        assertEquals(Texts.NET_TITLE, s.title); assertTrue(!s.showTailscale && s.showRetry && !s.showSignIn)
     }
 
     @Test fun `a revoked token means signing in again`() {

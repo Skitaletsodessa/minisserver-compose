@@ -4,7 +4,7 @@ import java.net.URI
 
 /** Validation of the sign-in form (pure; the password is never put into a message, a log or an exception). */
 object SignInForm {
-    const val DEFAULT_URL = "https://minisserver.tail6bf4d5.ts.net:17443"
+    const val DEFAULT_URL = "https://minisserver.tail6bf4d5.ts.net"      // the public door (Funnel :443, ADR 0009): works from any network, no VPN
 
     data class Result(val ok: Boolean, val nameError: String? = null, val passwordError: String? = null, val totpError: String? = null, val urlError: String? = null,
                       val name: String = "", val totp: String? = null, val baseUrl: String = DEFAULT_URL)

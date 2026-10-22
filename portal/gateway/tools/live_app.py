@@ -20,7 +20,8 @@ import urllib.request
 sys.path.insert(0, "/srv/compose/portal/gateway")
 from gw import auth  # noqa: E402
 
-BASE = "http://127.0.0.1:17444"
+BASE = "http://127.0.0.1:17444"                       # the setup link is completed over loopback (the public door has no /setup)
+API = os.environ.get("LIVE_APP_BASE", BASE)              # everything else goes here: set LIVE_APP_BASE=https://minisserver.tail6bf4d5.ts.net to prove the PUBLIC door
 GWCTL = "/srv/compose/portal/gateway/gwctl"
 OUT = "/srv/apps/portal/gateway/out"
 FAILS = []
@@ -32,7 +33,7 @@ def check(name, cond, detail=""):
         FAILS.append(name)
 
 
-def call(method, path, body=None, headers=None, raw=False):
+def call(method, path, body=None, headers=None, raw=False, base=None):
     h = dict(headers or {})
     data = None
     if body is not None:
@@ -40,7 +41,7 @@ def call(method, path, body=None, headers=None, raw=False):
         h.setdefault("Content-Type", "application/json" if not isinstance(body, bytes) else "application/x-www-form-urlencoded")
     if method in ("POST", "PUT", "PATCH", "DELETE") and "Idempotency-Key" not in h:
         h["Idempotency-Key"] = "live-" + secrets.token_hex(6)
-    req = urllib.request.Request(BASE + path, data=data, method=method, headers=h)
+    req = urllib.request.Request((base or API) + path, data=data, method=method, headers=h)
     try:
         r = urllib.request.urlopen(req, timeout=60)
         return r.status, r.read(), r.headers
@@ -63,11 +64,11 @@ def main():
     path = re.search(r"/data/out/(\S+)", r.stdout)
     link_file = os.path.join(OUT, path.group(1)) if path else None
     raw = open(link_file).read().strip().rsplit("/", 1)[-1]
-    st, page, _ = call("GET", "/setup/" + raw)
+    st, page, _ = call("GET", "/setup/" + raw, base=BASE)
     seed = re.search(rb'class="seed">([A-Z2-7]+)<', page).group(1).decode()
     password = "Live-proof-" + secrets.token_urlsafe(18)
     form = urllib.parse.urlencode({"password": password, "code": auth.totp_now(seed)}).encode()
-    st, _b, _h = call("POST", "/setup/" + raw, form)
+    st, _b, _h = call("POST", "/setup/" + raw, form, base=BASE)
     check("the synthetic admin completed its own setup link (password + authenticator)", st == 200, str(st))
     os.remove(link_file)
     ip = {"X-Forwarded-For": "10.77.%d.%d" % (int(time.time()) % 250, int(time.time() * 7) % 250)}
@@ -91,15 +92,20 @@ def main():
     for label, m, p, body in (("people list", "GET", "/v1/people", None), ("enrolment code", "POST", "/v1/people/ivan/enrolment-codes", None), ("filter lists", "GET", "/v1/parental/filter-lists", None),
                               ("device candidates", "GET", "/v1/parental/candidates", None)):
         st, b, _h = call(m, p, body, dict(ck, **{"X-CSRF-Token": csrf}))
-        check("%s from an app session: 403 web_login_required" % label, st == 403 and json.loads(b)["error"]["code"] == "web_login_required", str((st, b[:80])))
+        check("%s from an app session: 403 web_login_required (on the public door: closed at the edge, 404)" % label, (st == 403 and json.loads(b)["error"]["code"] == "web_login_required") or (API != BASE and st == 404), str((st, b[:80])))
     st, b, _h = call("GET", "/people", None, ck)
-    check("the /people page is refused for the app session", st == 403)
+    check("the /people page is refused for the app session", st == 403 or (API != BASE and st == 404))
     st, b, _h = call("GET", "/app/download", None, ck)
-    check("the APK page is refused for an admin APP session", st == 403)
+    check("the APK page is refused for an admin APP session", st == 403 or (API != BASE and st == 404))
     st, b, _h = call("GET", "/app/manifest.webmanifest")
     check("the manifest is public and standalone", st == 200 and json.loads(b)["display"] == "standalone")
     st, b, h = call("GET", "/v1/devices", None, ck)
     check("API answers carry no-store", st == 200 and "no-store" in h.get("Cache-Control", ""))
+    if API != BASE:                                           # the public door: what must NOT be reachable from the internet
+        for label, m, p in (("web login page", "GET", "/login"), ("web login API", "POST", "/v1/auth/login"), ("setup page", "GET", "/setup/x"), ("old enrolment", "POST", "/v1/enrol"),
+                            ("people list", "GET", "/v1/people"), ("phones list", "GET", "/v1/phones"), ("APK page", "GET", "/app/download"), ("APK file", "GET", "/app/download.apk")):
+            st, b, _h = call(m, p, None if m == "GET" else {}, ck)
+            check("PUBLIC DOOR: %s is closed (404) even with a valid app session" % label, st == 404, str(st))
     st, b, _h = call("POST", "/v1/app/logout", None, H)
     check("logout revokes this device (204)", st == 204, str(st))
     st, b, _h = call("GET", "/v1/capabilities", None, H)

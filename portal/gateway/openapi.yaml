@@ -941,6 +941,7 @@ components:
         schedule_service: {type: object, properties: {link: {type: string}, in_sync: {type: [boolean, "null"]}}}
         probes: {type: object, properties: {last_run_age_s: {type: [number, "null"]}}}
         audit_chain: {type: object, properties: {ok: {type: boolean}, rows: {type: integer}}}
+        failed_logins_1h: {type: object, description: "failed sign-in attempts of the last hour and from how many addresses (for the host-side watcher; the public door makes guessing visible)", properties: {count: {type: integer}, addresses: {type: integer}}}
         new_devices: {type: array, description: "devices created in the last 48 h (for the host-side watcher's one Telegram message per device)", items: {type: object, properties: {id: {type: string}, person: {type: string}, device: {type: string}, model: {type: [string, "null"]}, created_at: {type: string}}}}
     Session:
       type: object

@@ -154,7 +154,7 @@
     es.onopen = function () { netBanner(false); };
     es.onerror = function () {                                         // the browser retries by itself (retry: 3000); until it succeeds the page says it is not live
       netBanner(true);
-      if (es.readyState === 2) { api("GET", "/v1/auth/session"); }     // closed for good: an expired or revoked session answers 401 here and sends the page to /login
+      if (es.readyState === 2) { api("GET", "/v1/capabilities"); }       // closed for good: an expired or revoked session answers 401 here and sends the page to /login
     };
     Object.keys(handlers).forEach(function (t) { es.addEventListener(t, function (ev) { try { handlers[t](JSON.parse(ev.data)); } catch (e) { /* ignore a malformed event */ } }); });
     return es;
