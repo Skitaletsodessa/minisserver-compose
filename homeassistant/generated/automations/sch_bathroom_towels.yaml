@@ -11,14 +11,12 @@
       target:
         entity_id: "switch.bathroom_towels"
 - id: "sch_bathroom_towels_morning_off"
-  alias: "Sch bathroom_towels morning OFF 08:00 [sch 0fad201b]"
+  alias: "Sch bathroom_towels morning OFF 08:00 [sch 4011f381]"
   mode: "single"
   trigger:
     - platform: "time"
       at: "08:00:00"
-  condition:
-    - condition: "template"
-      value_template: "{{ not ((1792669015 <= now().timestamp() < 1792670820)) }}"
+  condition: []
   action:
     - service: "switch.turn_off"
       target:
@@ -35,14 +33,12 @@
       target:
         entity_id: "switch.bathroom_towels"
 - id: "sch_bathroom_towels_evening_off"
-  alias: "Sch bathroom_towels evening OFF 20:00 [sch 40b2a0c4]"
+  alias: "Sch bathroom_towels evening OFF 20:00 [sch 063c8682]"
   mode: "single"
   trigger:
     - platform: "time"
       at: "20:00:00"
-  condition:
-    - condition: "template"
-      value_template: "{{ not ((1792669015 <= now().timestamp() < 1792670820)) }}"
+  condition: []
   action:
     - service: "switch.turn_off"
       target:
@@ -75,25 +71,3 @@
       from: "unavailable"
   action:
     - service: "script.sch_reconcile_bathroom_towels"
-- id: "sch_bathroom_towels_runend_raf1f454145"
-  alias: "Sch bathroom_towels run end 14:07 [sch e89a7a85]"
-  mode: "single"
-  trigger:
-    - platform: "time_pattern"
-      minutes: "/1"
-  condition:
-    - condition: "template"
-      value_template: "{{ 1792670820 <= now().timestamp() < 1792672020 }}"
-    - condition: "state"
-      entity_id: "switch.bathroom_towels"
-      state: "on"
-    - condition: "template"
-      value_template: "{{ states.switch.bathroom_towels.last_changed.timestamp() <= 1792670820 }}"
-  action:
-    - service: "switch.turn_off"
-      target:
-        entity_id: "switch.bathroom_towels"
-    - service: "logbook.log"
-      data:
-        name: "Sch run end"
-        message: "switch.bathroom_towels: timed run ended, switched OFF"
