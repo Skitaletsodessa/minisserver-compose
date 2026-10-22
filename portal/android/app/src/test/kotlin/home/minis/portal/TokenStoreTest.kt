@@ -27,7 +27,7 @@ class TokenStoreTest {
     private class SoftBox : KeyBox {
         var key: SecretKey? = null
         var invalidated = false
-        override fun encryptCipher(): Cipher {
+        override fun encryptCipher(strict: Boolean): Cipher {
             key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
             return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
         }
@@ -44,7 +44,7 @@ class TokenStoreTest {
     private fun sealed(): Triple<TokenStore, MemStore, SoftBox> {
         val p = MemStore(); val k = SoftBox()
         val s = TokenStore(p, k)
-        s.seal(s.encryptCipher(), token, ivan, "https://gw.test", "Pixel 8")
+        s.seal(s.encryptCipher(true), token, ivan, "https://gw.test", "Pixel 8")
         return Triple(s, p, k)
     }
 
@@ -82,11 +82,22 @@ class TokenStoreTest {
         assertFalse(s.hasToken()); assertTrue(p.m.isEmpty()); assertNull(k.key); assertNull(s.person())
     }
 
+    @Test fun `the lock mode is remembered - strict by default and fallback only when it was made so`() {
+        val p = MemStore(); val k = SoftBox(); val s = TokenStore(p, k)
+        assertTrue(s.isStrict())
+        s.seal(s.encryptCipher(false), "t", ivan, "u", "d", strict = false)
+        assertFalse(s.isStrict())
+        s.seal(s.encryptCipher(true), "t2", ivan, "u", "d", strict = true)
+        assertTrue(s.isStrict())
+        s.wipe()
+        assertTrue(s.isStrict())
+    }
+
     @Test fun `sealing twice uses a fresh key and iv each time and the old ciphertext is useless with the new key`() {
         val p = MemStore(); val k = SoftBox(); val s = TokenStore(p, k)
-        s.seal(s.encryptCipher(), "first-token", ivan, "u", "d")
+        s.seal(s.encryptCipher(true), "first-token", ivan, "u", "d")
         val oldCt = p.m["ct"]!!; val oldIv = p.m["iv"]!!
-        s.seal(s.encryptCipher(), "second-token", ivan, "u", "d")
+        s.seal(s.encryptCipher(true), "second-token", ivan, "u", "d")
         assertNotEquals(oldCt, p.m["ct"]); assertNotEquals(oldIv, p.m["iv"])
         assertEquals("second-token", s.open(s.decryptCipher()))
         p.m["ct"] = oldCt                                              // the old ciphertext under the new key (and the new iv) does not verify

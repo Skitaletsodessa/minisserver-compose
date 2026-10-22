@@ -66,6 +66,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var totpEdit: EditText
     private lateinit var urlEdit: EditText
     private lateinit var signInMessage: TextView
+    private lateinit var lockMessage: TextView
     private lateinit var signInButton: Button
     private lateinit var errorTitle: TextView
     private lateinit var errorText: TextView
@@ -172,7 +173,7 @@ class MainActivity : FragmentActivity() {
             if (r.urlError != null) { urlEdit.visibility = View.VISIBLE; urlEdit.error = r.urlError }
             return
         }
-        if (!canUseFingerprint()) {
+        if (!canProtect()) {
             Arrays.fill(pw, '\u0000')
             signInMessage.text = Texts.NO_SECURE_LOCK
             signInMessage.visibility = View.VISIBLE
@@ -195,49 +196,75 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun sealAfterLogin(res: LoginResult, url: String, device: String) {
-        val cipher = try { store.encryptCipher() } catch (e: Exception) { abandonLogin(res, url); return }
-        authenticate(cipher, Texts.PROMPT_SEAL_TITLE, Texts.PROMPT_SEAL_SUBTITLE, onOk = { c ->
+        val bm = BiometricManager.from(this)
+        val strongOk = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+        val forceFallback = BuildConfig.DEBUG && java.io.File(filesDir, "force-fallback").exists()      // emulator test hook, debug builds only
+        attemptSeal(res, url, device, strict = strongOk && !forceFallback)
+    }
+
+    /** Seals the token behind the fingerprint. STRICT = fingerprint only. If the strict key cannot be made or used on this phone, ONE retry with the fallback key
+     *  (fingerprint or the phone's PIN). Whatever fails is shown with its cause, so that a phone that behaves differently can be diagnosed from the message. */
+    private fun attemptSeal(res: LoginResult, url: String, device: String, strict: Boolean) {
+        val canFallback = strict && BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL) == BiometricManager.BIOMETRIC_SUCCESS
+        val cipher = try {
+            store.encryptCipher(strict)
+        } catch (e: Exception) {
+            if (canFallback) { attemptSeal(res, url, device, strict = false); return }
+            abandonLogin(res, url, Texts.SEAL_FAILED + " (ключ: " + e.javaClass.simpleName + ")"); return
+        }
+        authenticate(cipher, strict, Texts.PROMPT_SEAL_TITLE, Texts.PROMPT_SEAL_SUBTITLE, onOk = { c ->
             try {
-                store.seal(c, res.token, res.person, url, device)
+                store.seal(c, res.token, res.person, url, device, strict)
                 base = url
                 person = res.person
                 token = res.token
                 startSession()
             } catch (e: Exception) {
-                abandonLogin(res, url)
+                abandonLogin(res, url, Texts.SEAL_FAILED + " (запись: " + e.javaClass.simpleName + ")")
             }
-        }, onFail = { _ -> abandonLogin(res, url) })
+        }, onFail = { code, msg ->
+            when {
+                code == BiometricPrompt.ERROR_USER_CANCELED || code == BiometricPrompt.ERROR_NEGATIVE_BUTTON || code == BiometricPrompt.ERROR_CANCELED -> abandonLogin(res, url, Texts.SIGN_IN_CANCELLED)
+                canFallback -> attemptSeal(res, url, device, strict = false)
+                else -> abandonLogin(res, url, Texts.SEAL_FAILED + " (" + msg + ", код " + code + ")")
+            }
+        })
     }
 
-    /** The fingerprint was not confirmed: the access the gateway just issued is revoked again, nothing is kept on the phone. */
-    private fun abandonLogin(res: LoginResult, url: String) {
+    /** The access the gateway just issued is revoked again, nothing is kept on the phone. */
+    private fun abandonLogin(res: LoginResult, url: String, message: String) {
         executor.execute { try { Gateway(url).logout(res.token) } catch (_: GatewayError) { /* best effort */ } }
         store.wipe()
-        showSignIn(Texts.SIGN_IN_CANCELLED)
+        showSignIn(message)
     }
 
     // ── lock ───────────────────────────────────────────────────────────────────────────────────────────────────────
-    private fun canUseFingerprint(): Boolean =
-        BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+    /** A phone can protect the access when it has a strong fingerprint OR (fallback) a screen lock the system prompt can use. */
+    private fun canProtect(): Boolean {
+        val bm = BiometricManager.from(this)
+        return bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS ||
+            bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL) == BiometricManager.BIOMETRIC_SUCCESS
+    }
 
-    private fun authenticate(cipher: Cipher, title: String, subtitle: String, onOk: (Cipher) -> Unit, onFail: (Int) -> Unit) {
+    private fun authenticate(cipher: Cipher, strict: Boolean, title: String, subtitle: String, onOk: (Cipher) -> Unit, onFail: (Int, String) -> Unit) {
         val cb = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 val c = result.cryptoObject?.cipher
-                if (c == null) onFail(-1) else onOk(c)
+                if (c == null) onFail(-1, "нет шифра") else onOk(c)
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                onFail(errorCode)
+                onFail(errorCode, errString.toString())
             }
         }
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setSubtitle(subtitle)
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .setNegativeButtonText(Texts.BTN_CANCEL)
-            .build()
-        BiometricPrompt(this, ContextCompat.getMainExecutor(this), cb).authenticate(info, BiometricPrompt.CryptoObject(cipher))
+        val b = BiometricPrompt.PromptInfo.Builder().setTitle(title).setSubtitle(subtitle)
+        if (strict) b.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText(Texts.BTN_CANCEL)
+        else b.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        try {
+            BiometricPrompt(this, ContextCompat.getMainExecutor(this), cb).authenticate(b.build(), BiometricPrompt.CryptoObject(cipher))
+        } catch (e: Exception) {
+            onFail(-2, e.javaClass.simpleName)
+        }
     }
 
     private fun promptUnlock() {
@@ -249,10 +276,17 @@ class MainActivity : FragmentActivity() {
         } catch (e: Exception) {
             wipeAndSignIn(Texts.RELOGIN_KEY_LOST); return
         }
-        authenticate(cipher, Texts.PROMPT_UNLOCK_TITLE, Texts.PROMPT_UNLOCK_SUBTITLE, onOk = { c ->
+        lockMessage.visibility = View.GONE
+        authenticate(cipher, store.isStrict(), Texts.PROMPT_UNLOCK_TITLE, Texts.PROMPT_UNLOCK_SUBTITLE, onOk = { c ->
             val t = store.open(c)
             if (t == null) wipeAndSignIn(Texts.RELOGIN_KEY_LOST) else { token = t; startSession() }
-        }, onFail = { _ -> /* cancelled or locked out: stay on the lock screen, the button asks again; there is no way around the prompt */ })
+        }, onFail = { code, msg ->
+            // cancelled or locked out: stay on the lock screen (the button asks again; there is no way around the prompt) and SAY what the system said
+            if (code != BiometricPrompt.ERROR_USER_CANCELED && code != BiometricPrompt.ERROR_NEGATIVE_BUTTON && code != BiometricPrompt.ERROR_CANCELED) {
+                lockMessage.text = msg + " (код " + code + ")"
+                lockMessage.visibility = View.VISIBLE
+            }
+        })
     }
 
     private fun lockNow() {
@@ -481,9 +515,11 @@ class MainActivity : FragmentActivity() {
         signInView = ScrollView(this).apply { isFillViewport = true; addView(form) }
 
         // locked
+        lockMessage = label("").apply { visibility = View.GONE; setTextColor(0xFFB3261E.toInt()) }
         lockView = column().apply {
             gravity = Gravity.CENTER
             addView(label(Texts.LOCK_TITLE, 22f, true))
+            addView(lockMessage)
             addView(button(Texts.LOCK_BUTTON) { promptUnlock() })
         }
 

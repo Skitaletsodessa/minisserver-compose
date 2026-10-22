@@ -28,15 +28,15 @@ class PrefsStore(context: Context) : KeyValueStore {
 class KeystoreBox : KeyBox {
     private val ks: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
-    private fun create() {
+    private fun create(strict: Boolean) {
         val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
             .setUserAuthenticationRequired(true)
-            // 0 = authenticate for every use; BIOMETRIC ONLY on purpose: a key that also accepts the device PIN is NOT invalidated by a new fingerprint (measured on the emulator),
-            // and the PIN would be a way around the fingerprint. The phone's own biometric lockout is cleared by unlocking the phone with its PIN.
-            .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+            // 0 = authenticate for every use. STRICT (the default): fingerprint only - a key that also accepts the device PIN is NOT invalidated by a new fingerprint (measured on the
+            // emulator) and the PIN would be a way around the fingerprint. FALLBACK (used only when the strict key cannot be made or used on this phone): fingerprint or the phone's PIN.
+            .setUserAuthenticationParameters(0, if (strict) KeyProperties.AUTH_BIOMETRIC_STRONG else (KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL))
             .setInvalidatedByBiometricEnrollment(true)
             .build()
         KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply { init(spec) }.generateKey()
@@ -44,9 +44,9 @@ class KeystoreBox : KeyBox {
 
     private fun key(): SecretKey? = ks.getKey(ALIAS, null) as? SecretKey
 
-    override fun encryptCipher(): Cipher {
+    override fun encryptCipher(strict: Boolean): Cipher {
         deleteKey()                                   // a fresh key for every sign-in: nothing sealed earlier can ever be opened with it
-        create()
+        create(strict)
         val k = key() ?: throw KeyInvalidated("key not created")
         return Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, k) }
     }

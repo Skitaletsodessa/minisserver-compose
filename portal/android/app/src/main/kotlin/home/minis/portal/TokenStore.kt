@@ -13,8 +13,8 @@ interface KeyValueStore {
 
 /** Gives out initialised ciphers. On the phone they are bound to an Android Keystore key that needs the user's authentication for EVERY use; in tests, to a software key. */
 interface KeyBox {
-    /** A cipher in ENCRYPT mode (the key is created if missing). */
-    fun encryptCipher(): Cipher
+    /** A cipher in ENCRYPT mode with a NEW key. [strict] = fingerprint only (invalidated by a new fingerprint); false = fingerprint or the phone's PIN (fallback). */
+    fun encryptCipher(strict: Boolean): Cipher
 
     /** A cipher in DECRYPT mode for the given IV. Throws [KeyInvalidated] when the key was invalidated (a new fingerprint was enrolled) or is gone. */
     fun decryptCipher(iv: ByteArray): Cipher
@@ -42,10 +42,14 @@ class TokenStore(private val prefs: KeyValueStore, private val keys: KeyBox) {
         return keys.decryptCipher(iv)
     }
 
-    fun encryptCipher(): Cipher = keys.encryptCipher()
+    fun encryptCipher(strict: Boolean): Cipher = keys.encryptCipher(strict)
+
+    /** True unless the key was made in the fallback mode (fingerprint or PIN). */
+    fun isStrict(): Boolean = prefs.get(K_MODE) != "fallback"
 
     /** [cipher] = the ENCRYPT cipher after the user's authentication. */
-    fun seal(cipher: Cipher, token: String, person: Person, baseUrl: String, deviceName: String) {
+    fun seal(cipher: Cipher, token: String, person: Person, baseUrl: String, deviceName: String, strict: Boolean = true) {
+        prefs.put(K_MODE, if (strict) "strict" else "fallback")
         val ct = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
         prefs.put(K_IV, b64.encodeToString(cipher.iv))
         prefs.put(K_CT, b64.encodeToString(ct))
@@ -80,5 +84,6 @@ class TokenStore(private val prefs: KeyValueStore, private val keys: KeyBox) {
         const val K_PERSON = "person"
         const val K_URL = "url"
         const val K_DEVICE = "device"
+        const val K_MODE = "mode"
     }
 }
