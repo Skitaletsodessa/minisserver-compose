@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, "/srv/compose/_system/lib")
 ADGUARD = os.environ.get("POLICY_DRIFT_ADGUARD", "/srv/compose/adguard")
 sys.path.insert(0, ADGUARD)
-STATE_FILE = os.environ.get("POLICY_DRIFT_STATE", "/var/lib/watch-alerts/policy-drift-watch.json")
+# NOT *.json: watchnotify.active_detail() lists every *.json in this directory as an open alert, and this state has a "since" key (null when clean) - the 08:00 heartbeat of 2026-10-22 reported a phantom "policy-drift-watch since <now>" alert
+STATE_FILE = os.environ.get("POLICY_DRIFT_STATE", "/var/lib/watch-alerts/policy-drift-watch.state")
 TRANSIENT_RUNS = 2
 PERSIST_S = 15 * 60
 JOB_STALE_S = 4 * 60
