@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ t('dl_title') }}{% endblock %}
+{% block body %}
+<section class="narrow">
+  <h1>{{ t('dl_title') }}</h1>
+  {% if apk %}
+  <p>{{ t('dl_version', v=apk.versionName, c=apk.versionCode) }}</p>
+  <p class="meta">{{ t('dl_size', s=(apk.size / 1048576)|round(1)) }}</p>
+  <p class="meta">SHA-256 APK:<br><span class="sha">{{ apk.sha256 }}</span></p>
+  <p class="meta">{{ t('dl_cert') }}<br><span class="sha">{{ apk.cert_sha256 }}</span></p>
+  <p><a class="linkbtn" href="/app/download.apk">{{ t('dl_button') }}</a></p>
+  <h2 class="sect">{{ t('dl_steps_title') }}</h2>
+  <ol class="steps">
+    <li>{{ t('dl_s1') }}</li><li>{{ t('dl_s2') }}</li><li>{{ t('dl_s3') }}</li><li>{{ t('dl_s4') }}</li><li>{{ t('dl_s5') }}</li>
+  </ol>
+  <p class="meta">{{ t('dl_update') }}</p>
+  {% else %}
+  <p class="msg warn">{{ t('dl_none') }}</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG BUILDS ONLY (src/debug): the emulator test trusts one throw-away self-signed certificate for localhost. The release build never sees this file. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="@raw/test_ca" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

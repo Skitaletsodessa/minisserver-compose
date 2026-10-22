@@ -476,3 +476,55 @@ class Pwa(AppBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Download(AppBase):
+    """/app/download (the page) and /app/download.apk (the file): admin web session only; the file's hash is recomputed and compared with the published one."""
+    def setUp(self):
+        super().setUp()
+        import hashlib
+        d = os.path.join(self.e.data, "app")
+        os.makedirs(d, exist_ok=True)
+        self.apk = b"PK\x03\x04 pretend apk " * 50
+        open(os.path.join(d, "portal.apk"), "wb").write(self.apk)
+        self.meta = {"versionName": "1.0.0", "versionCode": 1, "sha256": hashlib.sha256(self.apk).hexdigest(), "cert_sha256": "ab" * 32}
+        json.dump(self.meta, open(os.path.join(d, "portal.json"), "w"))
+        self.e.db.x("UPDATE credentials SET totp_last_step=0 WHERE person_id='webadmin'")
+        r = self.e.client.post("/v1/auth/login", json={"username": "webadmin", "password": PASSWORD, "totp": auth.totp_now(self.e.seeds["webadmin"])}, headers={"X-Forwarded-For": self.ip()})
+        self.web = {"Cookie": "gw_session=" + re.search(r"gw_session=([^;]+)", r.headers["set-cookie"]).group(1)}
+
+    def test_the_admin_on_the_web_gets_the_page_and_the_file(self):
+        page = self.with_cookie("GET", "/app/download", self.web)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(self.meta["sha256"], page.text)
+        self.assertIn("1.0.0", page.text)
+        self.assertIn("Разрешить установку из этого источника", page.text)
+        f = self.with_cookie("GET", "/app/download.apk", self.web)
+        self.assertEqual(f.status_code, 200)
+        self.assertEqual(f.headers["content-type"], "application/vnd.android.package-archive")
+        self.assertIn("attachment", f.headers["content-disposition"])
+        self.assertIn("dom-1.0.0.apk", f.headers["content-disposition"])
+        self.assertEqual(f.content, self.apk)
+
+    def test_nobody_else_gets_it(self):
+        self.assertEqual(self.e.client.get("/app/download", follow_redirects=False).status_code, 303)           # not signed in -> the login page
+        self.assertEqual(self.e.client.get("/app/download.apk", follow_redirects=False).status_code, 303)
+        res = self.signed_in("webadmin")
+        _r, ck = self.app_session(res["token"])
+        for p in ("/app/download", "/app/download.apk"):
+            self.assertEqual(self.with_cookie("GET", p, ck).status_code, 403, p)                              # an app session of the admin is refused too
+        res = self.signed_in("marta")
+        _r, ck = self.app_session(res["token"])
+        self.assertEqual(self.with_cookie("GET", "/app/download.apk", ck).status_code, 403)
+        self.assertEqual(self.e.req("GET", "/app/download.apk", who="ivan").status_code, 303)                  # a bearer token is not a web session
+
+    def test_a_file_that_does_not_match_its_published_hash_is_not_served(self):
+        open(os.path.join(self.e.data, "app", "portal.apk"), "ab").write(b"tampered")
+        self.assertEqual(self.with_cookie("GET", "/app/download.apk", self.web).status_code, 404)
+        self.assertIn("ещё не загружено", self.with_cookie("GET", "/app/download", self.web).text)
+
+    def test_the_about_link_exists_only_in_an_app_session(self):
+        res = self.signed_in("webadmin")
+        _r, ck = self.app_session(res["token"])
+        self.assertIn('href="/app/about"', self.with_cookie("GET", "/home", ck).text)
+        self.assertNotIn('href="/app/about"', self.with_cookie("GET", "/home", self.web).text)

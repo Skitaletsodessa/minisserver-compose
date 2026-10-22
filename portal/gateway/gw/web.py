@@ -174,6 +174,46 @@ def routes(app):
             return page(request, "setup.html", status=422, me=None, person=person, qr=buf.getvalue().decode(), seed=seed, token=raw, error=ERRORS.get(e.code) or e.message, done=False)
         return page(request, "message.html", me=None, title=S["setup_title"], text=S["setup_done"])
 
+    def apk_info():
+        """The APK the operator published in <data>/app/ (portal.apk + portal.json written by the build). The hash is recomputed from the file, never trusted from the json."""
+        import hashlib
+        d = os.path.join(os.path.dirname(a.db.jsonl), "app")
+        apk, meta = os.path.join(d, "portal.apk"), os.path.join(d, "portal.json")
+        if not (os.path.isfile(apk) and os.path.isfile(meta)):
+            return None
+        try:
+            m = json.load(open(meta, encoding="utf-8"))
+            sha = hashlib.sha256(open(apk, "rb").read()).hexdigest()
+            return {"path": apk, "sha256": sha, "size": os.path.getsize(apk), "versionName": str(m.get("versionName", "?")), "versionCode": int(m.get("versionCode", 0)),
+                    "cert_sha256": str(m.get("cert_sha256", "?")), "sha_ok": sha == str(m.get("sha256", "")).lower()}
+        except (OSError, ValueError):
+            return None
+
+    def download_gate(request):
+        p, r = me_or_redirect(request)
+        if r:
+            return None, r
+        if p["role"] != "admin" or p.get("app"):                         # admin web session only (ADR 0009): a stolen phone must not hand the app to anybody
+            return None, page(request, "message.html", status=403, me=p, title=S["dl_title"], text=ERRORS["web_login_required"] if p.get("app") else "403")
+        return p, None
+
+    async def download_page(request):
+        p, r = download_gate(request)
+        if r:
+            return r
+        info = apk_info()
+        return page(request, "download.html", me=p, apk=info if info and info["sha_ok"] else None, nav_active="download")
+
+    async def download_file(request):
+        p, r = download_gate(request)
+        if r:
+            return r
+        info = apk_info()
+        if not info or not info["sha_ok"]:
+            return Response("not found", status_code=404, media_type="text/plain")
+        return FileResponse(info["path"], media_type="application/vnd.android.package-archive", filename="dom-%s.apk" % info["versionName"],
+                            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
     async def manifest(request):                                       # Task 30: the PWA. Public on purpose (browsers fetch it without credentials); holds no family data
         doc = {"name": S["app_name"], "short_name": S["app_short"], "lang": "ru", "start_url": "/home", "scope": "/", "display": "standalone", "orientation": "portrait",
                "background_color": "#0f1216", "theme_color": "#1b6ef3",
@@ -201,6 +241,7 @@ def routes(app):
         Route("/logout", logout_post, methods=["POST"]), Route("/home", home, methods=["GET"]), Route("/settings/{id}", settings, methods=["GET"]),
         Route("/services", services, methods=["GET"]), Route("/people", people, methods=["GET"]), Route("/audit", audit, methods=["GET"]),
         Route("/parental", parental, methods=["GET"]), Route("/parental/filters", parental_filters, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
+        Route("/app/download", download_page, methods=["GET"]), Route("/app/download.apk", download_file, methods=["GET"]),
         Route("/app/manifest.webmanifest", manifest, methods=["GET"]), Route("/app/{name}", app_icon, methods=["GET"]),
         Route("/static/{path:path}", static, methods=["GET"]),
     ]

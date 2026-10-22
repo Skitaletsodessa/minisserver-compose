@@ -29,6 +29,7 @@
     {% endif %}
   </nav>
   <div class="topright">
+    {% if me.app %}<a class="iconbtn" href="/app/about" aria-label="{{ t('about_app') }}" title="{{ t('about_app') }}">&#9432;</a>{% endif %}
     <button type="button" class="iconbtn" id="refresh" aria-label="{{ t('refresh') }}" title="{{ t('refresh') }}">&#8635;</button>
     {% if not me.app %}<form method="post" action="/logout" class="logout"><input type="hidden" name="csrf" value="{{ csrf }}"><span class="who">{{ me.name }}</span><button type="submit">{{ t('logout') }}</button></form>{% else %}<span class="who">{{ me.name }}</span>{% endif %}
   </div>

@@ -116,3 +116,6 @@ body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-ins
 }
 .menu a { min-height: 48px; display: inline-flex; align-items: center; }
 .back { display: inline-flex; align-items: center; min-height: 48px; padding-right: 16px; }
+a.iconbtn { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; min-width: 48px; text-decoration: none; color: var(--ink); font-size: 1.4rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.steps li { margin: 8px 0; }
+.sha { font-family: ui-monospace, Consolas, monospace; word-break: break-all; font-size: .85rem; }
