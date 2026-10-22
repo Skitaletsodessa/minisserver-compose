@@ -4,7 +4,8 @@
 	}
 }
 
-minisserver.tail6bf4d5.ts.net {
+# Scrutiny (tailnet-only). Moved from plain :443 to :18443 on 2026-10-22 (Task 30): tailscaled now owns tailnet-address:443 for the Funnel ingress of the portal's public door below.
+minisserver.tail6bf4d5.ts.net:18443 {
 	bind 100.76.61.8
 	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
 	reverse_proxy 127.0.0.1:8080
@@ -176,4 +177,60 @@ minisserver.tail6bf4d5.ts.net:17443 {
 	# Task 28: portal gateway (web UI + /v1 API for the Android app) - tailnet only, never on the LAN, never public (no Funnel, no tunnel).
 	# The service listens on 127.0.0.1:17444; every API call needs a device token or a login session, failures are rate-limited per real client IP.
 	reverse_proxy 127.0.0.1:17444
+}
+
+# ── Task 30 (ADR 0009, Ivan's decision 2026-10-22: the family app must work WITHOUT Tailscale on the phone) ────────────────────────────────────────────────────────────
+# The portal's PUBLIC DOOR: Funnel :443 -> this loopback site -> the gateway (127.0.0.1:17444). Same design as :10000 (Immich) and :8443 (Navidrome): never Funnel straight to the app.
+# Only what the app needs is open. Everything that creates a WEB session or administers people/devices stays reachable only on the tailnet site :17443:
+#   no /login, no /v1/auth/*, no /setup/*, no old enrolment codes, no people/phones/audit lists, no APK download, no unauthenticated health detail.
+# What is left is /v1/app/login (name + password [+ code], rate-limited here AND per account/address inside the gateway), /v1/app/session (device token), /v1/app/logout, and the
+# pages/API an app session may use (an app session is itself refused every admin-only action: 403 web_login_required).
+:18080 {
+	bind 127.0.0.1
+	log {
+		output file /data/funnel-portal-access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		format json
+	}
+
+	@closed path /login /logout /setup /setup/* /v1/auth /v1/auth/* /v1/enrol /v1/people /v1/people/* /v1/phones /v1/phones/* /v1/audit /audit /people /app/download /app/download.apk /v1/health
+	handle @closed {
+		respond "not found" 404
+	}
+
+	handle {
+		# Funnel traffic arrives over loopback from tailscaled: the real client IP is X-Forwarded-For (trusted_proxies above) = {vars.client_ip}. Caddy is the enforcement point
+		# (no raw connection for a firewall), and the gateway must see the SAME real address for its own per-address throttle (otherwise every public client would share 127.0.0.1).
+		rate_limit {
+			zone app_login_per_ip {
+				match {
+					path /v1/app/login
+				}
+				key    {vars.client_ip}
+				events 5
+				window 5m
+			}
+			zone app_session_per_ip {
+				match {
+					path /v1/app/session
+				}
+				key    {vars.client_ip}
+				events 60
+				window 5m
+			}
+			zone all_per_ip {
+				match {
+					path /*
+				}
+				key    {vars.client_ip}
+				events 900
+				window 1m
+			}
+		}
+		reverse_proxy 127.0.0.1:17444 {
+			header_up X-Forwarded-For {vars.client_ip}
+		}
+	}
 }

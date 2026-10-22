@@ -28,6 +28,8 @@ TOKEN_FILE = os.environ.get("GATEWAY_WATCH_TOKEN", "/home/skit/.config/gateway-w
 STATE_FILE = os.environ.get("GATEWAY_WATCH_STATE", "/var/lib/watch-alerts/gateway-watch.json")
 DOWN_AFTER = 3
 DEGRADED_AFTER = 3
+LOGIN_BURST = 10          # failed sign-ins in the last hour that raise the message
+LOGIN_CALM = 3            # below this the message is cleared
 
 
 def http_json(path, token=None):
@@ -129,6 +131,14 @@ def evaluate(N, state, public, full, token_ok, addrs):
                 if did not in nd:
                     N.clear("gateway-new-device-" + did, "")
             state["nd_alerted"] = sorted(nd)
+
+    # Task 30: the portal now has a PUBLIC door (Funnel :443, ADR 0009): a burst of failed sign-ins is worth one message (tier B, no repeat) and is cleared when it calms down.
+    fl = full.get("failed_logins_1h")
+    if fl:
+        if fl.get("count", 0) >= LOGIN_BURST:
+            N.alert("gateway-failed-logins", "Портал: %d неудачных попыток входа за последний час (с %d адресов). Вход открыт из интернета; если это не вы - проверьте «Журнал» на сайте и смените пароли." % (fl["count"], fl.get("addresses", 0)), tier="B")
+        elif fl.get("count", 0) < LOGIN_CALM:
+            N.clear("gateway-failed-logins", "")
 
     if full.get("status") == "degraded":
         state["degraded"] = state.get("degraded", 0) + 1

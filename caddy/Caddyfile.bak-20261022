@@ -1,0 +1,179 @@
+{
+	servers {
+		trusted_proxies static 127.0.0.1/32
+	}
+}
+
+minisserver.tail6bf4d5.ts.net {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 127.0.0.1:8080
+}
+
+minisserver.tail6bf4d5.ts.net:12443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 192.168.31.2:8081
+}
+
+minisserver.tail6bf4d5.ts.net:13443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 20: AdGuard Home admin UI - tailnet only, never on the LAN, never public.
+	reverse_proxy 127.0.0.1:3000
+}
+
+minisserver.tail6bf4d5.ts.net:14443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 20: page to open YouTube/Roblox/Maps/everything for a limited time for the
+	# children's devices - tailnet only; the app itself also demands Basic auth.
+	reverse_proxy 127.0.0.1:8099
+}
+
+minisserver.tail6bf4d5.ts.net:9443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 192.168.31.2:8096
+}
+
+minisserver.tail6bf4d5.ts.net:10443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 192.168.31.2:4533
+}
+
+minisserver.tail6bf4d5.ts.net:11443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	reverse_proxy 192.168.31.2:2283
+}
+
+:10000 {
+	bind 127.0.0.1
+	log {
+		output file /data/funnel-immich-access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		format json
+	}
+
+	# Task 10: real client IP is available via X-Forwarded-For (trusted_proxies above) because
+	# Immich sits behind Tailscale Funnel, not a raw internet-facing socket - so a firewall-level
+	# ban has nothing to act on here; Caddy itself has to be the enforcement point.
+	# Task 11: widened past the login form to every endpoint that accepts a guessable secret.
+	# No real traffic was ever observed on these four (checked the access log first, per the task);
+	# thresholds are set by how guessable the secret is, not by an observed legitimate rate.
+	rate_limit {
+		zone login_per_ip {
+			match {
+				path /api/auth/login
+			}
+			key    {vars.client_ip}
+			events 5
+			window 5m
+		}
+		# PIN unlock/change/setup/reset and password change: all require an already-authenticated
+		# session (stolen-token threat model, not a cold internet guesser), but a 4-6 digit PIN is
+		# a small keyspace - worth throttling anyway. Longer window than login: legitimately rare.
+		zone secrets_per_ip {
+			match {
+				path /api/auth/session/unlock /api/auth/pin-code /api/auth/change-password
+			}
+			key    {vars.client_ip}
+			events 5
+			window 15m
+		}
+		# Shared-link passwords: the one secret in this list reachable with NO Immich account at
+		# all - anyone with a link ID can try. Same budget, same reasoning as secrets_per_ip.
+		zone shared_link_per_ip {
+			match {
+				path /api/shared-links/login /api/shared-links/me
+			}
+			key    {vars.client_ip}
+			events 5
+			window 15m
+		}
+	}
+
+	reverse_proxy 192.168.31.2:2283
+}
+
+:8443 {
+	bind 127.0.0.1
+	log {
+		output file /data/funnel-navidrome-access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		format json
+	}
+
+	# Task 15 §5: Navidrome publicly exposed via a second Funnel port, same design as Immich's
+	# :10000 (Funnel -> loopback Caddy -> app, never Funnel straight to the app). Real client IP
+	# via X-Forwarded-For, same reasoning as Immich (Funnel traffic arrives already-tunneled over
+	# loopback from tailscaled, so there is no raw connection for the OS firewall to block - Caddy
+	# is the only place that resolves the real client IP, so it has to be the enforcement point).
+	rate_limit {
+		zone navidrome_login_per_ip {
+			match {
+				path /auth/login
+			}
+			key    {vars.client_ip}
+			events 5
+			window 5m
+		}
+		# Task 18: /rest/* takes credentials on every request (u+p or u+t+s) and was left entirely
+		# unlimited - an open password-guessing endpoint on a public Funnel port, since the login
+		# limit above only covers the web form. Measured real per-IP traffic first (Caddy access
+		# log during normal Substreamer playback): median 1 req/min, p90 85, p99/peak 302 (one
+		# cover-art/offline-sync burst). Ceiling set at ~10x that peak - high enough that normal
+		# use, including a burst like the one observed, never trips it, low enough that an
+		# unthrottled guesser is meaningfully slowed rather than unlimited. Total-request count,
+		# not failed-auth count: Subsonic returns HTTP 200 with an in-body error code (40) on bad
+		# credentials, so Caddy can't distinguish a failed login from a successful one by status
+		# code alone - a response-code-based limit isn't available here, a total-request ceiling is
+		# the mechanism that exists.
+		zone navidrome_rest_per_ip {
+			match {
+				path /rest/*
+			}
+			key    {vars.client_ip}
+			events 3000
+			window 5m
+		}
+	}
+
+	reverse_proxy 192.168.31.2:4533
+}
+
+minisserver.tail6bf4d5.ts.net:15443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 25: Home Assistant — tailnet only, never on the LAN, never public via Funnel.
+	# Strip X-Forwarded-For so HA does not see this as a reverse-proxy request and does not
+	# trigger the "pending HTTP config" confirmation flow (tailnet-only: real client IPs
+	# are not needed inside HA; Tailscale ACLs enforce access).
+	reverse_proxy 127.0.0.1:8123 {
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Proto
+		header_up -X-Forwarded-Host
+	}
+}
+
+minisserver.tail6bf4d5.ts.net:16443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 27: portal schedule service (the single source of truth for schedules) - tailnet only, never on the LAN, never public.
+	# The service listens on 127.0.0.1:16444; every request needs a bearer token (roles admin/household/readonly) and failed attempts are rate-limited per client IP.
+	reverse_proxy 127.0.0.1:16444
+}
+
+minisserver.tail6bf4d5.ts.net:17443 {
+	bind 100.76.61.8
+	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
+	# Task 28: portal gateway (web UI + /v1 API for the Android app) - tailnet only, never on the LAN, never public (no Funnel, no tunnel).
+	# The service listens on 127.0.0.1:17444; every API call needs a device token or a login session, failures are rate-limited per real client IP.
+	reverse_proxy 127.0.0.1:17444
+}

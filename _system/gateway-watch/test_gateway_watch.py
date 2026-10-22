@@ -104,5 +104,14 @@ check("a device that left the list (revoked or older than 48 h) is cleared quiet
 n, _ = run(state={"nd_alerted": []}, full=dict(HEALTH))
 check("a gateway build that does not report new devices: no alert", n.alerts() == [])
 
+n, st = run(full=dict(HEALTH, failed_logins_1h={"count": 4, "addresses": 2}))
+check("a few failed sign-ins: nothing", n.alerts() == [])
+n, st = run(full=dict(HEALTH, failed_logins_1h={"count": 12, "addresses": 3}))
+check("a burst of failed sign-ins: ONE tier-B message", n.alerts() == [("gateway-failed-logins", "B")])
+n, st = run(full=dict(HEALTH, failed_logins_1h={"count": 1, "addresses": 1}))
+check("calm again: cleared", ("clear", "gateway-failed-logins") in n.calls)
+n, _ = run(full=dict(HEALTH))
+check("a build without the statistic: no alert", n.alerts() == [])
+
 print("\n%d failed" % len(FAILS))
 sys.exit(1 if FAILS else 0)
