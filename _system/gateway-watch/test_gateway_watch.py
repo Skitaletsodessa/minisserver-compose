@@ -114,4 +114,43 @@ n, _ = run(full=dict(HEALTH))
 check("a build without the statistic: no alert", n.alerts() == [])
 
 print("\n%d failed" % len(FAILS))
+# ── Task 30c: the update channel ──
+REL0 = {"published": None, "stopped": False, "pending": 0, "manifest_ok": None, "apk_ok": None, "key_ok": True}
+n, st = run(full=dict(HEALTH, release=REL0))
+check("channel with nothing published: no alert, state recorded", n.alerts() == [] and st["rel_notified"] == 0)
+n, st = run(state={}, full=dict(HEALTH, release=dict(REL0, published=4, manifest_ok=True, apk_ok=True)))
+check("first run with something already published: recorded, NOT announced", n.alerts() == [] and st["rel_notified"] == 4)
+st = {"rel_notified": 0}
+n, st = run(state=st, full=dict(HEALTH, release=dict(REL0, published=4, manifest_ok=True, apk_ok=True)))
+check("a release published later: ONE tier-B message", n.alerts() == [("gateway-release-4", "B")] and st["rel_notified"] == 4)
+n, st = run(state=st, full=dict(HEALTH, release=dict(REL0, published=4, manifest_ok=True, apk_ok=True)))
+check("the same publication is not announced again", n.alerts() == [])
+n, st = run(state=st, full=dict(HEALTH, release=dict(REL0, published=5, manifest_ok=True, apk_ok=True)))
+check("the next publication is announced on its own", n.alerts() == [("gateway-release-5", "B")])
+for field in ("manifest_ok", "apk_ok", "key_ok"):
+    n, _ = run(state={"rel_notified": 5}, full=dict(HEALTH, release=dict(REL0, **{"published": 5, "manifest_ok": True, "apk_ok": True, field: False})))
+    check("a channel with %s false: tier-B broken alert" % field, ("gateway-release-broken", "B") in n.alerts())
+n, _ = run(state={"rel_notified": 5}, full=dict(HEALTH, release=dict(REL0, published=5, manifest_ok=True, apk_ok=True)))
+check("a sound channel clears the broken alert", ("clear", "gateway-release-broken") in n.calls)
+n, _ = run(full=dict(HEALTH))
+check("a gateway build without the channel: no alert", n.alerts() == [])
+n = Rec()
+gw.evaluate(n, {}, True, HEALTH, True, GOOD, door=[])
+check("door checks on and clean: cleared, no alert", n.alerts() == [] and ("clear", "gateway-door-paths") in n.calls)
+n = Rec()
+gw.evaluate(n, {}, True, HEALTH, True, GOOD, door=["/app/update.json answers an anonymous caller with 200"])
+check("door problem: tier A", n.alerts() == [("gateway-door-paths", "A")])
+n = Rec()
+gw.evaluate(n, {}, True, HEALTH, True, GOOD, door=None)
+check("door checks not enabled yet: silent", n.alerts() == [] and not [c for c in n.calls if c[1:2] == ("gateway-door-paths",)])
+ANSW = {"/app/update.json": 401, "/app/releases/1/app.apk": 401, "/app/releases": 404, "/v1/releases": 404, "/app/download": 404, "/v1/people": 404}
+check("door_problems: the decided answers are clean", gw.door_problems(lambda u: ANSW[u.replace(gw.DOOR_URL, "")]) == [])
+for path, got in (("/app/update.json", 200), ("/app/releases/1/app.apk", 200), ("/app/releases", 303), ("/v1/releases", 401), ("/app/download", 200)):
+    a2 = dict(ANSW)
+    a2[path] = got
+    check("door_problems: %s answering %s is caught" % (path, got), len(gw.door_problems(lambda u: a2[u.replace(gw.DOOR_URL, "")])) == 1)
+check("door_problems: an unreachable door is not a false alarm", gw.door_problems(lambda u: None) == [])
+
+
+print("\n%d failed" % len(FAILS))
 sys.exit(1 if FAILS else 0)

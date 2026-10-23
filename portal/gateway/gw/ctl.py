@@ -11,6 +11,9 @@ is printed; the person it is for opens or reads that file themselves, and remove
   enrol-code ID                   writes a one-time enrolment code (10 min) to a file
   phones | phone-revoke ID
   audit [N] | verify              last N audit rows | verify the hash chain
+  release pin SHA256              record the APK signing certificate the channel trusts (once; never changed from here)
+  release add FILE --notes TEXT   verify an APK (package, signer = the pinned certificate, versionCode strictly higher, sound zip) and store it as PENDING
+  release list | verify           the releases and their states | check the published manifest signature and the APK hash (exit 1 on a problem)
   clean-out                       delete the files under /data/out/
 """
 import os
@@ -18,7 +21,7 @@ import sys
 import glob
 import time
 
-from . import config, db as dbmod, people as peoplemod
+from . import config, db as dbmod, people as peoplemod, releases as relmod
 from .auth import GwError, fmt_code
 
 OUT = os.path.join(config.DATA, "out")
@@ -98,6 +101,30 @@ def main(argv):
             ok, rows, bad = db.verify_audit()
             print("audit chain: %s over %d rows%s" % ("INTACT" if ok else "BROKEN", rows, "" if ok else " (first bad seq %s)" % bad))
             return 0 if ok else 1
+        elif cmd == "release" and a:
+            R = relmod.Releases(db, config.DATA, secrets_dir=config.SECRETS_DIR)
+            sub = a[0]
+            try:
+                if sub == "pin" and len(a) == 2:
+                    print("pinned", R.pin(a[1], ACTOR))
+                elif sub == "add" and len(a) >= 2:
+                    notes = a[a.index("--notes") + 1] if "--notes" in a and a.index("--notes") + 1 < len(a) else ""
+                    info = R.add(a[1], notes, ACTOR)
+                    print("stored as PENDING: %s (code %d), %.1f MB, sha256 %s. Approve it on /app/releases (web sign-in)." % (info["version_name"], info["version_code"], info["size"] / 1048576, info["sha256"]))
+                elif sub == "list":
+                    for r in R.list():
+                        print("%-6d %-10s %-11s %6.1f MB  %s%s" % (r["version_code"], r["version_name"], r["state"], r["size"] / 1048576, r["sha256"][:16], "  <- served" if r["current"] and not R.stopped() else ("  (STOPPED)" if r["current"] else "")))
+                    print("pinned certificate:", R.pinned_cert() or "-", "| channel", "STOPPED" if R.stopped() else "on")
+                elif sub == "verify":
+                    h = R.health()
+                    print("published:", h["published"], "| stopped:", h["stopped"], "| pending:", h["pending"], "| signing key present:", h["key_ok"], "| manifest signature ok:", h["manifest_ok"], "| apk hash ok:", h["apk_ok"])
+                    return 0 if h["key_ok"] and h["manifest_ok"] is not False and h["apk_ok"] is not False else 1
+                else:
+                    print(__doc__)
+                    return 2
+            except relmod.ReleaseError as e:
+                print("refused: %s (%s)" % (e.message, e.code))
+                return 1
         elif cmd == "clean-out":
             n = 0
             for f in glob.glob(os.path.join(OUT, "*")):

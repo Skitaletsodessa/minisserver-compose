@@ -17,6 +17,7 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.autofill.AutofillManager
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -25,6 +26,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.http.SslError
@@ -51,9 +53,17 @@ import javax.crypto.Cipher
  * is AES-GCM ciphertext that only the fingerprint can open (see AndroidStorage.kt). The WebView shows the gateway's origin and nothing else.
  */
 class MainActivity : FragmentActivity() {
-    private enum class State { SIGN_IN, LOCKED, LOADING, WEB, ERROR }
+    private enum class State { SIGN_IN, LOCKED, LOADING, WEB, ERROR, FORCE }
 
     private lateinit var store: TokenStore
+    private lateinit var updates: UpdateService
+    private lateinit var forceView: LinearLayout
+    private lateinit var forceStatus: TextView
+    private lateinit var forceButton: Button
+    private lateinit var shotsBanner: TextView
+    private val updating = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var shotsUntil = 0L                       // SystemClock.elapsedRealtime() at which the "allow screenshots" switch turns itself off; 0 = off
+    private var aboutStatus: TextView? = null
     private lateinit var root: FrameLayout
     private lateinit var signInView: ScrollView
     private lateinit var lockView: LinearLayout
@@ -88,14 +98,18 @@ class MainActivity : FragmentActivity() {
         // no screenshots, no recents thumbnail of family data. Debug builds (emulator tests) skip it so the tests can take screenshots; the release build always sets it.
         if (!BuildConfig.DEBUG) window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         store = TokenStore(PrefsStore(this), KeystoreBox())
+        updates = UpdateService(this)
         buildUi()
+        UpdateJob.schedule(this)                      // the periodic background check (about every 6 hours); a no-op when it is already scheduled
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (state == State.WEB && webView.canGoBack()) webView.goBack() else finish()
             }
         })
-        // a fresh process always starts locked
-        if (store.hasToken()) {
+        // below the minimum supported version (learned from a verified manifest) nothing of the family is shown: a blocking update screen instead
+        if (UpdateDecision.mustUpdate(BuildConfig.VERSION_CODE, updates.state.minSupported)) {
+            showForce()
+        } else if (store.hasToken()) {                // a fresh process always starts locked
             base = store.baseUrl() ?: SignInForm.DEFAULT_URL
             person = store.person()
             showLock(autoPrompt = true)
@@ -106,14 +120,20 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         super.onStop()
+        UpdateEvents.visible = false
+        UpdateEvents.confirmHandler = null
         if (state == State.WEB) backgroundedAt = SystemClock.elapsedRealtime()
     }
 
     override fun onStart() {
         super.onStart()
+        UpdateEvents.visible = true
+        UpdateEvents.confirmHandler = { i -> main.post { try { startActivity(i) } catch (_: Exception) { UpdateNotifier.confirm(this, i) } } }
         val was = backgroundedAt
         backgroundedAt = null
         if (state == State.WEB && LockPolicy.shouldLock(was, SystemClock.elapsedRealtime())) lockNow()
+        if (shotsUntil != 0L && SystemClock.elapsedRealtime() >= shotsUntil) setScreenshots(false)
+        launchUpdateCheck(auto = true)                // at every launch/foreground, without blocking anything
     }
 
     override fun onDestroy() {
@@ -124,7 +144,95 @@ class MainActivity : FragmentActivity() {
 
     // ── screens ────────────────────────────────────────────────────────────────────────────────────────────────────
     private fun show(v: View) {
-        for (c in listOf<View>(signInView, lockView, loadingView, errorView, webView)) c.visibility = if (c === v) View.VISIBLE else View.GONE
+        for (c in listOf<View>(signInView, lockView, loadingView, errorView, webView, forceView)) c.visibility = if (c === v) View.VISIBLE else View.GONE
+    }
+
+    // ── updates (Task 30c) ─────────────────────────────────────────────────────────────────────────────────────────
+    private fun showForce() {
+        state = State.FORCE
+        token = null
+        forceStatus.text = ""
+        webView.loadUrl("about:blank")
+        show(forceView)
+    }
+
+    private fun say(text: String) {
+        main.post { forceStatus.text = text; aboutStatus?.text = text }
+    }
+
+    /** Check, and when a verified newer version exists download, verify and install it. [auto] = launch/foreground/event (quiet); false = a person pressed a button (says what happens). */
+    private fun launchUpdateCheck(auto: Boolean) {
+        if (!updating.compareAndSet(false, true)) return
+        executor.execute {
+            try {
+                val out = updates.check()
+                // a minimum learned while the app is open takes effect now, not at the next launch
+                if (UpdateDecision.mustUpdate(BuildConfig.VERSION_CODE, updates.state.minSupported)) main.post { if (state != State.FORCE) showForce() }
+                when (out) {
+                    is CheckOutcome.Failed -> { if (!auto) say(UpdateTexts.errorText(out.code) ?: ""); return@execute }
+                    is CheckOutcome.None -> {
+                        if (UpdateDecision.mustUpdate(BuildConfig.VERSION_CODE, updates.state.minSupported)) say(Texts.FORCE_NONE) else if (!auto) say(Texts.ABOUT_LATEST_SAME)
+                        return@execute
+                    }
+                    is CheckOutcome.Available -> {
+                        val m = out.manifest
+                        main.post { askNotificationPermissionOnce() }
+                        say(Texts.FORCE_DOWNLOADING)
+                        val (file, err) = updates.download(m)
+                        if (file == null) { say(UpdateTexts.errorText(err) ?: ""); return@execute }
+                        if (!UpdateInstaller(this).canRequestInstalls()) { updates.state.lastError = "blocked"; main.post { explainUnknownSources() }; say(UpdateTexts.errorText("blocked") ?: ""); return@execute }
+                        say(Texts.FORCE_INSTALLING)
+                        main.post { Toast.makeText(this, Texts.UPD_INSTALLING_TOAST, Toast.LENGTH_LONG).show() }
+                        val e = updates.install(file, m.versionCode)
+                        if (e != null) say(UpdateTexts.errorText(e) ?: "")
+                    }
+                }
+            } finally {
+                updating.set(false)
+            }
+        }
+    }
+
+    private fun askNotificationPermissionOnce() {
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED || updates.state.notificationAsked) return
+        updates.state.notificationAsked = true
+        requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
+    }
+
+    private fun explainUnknownSources() {
+        if (updates.state.unknownSourcesExplained) return
+        updates.state.unknownSourcesExplained = true
+        AlertDialog.Builder(this).setTitle(Texts.UNKNOWN_TITLE).setMessage(Texts.UNKNOWN_TEXT)
+            .setPositiveButton(Texts.UNKNOWN_BUTTON) { _, _ ->
+                try { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) } catch (_: ActivityNotFoundException) { /* no such page on this phone */ }
+            }
+            .setNegativeButton(Texts.BTN_CLOSE, null).show()
+    }
+
+    /** A phone that signed in before the channel existed asks for its update-only key once it is unlocked (the device token is in memory then). */
+    private fun ensureUpdateKey() {
+        val t = token ?: return
+        if (updates.keys.has()) return
+        val b = base
+        executor.execute { try { updates.keys.save(Gateway(b).mintUpdateKey(t)) } catch (_: GatewayError) { /* the next unlock tries again */ } }
+    }
+
+    // ── the screenshot switch (a debug aid for UI feedback): FLAG_SECURE off for at most 30 minutes, back on at the next lock ──────────────────
+    private fun setScreenshots(on: Boolean) {
+        shotsUntil = if (on) SystemClock.elapsedRealtime() + 30 * 60_000L else 0L
+        if (!BuildConfig.DEBUG) {
+            if (on) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) else window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        refreshShotsBanner()
+        if (on) main.postDelayed({ if (shotsUntil != 0L && SystemClock.elapsedRealtime() >= shotsUntil) setScreenshots(false) }, 30 * 60_000L + 500)
+    }
+
+    private fun refreshShotsBanner() {
+        if (shotsUntil == 0L) { shotsBanner.visibility = View.GONE; return }
+        val left = maxOf(1, ((shotsUntil - SystemClock.elapsedRealtime() + 59_999L) / 60_000L).toInt())
+        shotsBanner.text = String.format(Texts.SHOTS_BANNER, left)
+        shotsBanner.visibility = View.VISIBLE
+        main.postDelayed({ if (shotsUntil != 0L) refreshShotsBanner() }, 30_000L)
     }
 
     private fun showSignIn(message: String?) {
@@ -215,6 +323,7 @@ class MainActivity : FragmentActivity() {
         authenticate(cipher, strict, Texts.PROMPT_SEAL_TITLE, Texts.PROMPT_SEAL_SUBTITLE, onOk = { c ->
             try {
                 store.seal(c, res.token, res.person, url, device, strict)
+                res.updateKey?.let { updates.keys.save(it) }
                 base = url
                 person = res.person
                 token = res.token
@@ -291,6 +400,7 @@ class MainActivity : FragmentActivity() {
 
     private fun lockNow() {
         token = null
+        setScreenshots(false)                       // the screenshot switch never survives a lock
         clearWebData()
         showLock(autoPrompt = true)
     }
@@ -302,6 +412,8 @@ class MainActivity : FragmentActivity() {
 
     private fun wipeLocal() {
         store.wipe()
+        updates.keys.clear()
+        setScreenshots(false)
         token = null
         person = null
         clearWebData()
@@ -339,6 +451,7 @@ class MainActivity : FragmentActivity() {
 
     private fun openWeb(s: SessionResult) {
         person = s.person
+        ensureUpdateKey()
         val cm = CookieManager.getInstance()
         cm.setAcceptCookie(true)
         cm.setAcceptThirdPartyCookies(webView, false)
@@ -364,19 +477,46 @@ class MainActivity : FragmentActivity() {
 
     private fun showAbout() {
         val p = person
+        val st = updates.state
+        val latest = if (st.latestCode > BuildConfig.VERSION_CODE) String.format(Texts.ABOUT_LATEST_NEWER, st.latestName ?: "?")
+        else if (st.latestCode > 0) Texts.ABOUT_LATEST_SAME else ""
+        val last = if (st.lastCheckAt == 0L) Texts.ABOUT_NEVER else java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(st.lastCheckAt))
         val msg = buildString {
-            append("Версия: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n")
-            append("Сервер: $base\n")
+            append(String.format(Texts.ABOUT_VERSION, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)).append("\n")
+            if (latest.isNotEmpty()) append(latest).append("\n")
+            append(String.format(Texts.ABOUT_LAST_CHECK, last)).append("\n")
+            UpdateTexts.errorText(st.lastError)?.let { append(it).append("\n") }
+            append("\nСервер: $base\n")
             append("Человек: ${p?.name ?: "—"}\n")
             append("Роль: ${p?.role ?: "—"}${if (p?.parent == true) ", родитель" else ""}\n")
-            append("Устройство: ${store.deviceName() ?: "—"}\n\n")
+            append("Устройство: ${store.deviceName() ?: "—"}\n")
+            append(if (store.isStrict()) Texts.ABOUT_KEY_STRICT else Texts.ABOUT_KEY_FALLBACK).append("\n\n")
             append(Texts.ABOUT_SIGN_OUT_NOTE)
+        }
+        val body = TextView(this).apply { text = msg; setPadding(dp(24), dp(12), dp(24), dp(4)) }
+        val status = TextView(this).apply { setPadding(dp(24), 0, dp(24), dp(8)) }
+        aboutStatus = status
+        val check = Button(this).apply { text = Texts.ABOUT_CHECK; minHeight = dp(48); setOnClickListener { status.text = Texts.ABOUT_CHECKING; launchUpdateCheck(auto = false) } }
+        val shots = android.widget.Switch(this).apply {
+            text = Texts.ABOUT_SHOTS
+            minHeight = dp(48)
+            isChecked = shotsUntil != 0L
+            setOnCheckedChangeListener { _, on -> setScreenshots(on) }
+        }
+        val note = TextView(this).apply { text = Texts.ABOUT_SHOTS_NOTE; textSize = 13f }
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(body); addView(status)
+            addView(check, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(24), 0, dp(24), dp(8)) })
+            addView(shots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(24), 0, dp(24), 0) })
+            addView(note, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(24), 0, dp(24), dp(8)) })
         }
         AlertDialog.Builder(this)
             .setTitle(Texts.ABOUT_TITLE)
-            .setMessage(msg)
+            .setView(ScrollView(this).apply { addView(col) })
             .setPositiveButton(Texts.BTN_CLOSE, null)
             .setNegativeButton(Texts.ABOUT_SIGN_OUT) { _, _ -> signOut() }
+            .setOnDismissListener { aboutStatus = null }
             .show()
     }
 
@@ -414,6 +554,13 @@ class MainActivity : FragmentActivity() {
         s.safeBrowsingEnabled = true
         s.builtInZoomControls = false
         w.isSaveEnabled = false
+        // the page announces a published release with ONE console line; the app only reacts by re-checking (and verifying everything itself). No JavaScript bridge exists.
+        w.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                if (m.message().startsWith("portal-release:")) launchUpdateCheck(auto = true)
+                return true
+            }
+        }
         w.setDownloadListener { _, _, _, _, _ -> /* downloads are not part of this app */ }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         // no addJavascriptInterface: nothing in the page can call into the app
@@ -455,6 +602,9 @@ class MainActivity : FragmentActivity() {
     }
 
     // ── building the views ─────────────────────────────────────────────────────────────────────────────────────────
+    /** Emulator test hook, DEBUG builds only: the sign-in form starts with the scratch gateway's address when `files/default-url` exists. */
+    private fun debugDefaultUrl(): String? = if (BuildConfig.DEBUG) java.io.File(filesDir, "default-url").takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null } else null
+
     private fun dp(n: Int): Int = (n * resources.displayMetrics.density).toInt()
 
     private fun label(text: String, size: Float = 16f, bold: Boolean = false): TextView = TextView(this).apply {
@@ -502,7 +652,7 @@ class MainActivity : FragmentActivity() {
         nameEdit = field(Texts.FIELD_NAME).also { form.addView(it) }
         passwordEdit = field(Texts.FIELD_PASSWORD, password = true).also { form.addView(it) }
         totpEdit = field(Texts.FIELD_TOTP, digits = true).apply { filters = arrayOf(android.text.InputFilter.LengthFilter(6)) }.also { form.addView(it) }
-        urlEdit = field(Texts.FIELD_URL).apply { setText(SignInForm.DEFAULT_URL); visibility = View.GONE }
+        urlEdit = field(Texts.FIELD_URL).apply { setText(debugDefaultUrl() ?: SignInForm.DEFAULT_URL); visibility = View.GONE }
         form.addView(label(Texts.ADVANCED).apply {
             setPadding(0, dp(14), 0, dp(14))
             setOnClickListener { urlEdit.visibility = if (urlEdit.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
@@ -537,13 +687,20 @@ class MainActivity : FragmentActivity() {
             addView(errorTitle); addView(errorText); addView(errorTailscale); addView(errorRetry); addView(errorSignIn)
         }
 
+        // the blocking "update needed" screen: no family data, only the way out
+        forceStatus = label("")
+        forceButton = button(Texts.FORCE_BUTTON) { forceStatus.text = Texts.FORCE_CHECKING; launchUpdateCheck(auto = false) }
+        forceView = column().apply { gravity = Gravity.CENTER; addView(label(Texts.FORCE_TITLE, 22f, true)); addView(label(Texts.FORCE_TEXT)); addView(forceStatus); addView(forceButton) }
+
         webView = WebView(this)
         configureWebView(webView)
 
-        for (v in listOf<View>(signInView, lockView, loadingView, errorView, webView)) {
+        for (v in listOf<View>(signInView, lockView, loadingView, errorView, webView, forceView)) {
             root.addView(v, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             v.visibility = View.GONE
         }
+        shotsBanner = TextView(this).apply { setBackgroundColor(0xFFB3261E.toInt()); setTextColor(0xFFFFFFFF.toInt()); setPadding(dp(12), dp(6), dp(12), dp(6)); visibility = View.GONE; textSize = 13f }
+        root.addView(shotsBanner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         setContentView(root)
         getSystemService(AutofillManager::class.java)?.cancel()
     }

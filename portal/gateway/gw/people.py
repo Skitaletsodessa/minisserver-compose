@@ -204,8 +204,36 @@ class People:
         self.db.x("INSERT INTO phones(id,person_id,label,model,platform,app_version,token_hash,created,last_seen,expires,revoked) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
                   (phone_id, r["id"], label.strip(), str((device or {}).get("model") or "")[:60] or None, "android", str((device or {}).get("app_version") or "")[:30] or None,
                    sha(raw), now, now, exp))
+        ukey = self._new_update_key(phone_id)
         self.db.audit("app_login", person=r["id"], phone=phone_id, target=label.strip()[:60], ip=ip)
-        return {"phone_id": phone_id, "token": raw, "person": {"id": r["id"], "name": r["name"], "role": r["role"], "parent": bool(r["parent"])}, "expires_at": iso(exp)}
+        return {"phone_id": phone_id, "token": raw, "update_key": ukey, "person": {"id": r["id"], "name": r["name"], "role": r["role"], "parent": bool(r["parent"])}, "expires_at": iso(exp)}
+
+    UKEY_PREFIX = "ukey_"
+
+    def _new_update_key(self, phone_id):
+        """Task 30c: the UPDATE-ONLY credential of a phone: valid for the two update paths and nothing else, stored hashed, revoked with the device. The app keeps it without the
+        fingerprint so that the background check can run while the app is locked. It can read no family data and call no other endpoint (authenticate_update is the only place that accepts it)."""
+        raw = self.UKEY_PREFIX + auth.token(32)
+        self.db.x("UPDATE phones SET update_hash=? WHERE id=?", (sha(raw), phone_id))
+        return raw
+
+    def mint_update_key(self, principal):
+        """A phone that signed in before the update channel existed gets its update key from its (unlocked) device token: the old key, if any, stops working."""
+        key = self._new_update_key(principal["phone_id"])
+        self.db.audit("update_key_issued", person=principal["person_id"], phone=principal["phone_id"], ip=principal.get("ip"))
+        return key
+
+    def update_key_principal(self, raw):
+        """update key -> a minimal principal (person, phone), or None. Same revocation rules as the device token (revoked, expired, deactivated person); does NOT slide the 90 days."""
+        if not raw or not raw.startswith(self.UKEY_PREFIX):
+            return None
+        r = self.db.q1("SELECT * FROM phones WHERE update_hash=?", (sha(raw),))
+        if not r or r["revoked"] or r["expires"] < self.clock():
+            return None
+        p = self.db.q1("SELECT * FROM people WHERE id=?", (r["person_id"],))
+        if not p or not p["active"]:
+            return None
+        return {"person_id": p["id"], "phone_id": r["id"], "via": "update_key"}
 
     def app_logout(self, principal):
         """Task 30: revokes ONLY the calling device's own token (identified by the token itself), closes its sessions and streams."""

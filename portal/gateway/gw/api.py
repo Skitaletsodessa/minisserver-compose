@@ -8,13 +8,14 @@ from collections import defaultdict, deque
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from . import config
 from .auth import GwError, sha
 from .db import iso
 from .hub import Hub
+from .releases import ReleaseError
 
 SAFE = ("GET", "HEAD", "OPTIONS")
 MAX_BODY = 64 * 1024
@@ -37,7 +38,8 @@ def err_response(e):
 
 
 class App:
-    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None, devices=None):
+    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None, devices=None, releases=None):
+        self.releases = releases
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
         self.parental, self.filters, self.devices = parental, filters, devices
         self.bad = defaultdict(deque)                    # failed bearer attempts per address
@@ -139,7 +141,8 @@ class App:
                              "audit_chain": {"ok": ok, "rows": rows},
                              "filter_reverts": self.filters.recent_reverts() if self.filters else [],
                              "new_devices": self.people.recent_new_phones(),
-                             "failed_logins_1h": self.people.failed_login_stats()})
+                             "failed_logins_1h": self.people.failed_login_stats(),
+                             "release": self.releases.health() if self.releases else None})
 
     async def login(self, request):
         b = await self.body(request)
@@ -193,6 +196,103 @@ class App:
         r = JSONResponse(sess, headers={"Cache-Control": "no-store"})
         r.set_cookie(COOKIE, raw, httponly=True, secure=True, samesite="strict", max_age=config.SESSION_ABS_S, path="/")
         return r
+
+    # ── Task 30c: the update channel (ADR 0010) ───────────────────────────────────────────────────────────────────────
+    def authenticate_update(self, request):
+        """The two update paths accept exactly: an UPDATE KEY (ukey_...), a device token, or an app/web session. Anonymous and wrong credentials get the SAME answer (401, same body)
+        and count toward the same per-address failure limit as every other bearer. An update key is accepted nowhere else."""
+        ip = self.ip(request)
+        now = self.clock()
+        q = self.bad[ip]
+        while q and q[0] < now - 300:
+            q.popleft()
+        p = None
+        h = request.headers.get("authorization", "")
+        if h.lower().startswith("bearer "):
+            if len(q) >= 30:
+                raise GwError(429, "too_many_attempts", "too many failed attempts from this address", {"retry_after_s": 300}, {"Retry-After": "300"})
+            tok = h[7:].strip()
+            p = self.people.update_key_principal(tok) if tok.startswith(self.people.UKEY_PREFIX) else self.people.phone_principal(tok)
+        elif request.cookies.get(COOKIE):
+            p = self.people.session_principal(request.cookies.get(COOKIE))
+        if not p:
+            if h:
+                q.append(now)
+            raise GwError(401, "unauthorized", "authentication required", headers={"WWW-Authenticate": "Bearer"})
+        p["ip"] = ip
+        return p
+
+    def _rel_err(self, e):
+        status = {"not_found": 404, "not_pending": 409, "version_not_higher": 409, "file_mismatch": 409, "nothing_published": 409, "no_key": 503}.get(e.code, 422)
+        return GwError(status, e.code, e.message)
+
+    def _need_release_admin(self, request, csrf=True):
+        p = self.authenticate(request, csrf=csrf)
+        self.need(p, "admin")
+        self.need_web(p)                                               # never from an app session: a stolen unlocked phone must not publish anything
+        return p
+
+    async def update_manifest(self, request):
+        """GET /app/update.json: the current signed manifest, or {"schema":1,"update":false,"reason":"none"|"stopped"}. Update key, device token or session."""
+        self.authenticate_update(request)
+        m = self.releases.current_manifest()
+        if m is None:
+            body = {"schema": 1, "update": False, "reason": "stopped" if self.releases.stopped() else "none"}
+        else:
+            body = {**m, "update": True}
+        return JSONResponse(body, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+    async def update_apk(self, request):
+        """GET /app/releases/{code}/app.apk: the bytes of the CURRENT published release only; the hash is recomputed on every request, a mismatch is not served."""
+        p = self.authenticate_update(request)
+        code = request.path_params["code"]
+        path = self.releases.served_file(code)
+        if not path:
+            raise GwError(404, "not_found", "not found")
+        self.db.audit("release_download", person=p["person_id"], phone=p.get("phone_id"), target=str(code), ip=p["ip"])
+        return FileResponse(path, media_type="application/vnd.android.package-archive", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+    async def update_key(self, request):
+        """POST /v1/app/update-key: a phone that signed in before the channel existed gets its update key (device token only, no fingerprint is involved here: the app is unlocked)."""
+        h = request.headers.get("authorization", "")
+        if not h.lower().startswith("bearer ") or h[7:].strip().startswith(self.people.UKEY_PREFIX):
+            raise GwError(401, "unauthorized", "a device token is required", headers={"WWW-Authenticate": "Bearer"})
+        p = self.authenticate(request, csrf=False)
+        return JSONResponse({"update_key": self.people.mint_update_key(p)}, status_code=201, headers={"Cache-Control": "no-store"})
+
+    async def releases_list(self, request):
+        self._need_release_admin(request, csrf=False)
+        return JSONResponse({"releases": self.releases.list(), "stopped": self.releases.stopped(), "pinned_cert_sha256": self.releases.pinned_cert(), "health": self.releases.health()},
+                            headers={"Cache-Control": "no-store"})
+
+    async def release_publish(self, request):
+        p = self._need_release_admin(request)
+        b = await self.body(request)
+        if not isinstance(b, dict) or set(b) - {"min_supported_version_code"}:
+            raise GwError(400, "bad_body", "an object with an optional min_supported_version_code is required")
+        code = request.path_params["code"]
+
+        async def go():
+            try:
+                m = self.releases.publish(code, p, b.get("min_supported_version_code"))
+            except ReleaseError as e:
+                raise self._rel_err(e)
+            return 200, {"published": code, "key_id": m["key_id"]}
+        st, out = await self.idem(request, p, "release.publish:%d" % code, go, body_bytes=json.dumps(b, sort_keys=True).encode())
+        return JSONResponse(out, status_code=st)
+
+    async def release_stop(self, request):
+        p = self._need_release_admin(request)
+        self.releases.stop(p)
+        return JSONResponse({"stopped": True})
+
+    async def release_resume(self, request):
+        p = self._need_release_admin(request)
+        try:
+            self.releases.resume(p)
+        except ReleaseError as e:
+            raise self._rel_err(e)
+        return JSONResponse({"stopped": False})
 
     async def enrol(self, request):
         b = await self.body(request)
@@ -898,6 +998,11 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/app/login", a.app_login, methods=["POST"]),
         Route("/v1/app/session", a.app_session, methods=["POST"]),
         Route("/v1/app/logout", a.app_logout, methods=["POST"]),
+        Route("/v1/app/update-key", a.update_key, methods=["POST"]),
+        Route("/v1/releases", a.releases_list, methods=["GET"]),
+        Route("/v1/releases/stop", a.release_stop, methods=["POST"]),
+        Route("/v1/releases/resume", a.release_resume, methods=["POST"]),
+        Route("/v1/releases/{code:int}/publish", a.release_publish, methods=["POST"]),
         Route("/v1/capabilities", a.capabilities, methods=["GET"]),
         Route("/v1/people", a.people_list, methods=["GET"]),
         Route("/v1/people", a.people_create, methods=["POST"]),

@@ -340,19 +340,24 @@
     else if (["enrol-code", "setup-link", "toggle-web", "revoke"].indexOf(a) >= 0) { onPeople(b); }
   });
 
+  // Task 30c: the update channel announces a published release on the event stream; the APP (not this page) re-checks and verifies everything itself. The page only tells it that something
+  // happened, through a console line the app reads (WebChromeClient.onConsoleMessage): no JavaScript bridge exists and none is added.
+  function announceRelease(d) { try { console.log("portal-release:" + parseInt(d.version_code, 10)); } catch (e) { /* nothing */ } }
   var page = document.body.dataset.page;
   if (page === "home") {
     listen({
+      release: announceRelease,
       device: function (d) { refreshDevice(d.id); },
       vacuum: function () { clearTimeout(vacReload); vacReload = setTimeout(function () { location.reload(); }, 1500); },   // the buttons depend on the robot state (Pause only while it cleans)
       link: function (d) { var bn = q("#ha-banner"); if (bn) { bn.hidden = d.ha !== "down"; } if (d.ha === "down") { qa("[data-device]").forEach(function (c) { refreshDevice(c.dataset.device); }); } }
     });
   } else if (page === "services") {
-    listen({ service: function (d) {
+    listen({ release: announceRelease, service: function (d) {
       var c = q('[data-service="' + d.id + '"]'); if (!c) { return; }
       var bd = q(".badge", c); bd.className = "badge b-" + d.badge; q(".btext", bd).textContent = T("badge_" + d.badge);
     } });
   } else if (page === "settings") {
     initEditor();
   }
+  if (document.body.dataset.app === "yes" && page !== "home" && page !== "services") { listen({ release: announceRelease }); }          // every other page of the app: the same one-line announcement
 }());

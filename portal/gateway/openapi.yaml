@@ -84,6 +84,81 @@ paths:
         "204": {description: this device is signed out and revoked}
         "401": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
+  /v1/app/update-key:
+    post:
+      operationId: mintUpdateKey
+      summary: "Task 30c (ADR 0010). A phone that signed in before the update channel existed gets its UPDATE KEY: a second credential, valid ONLY for GET /app/update.json and GET /app/releases/{code}/app.apk, nothing else (it reads no family data and calls no other endpoint), revoked with the device. Device token only (the app is unlocked when it asks). A new key replaces the old one"
+      security: [{deviceToken: []}]
+      responses:
+        "201": {description: the key, shown once, content: {application/json: {schema: {type: object, required: [update_key], properties: {update_key: {type: string}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /app/update.json:
+    get:
+      operationId: getUpdateManifest
+      summary: "The current SIGNED update manifest (Ed25519 over the exact payload string; the app embeds two public keys), or {update:false, reason: none|stopped}. Update key, device token or session; anonymous and wrong credentials get the same 401. Cache-Control: no-store. Public door: yes (one of the two paths added to it, with Ivan's approval)"
+      security: [{updateKey: []}, {deviceToken: []}, {session: []}]
+      responses:
+        "200": {description: manifest or no update, content: {application/json: {schema: {$ref: "#/components/schemas/UpdateManifest"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /app/releases/{code}/app.apk:
+    get:
+      operationId: getUpdateApk
+      summary: "The APK of the CURRENT published release only (404 for any other version code, while the channel is stopped, or when the stored file no longer matches its hash, which is recomputed on every request). Same credentials as the manifest. Cache-Control: no-store. Public door: yes"
+      security: [{updateKey: []}, {deviceToken: []}, {session: []}]
+      parameters: [{name: code, in: path, required: true, schema: {type: integer}}]
+      responses:
+        "200": {description: the APK, content: {application/vnd.android.package-archive: {schema: {type: string, format: binary}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/releases:
+    get:
+      operationId: listReleases
+      summary: "Admin, WEB sign-in only (an app session gets 403 web_login_required): the releases with their state (pending / published / superseded), the channel state, the pinned signing-certificate fingerprint and the channel health. Tailnet only: closed at the public door"
+      responses:
+        "200": {description: releases, content: {application/json: {schema: {$ref: "#/components/schemas/ReleaseList"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/releases/{code}/publish:
+    post:
+      operationId: publishRelease
+      summary: "Admin, web sign-in only. Publishes a PENDING release: the manifest is signed at this moment, the previous published release becomes superseded, a `release` event goes to open streams. Roll-forward only. Optional min_supported_version_code (never lowered, at most this version_code)"
+      parameters: [{name: code, in: path, required: true, schema: {type: integer}}, {$ref: "#/components/parameters/Idem"}]
+      requestBody:
+        required: false
+        content: {application/json: {schema: {type: object, additionalProperties: false, properties: {min_supported_version_code: {type: integer, minimum: 0}}}}}
+      responses:
+        "200": {description: published, content: {application/json: {schema: {type: object, required: [published, key_id], properties: {published: {type: integer}, key_id: {type: string}, replayed: {type: boolean}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/releases/stop:
+    post:
+      operationId: stopReleases
+      summary: "Admin, web sign-in only. The kill switch: the manifest endpoint answers 'no update' and the APK is not served; phones keep what they have. Nothing is un-published to an older build"
+      responses:
+        "200": {description: stopped, content: {application/json: {schema: {type: object, required: [stopped], properties: {stopped: {type: boolean}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/releases/resume:
+    post:
+      operationId: resumeReleases
+      summary: "Admin, web sign-in only. Ends the kill switch (the current published release is served again)"
+      responses:
+        "200": {description: resumed, content: {application/json: {schema: {type: object, required: [stopped], properties: {stopped: {type: boolean}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/enrol:
     post:
       operationId: enrol
@@ -927,6 +1002,7 @@ components:
   securitySchemes:
     deviceToken: {type: http, scheme: bearer, description: "per person AND device, shown once at enrolment, revocable"}
     session: {type: apiKey, in: cookie, name: gw_session, description: "web login; state-changing calls also need X-CSRF-Token"}
+    updateKey: {type: http, scheme: bearer, description: "the phone's UPDATE-ONLY key (ukey_...): accepted only by the two update paths (Task 30c)"}
   parameters:
     Id: {name: id, in: path, required: true, schema: {type: string}}
     Idem: {name: Idempotency-Key, in: header, required: false, schema: {type: string, minLength: 8, maxLength: 80}, description: "required by the server on switch/vacuum/exception/enrolment calls; a repeat with the same key returns the first result"}
@@ -957,6 +1033,7 @@ components:
         schedule_service: {type: object, properties: {link: {type: string}, in_sync: {type: [boolean, "null"]}}}
         probes: {type: object, properties: {last_run_age_s: {type: [number, "null"]}}}
         audit_chain: {type: object, properties: {ok: {type: boolean}, rows: {type: integer}}}
+        release: {type: [object, "null"], description: "Task 30c: the update channel for the host watcher: published version_code, stopped, pending count, whether the manifest signature and the APK hash verify, whether the signing key is present"}
         failed_logins_1h: {type: object, description: "failed sign-in attempts of the last hour and from how many addresses (for the host-side watcher; the public door makes guessing visible)", properties: {count: {type: integer}, addresses: {type: integer}}}
         new_devices: {type: array, description: "devices created in the last 48 h (for the host-side watcher's one Telegram message per device)", items: {type: object, properties: {id: {type: string}, person: {type: string}, device: {type: string}, model: {type: [string, "null"]}, created_at: {type: string}}}}
     Session:
@@ -1005,6 +1082,41 @@ components:
       properties:
         code: {type: string}
         device: {type: object, required: [label], properties: {label: {type: string, maxLength: 60}, model: {type: string, maxLength: 60}, platform: {type: string, maxLength: 30}, app_version: {type: string, maxLength: 30}}}
+    UpdateManifest:
+      type: object
+      required: [schema, update]
+      properties:
+        schema: {type: integer, const: 1}
+        update: {type: boolean}
+        reason: {type: string, enum: [none, stopped], description: "when update is false"}
+        key_id: {type: string}
+        payload: {type: string, description: "the canonical JSON text that is signed (sorted keys, no spaces): schema, app_id, key_id, version_name, version_code, min_supported_version_code, apk_url (relative to the gateway origin), apk_sha256, apk_size, apk_signing_cert_sha256, changelog, published_at. The app verifies the signature over THESE EXACT BYTES first and only then parses them"}
+        signature: {type: string, description: "base64 of the 64-byte Ed25519 signature of the UTF-8 bytes of payload"}
+    Release:
+      type: object
+      required: [version_code, version_name, size, sha256, cert_sha256, notes, state, added_at, current]
+      properties:
+        version_code: {type: integer}
+        version_name: {type: string}
+        size: {type: integer}
+        sha256: {type: string}
+        cert_sha256: {type: string}
+        notes: {type: string}
+        state: {type: string, enum: [pending, published, superseded]}
+        added_by: {type: [string, "null"]}
+        added_at: {type: string}
+        published_by: {type: [string, "null"]}
+        published_at: {type: [string, "null"]}
+        min_supported_version_code: {type: [integer, "null"]}
+        current: {type: boolean}
+    ReleaseList:
+      type: object
+      required: [releases, stopped, pinned_cert_sha256, health]
+      properties:
+        releases: {type: array, items: {$ref: "#/components/schemas/Release"}}
+        stopped: {type: boolean}
+        pinned_cert_sha256: {type: [string, "null"]}
+        health: {type: object}
     AppLoginRequest:
       type: object
       required: [username, password, device]
@@ -1020,6 +1132,7 @@ components:
       properties:
         phone_id: {type: string}
         token: {type: string, description: "shown once"}
+        update_key: {type: string, description: "Task 30c: the UPDATE-ONLY key (ukey_...), shown once, returned by /v1/app/login only; valid only for the two update paths"}
         person: {$ref: "#/components/schemas/PersonRef"}
         expires_at: {type: string, description: "sliding 90 days"}
     Phone:

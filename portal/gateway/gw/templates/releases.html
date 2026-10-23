@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ t('rel_title') }}{% endblock %}
+{% block head %}<script src="/static/releases.js" defer></script>{% endblock %}
+{% block body %}
+<h1>{{ t('rel_title') }}</h1>
+<p class="meta">{{ t('rel_intro') }}</p>
+<div id="rel-root"><p class="meta">{{ t('k_loading') }}</p></div>
+<p class="msg" id="rel-msg" role="status" hidden></p>
+{% endblock %}

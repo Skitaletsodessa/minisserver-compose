@@ -74,6 +74,8 @@ class DB:
             self.c.execute("ALTER TABLE device_meta ADD COLUMN display_name TEXT")
         if "switch_mode" not in [r["name"] for r in self.c.execute("PRAGMA table_info(device_meta)")]:        # Task 29: timed or plain On button (NULL = take the seed default)
             self.c.execute("ALTER TABLE device_meta ADD COLUMN switch_mode TEXT")
+        if "update_hash" not in [r["name"] for r in self.c.execute("PRAGMA table_info(phones)")]:             # Task 30c: the update-only credential (hash at rest)
+            self.c.execute("ALTER TABLE phones ADD COLUMN update_hash TEXT")
         if "phone_id" not in [r["name"] for r in self.c.execute("PRAGMA table_info(sessions)")]:              # Task 30: a session created by the app from its device token
             self.c.execute("ALTER TABLE sessions ADD COLUMN phone_id TEXT")
         self.jsonl = os.path.join(data_dir, "audit.jsonl")

@@ -30,7 +30,7 @@ def _rx(template):
 
 def validate_response(method, path, resp):
     """Every JSON response must be a documented status code and match its schema (SSE and HTML pages are not part of the JSON contract)."""
-    if not path.startswith("/v1/") or path == "/v1/events":
+    if not (path.startswith("/v1/") or path == "/app/update.json" or re.match(r"^/app/releases/[0-9]+/app.apk$", path)) or path == "/v1/events":
         return
     op = None
     for tmpl, item in SPEC["paths"].items():
@@ -46,6 +46,8 @@ def validate_response(method, path, resp):
     if "$ref" in spec:
         spec = SPEC["components"]["responses"][spec["$ref"].split("/")[-1]]
     content = spec.get("content", {}).get("application/json")
+    if content is None and spec.get("content"):
+        return                                               # a documented non-JSON body (the APK)
     if content is None:
         assert not resp.content, "%s %s -> %s should have no body" % (method, path, code)
         return
@@ -89,7 +91,13 @@ class Env:
             if self.parity_runs:                            # the 5-minute checker "runs" while the gateway waits
                 self._write_parity(time.time())
             await asyncio.sleep(0.01)
-        self.app = server.make(data_dir=self.data, ha_url=self.ha.url, ha_token_file=self.ha_token, sched_url=self.sched.url,
+        self.secrets = os.path.join(self.tmp, "secrets")                      # Task 30c: the manifest signing key of the update channel (a fixed test seed)
+        os.makedirs(self.secrets)
+        from gw import ed25519
+        seed = bytes(range(32))
+        open(os.path.join(self.secrets, "release-manifest.key"), "w").write(seed.hex())
+        open(os.path.join(self.secrets, "release-manifest.pub"), "w").write(ed25519.public_key(seed).hex())
+        self.app = server.make(data_dir=self.data, secrets_dir=self.secrets, ha_url=self.ha.url, ha_token_file=self.ha_token, sched_url=self.sched.url,
                                sched_admin=self.sched.admin_file, sched_household=self.sched.house_file, start_background=background,
                                agh_url=self.agh.url, agh_password_file=self.agh.password_file, parity_state=self.parity, oui_file=self.oui,
                                filter_opts={"fetch": fetch, "dns": self.dns, "sleep": sleep, "poll_s": 0.01, "replica_wait_s": 0.3, "parity_wait_s": 0.5})

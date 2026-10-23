@@ -214,6 +214,12 @@ def routes(app):
         return FileResponse(info["path"], media_type="application/vnd.android.package-archive", filename="dom-%s.apk" % info["versionName"],
                             headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
+    async def releases_page(request):                                  # Task 30c: admin web session only, tailnet only (the door keeps it closed)
+        p, r = download_gate(request)
+        if r:
+            return r
+        return page(request, "releases.html", me=p, nav_active="releases")
+
     async def manifest(request):                                       # Task 30: the PWA. Public on purpose (browsers fetch it without credentials); holds no family data
         doc = {"name": S["app_name"], "short_name": S["app_short"], "lang": "ru", "start_url": "/home", "scope": "/", "display": "standalone", "orientation": "portrait",
                "background_color": "#0f1216", "theme_color": "#1b6ef3",
@@ -242,6 +248,8 @@ def routes(app):
         Route("/services", services, methods=["GET"]), Route("/people", people, methods=["GET"]), Route("/audit", audit, methods=["GET"]),
         Route("/parental", parental, methods=["GET"]), Route("/parental/filters", parental_filters, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
         Route("/app/download", download_page, methods=["GET"]), Route("/app/download.apk", download_file, methods=["GET"]),
+        Route("/app/update.json", a.update_manifest, methods=["GET"]), Route("/app/releases", releases_page, methods=["GET"]),
+        Route("/app/releases/{code:int}/app.apk", a.update_apk, methods=["GET"]),
         Route("/app/manifest.webmanifest", manifest, methods=["GET"]), Route("/app/{name}", app_icon, methods=["GET"]),
         Route("/static/{path:path}", static, methods=["GET"]),
     ]

@@ -8,6 +8,9 @@ house changes (Home Assistant runs the schedules by itself), so "down" is tier B
   gateway-down         B  no answer for 3 checks in a row (the web page and the app cannot switch anything; the house keeps running)
   gateway-degraded     B  it answers but cannot reach Home Assistant or the schedule service for 3 checks in a row (the page would show stale data)
   gateway-watch-token  B  this watcher cannot read / is refused with its own read-only token (detailed checks skipped)
+  gateway-release-<N>  B  one message per PUBLISHED app release (Task 30c): the family phones will update themselves
+  gateway-release-broken B the update channel serves a manifest whose signature does not verify, or an APK whose hash does not match, or the signing key is missing
+  gateway-door-paths   A  (only once the update paths are on the public door) the two update paths answer an anonymous caller, or an admin path is reachable at the door
 Its own liveness is the 08:00 heartbeat's job (this unit is in its list).
 The watcher's identity is the synthetic person `gw-watch` (role readonly) with ONE enrolled device; its token lives in
 /home/skit/.config/gateway-watch/token (mode 600) and is never printed.
@@ -30,6 +33,8 @@ DOWN_AFTER = 3
 DEGRADED_AFTER = 3
 LOGIN_BURST = 10          # failed sign-ins in the last hour that raise the message
 LOGIN_CALM = 3            # below this the message is cleared
+DOOR_URL = os.environ.get("GATEWAY_WATCH_DOOR", "https://minisserver.tail6bf4d5.ts.net")
+DOOR_FLAG = os.environ.get("GATEWAY_WATCH_DOOR_FLAG", "/var/lib/watch-alerts/gateway-door-checks-enabled")      # created once Ivan's approved door change is live
 
 
 def http_json(path, token=None):
@@ -74,7 +79,39 @@ def save_state(st):
     os.replace(STATE_FILE + ".tmp", STATE_FILE)
 
 
-def evaluate(N, state, public, full, token_ok, addrs):
+def http_status(url):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "gateway-watch"})
+        opener = urllib.request.build_opener(NoRedirect)
+        with opener.open(req, timeout=10) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+def door_problems(status_of=http_status, include_apk=True):
+    """Task 30c: through the PUBLIC door an anonymous caller must get 401 on the two update paths (never a manifest or a file), and the admin paths must not exist (404)."""
+    bad = []
+    # the APK path has the tightest limit at Caddy (12 per 5 minutes per address, and every phone in the house shares one public address): probed every 15th minute only
+    for p in (("/app/update.json", "/app/releases/1/app.apk") if include_apk else ("/app/update.json",)):
+        s = status_of(DOOR_URL + p)
+        if s is not None and s != 401:
+            bad.append("%s answers an anonymous caller with %s (must be 401)" % (p, s))
+    for p in ("/app/releases", "/v1/releases", "/app/download", "/v1/people"):
+        s = status_of(DOOR_URL + p)
+        if s is not None and s != 404:
+            bad.append("%s is reachable at the door (%s, must be 404)" % (p, s))
+    return bad
+
+
+def evaluate(N, state, public, full, token_ok, addrs, door=None):
     """Pure decision logic. public: the gateway answered /v1/health; full: parsed authenticated /v1/health or None; addrs: listening sockets."""
     bad = exposure_problems(addrs)
     if bad:
@@ -140,6 +177,26 @@ def evaluate(N, state, public, full, token_ok, addrs):
         elif fl.get("count", 0) < LOGIN_CALM:
             N.clear("gateway-failed-logins", "")
 
+    # Task 30c: the update channel. ONE tier-B message per published release (the first run only records what is already published, no flood); a channel that serves
+    # something the phones would reject (manifest signature, APK hash, missing key) is worth a message too.
+    rel = full.get("release")
+    if rel is not None:
+        pub = rel.get("published")
+        if "rel_notified" not in state:
+            state["rel_notified"] = pub or 0
+        elif pub and pub > state["rel_notified"]:
+            N.alert("gateway-release-%d" % pub, "Опубликована новая версия приложения «Дом» (код %d). Телефоны семьи обновятся сами: сразу, если приложение открыто, иначе в течение нескольких часов или при ближайшем открытии. Остановить выдачу можно на странице «Выпуск приложения»." % pub, tier="B")
+            state["rel_notified"] = pub
+        if pub is not None and (rel.get("manifest_ok") is False or rel.get("apk_ok") is False or rel.get("key_ok") is False):
+            N.alert("gateway-release-broken", "Выдача обновлений неисправна: подпись описания или файл версии %s не проходят проверку (или нет ключа подписи). Телефоны такое обновление отклонят. Смотрите: gwctl release verify." % pub, tier="B")
+        else:
+            N.clear("gateway-release-broken", "")
+    if door is not None:
+        if door:
+            N.alert("gateway-door-paths", "gateway: публичный вход отвечает не так, как решено: " + "; ".join(door), tier="A")
+        else:
+            N.clear("gateway-door-paths", "gateway: публичный вход снова отвечает как решено")
+
     if full.get("status") == "degraded":
         state["degraded"] = state.get("degraded", 0) + 1
         if state["degraded"] >= DEGRADED_AFTER:
@@ -167,7 +224,8 @@ def main():
             s2, full = http_json("/v1/health", tok)
             if s2 == 401:
                 token_ok = False
-    st = evaluate(watchnotify, st, public, full, token_ok, listeners())
+    door = door_problems(include_apk=int(time.time() // 60) % 15 == 0) if os.path.exists(DOOR_FLAG) else None
+    st = evaluate(watchnotify, st, public, full, token_ok, listeners(), door)
     save_state(st)
     return 0
 

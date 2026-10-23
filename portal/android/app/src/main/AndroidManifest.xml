@@ -2,7 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />    <!-- required by JobScheduler for a job with a network constraint (found on the emulator: without it the app crashed at launch) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Task 30c: the app updates itself: install its own new APK (the "install unknown apps" switch for THIS app), no prompt for a self-update where the platform allows it, a notification when a person must tap -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- package visibility: only to offer the Tailscale app on the "no connection" screen -->
     <queries>
@@ -32,5 +37,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver android:name=".InstallReceiver" android:exported="false" />
+        <service android:name=".UpdateJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 </manifest>

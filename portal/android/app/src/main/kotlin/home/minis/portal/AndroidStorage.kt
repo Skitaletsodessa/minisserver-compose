@@ -12,9 +12,9 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 @SuppressLint("ApplySharedPref")      // commit() on purpose: a wipe must be on disk before the sign-in screen is shown
-class PrefsStore(context: Context) : KeyValueStore {
+class PrefsStore(context: Context, name: String = "sealed") : KeyValueStore {
     // Private app storage only; not backed up (see data_extraction_rules.xml). What is in it is ciphertext plus non-secret labels.
-    private val p = context.getSharedPreferences("sealed", Context.MODE_PRIVATE)
+    private val p = context.getSharedPreferences(name, Context.MODE_PRIVATE)
     override fun get(key: String): String? = p.getString(key, null)
     override fun put(key: String, value: String) { p.edit().putString(key, value).commit() }
     override fun remove(key: String) { p.edit().remove(key).commit() }

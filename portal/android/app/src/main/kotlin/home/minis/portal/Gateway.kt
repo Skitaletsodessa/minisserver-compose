@@ -26,7 +26,7 @@ sealed class GatewayError(message: String) : Exception(message) {
 }
 
 data class Person(val id: String, val name: String, val role: String, val parent: Boolean)
-data class LoginResult(val phoneId: String, val token: String, val person: Person)
+data class LoginResult(val phoneId: String, val token: String, val person: Person, val updateKey: String? = null)
 data class SessionResult(val cookieHeader: String, val person: Person)
 
 data class HttpResponse(val status: Int, val body: String, val headers: Map<String, List<String>>) {
@@ -125,7 +125,7 @@ class Gateway(private val base: String, private val http: Http = UrlConnectionHt
         when (r.status) {
             201 -> try {
                 val j = JSONObject(r.body)
-                return LoginResult(j.getString("phone_id"), j.getString("token"), person(j.getJSONObject("person")))
+                return LoginResult(j.getString("phone_id"), j.getString("token"), person(j.getJSONObject("person")), j.optString("update_key").ifEmpty { null })
             } catch (e: JSONException) {
                 throw GatewayError.Protocol("login answer")
             }
@@ -147,6 +147,21 @@ class Gateway(private val base: String, private val http: Http = UrlConnectionHt
                 } catch (e: JSONException) {
                     throw GatewayError.Protocol("session answer")
                 }
+            }
+            401 -> throw GatewayError.Revoked()
+            429 -> throw GatewayError.Throttled(r.header("Retry-After")?.toIntOrNull())
+            else -> throw GatewayError.Server(r.status, errorCode(r))
+        }
+    }
+
+    /** A phone that signed in before the update channel existed asks for its update-only key (called while the app is unlocked). */
+    fun mintUpdateKey(token: String): String {
+        val r = call("POST", "/v1/app/update-key", mapOf("Authorization" to "Bearer $token"), null)
+        when (r.status) {
+            201 -> try {
+                return JSONObject(r.body).getString("update_key")
+            } catch (e: JSONException) {
+                throw GatewayError.Protocol("update key answer")
             }
             401 -> throw GatewayError.Revoked()
             429 -> throw GatewayError.Throttled(r.header("Retry-After")?.toIntOrNull())

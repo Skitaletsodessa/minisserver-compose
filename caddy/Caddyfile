@@ -195,7 +195,7 @@ minisserver.tail6bf4d5.ts.net:17443 {
 		format json
 	}
 
-	@closed path /login /logout /setup /setup/* /v1/auth /v1/auth/* /v1/enrol /v1/people /v1/people/* /v1/phones /v1/phones/* /v1/audit /audit /people /app/download /app/download.apk /v1/health
+	@closed path /login /logout /setup /setup/* /v1/auth /v1/auth/* /v1/enrol /v1/people /v1/people/* /v1/phones /v1/phones/* /v1/audit /audit /people /app/download /app/download.apk /v1/health /app/releases /app/releases/ /v1/releases /v1/releases/*
 	handle @closed {
 		respond "not found" 404
 	}
@@ -218,6 +218,22 @@ minisserver.tail6bf4d5.ts.net:17443 {
 				}
 				key    {vars.client_ip}
 				events 60
+				window 5m
+			}
+			zone update_manifest_per_ip {
+				match {
+					path /app/update.json
+				}
+				key    {vars.client_ip}
+				events 60
+				window 5m
+			}
+			zone update_apk_per_ip {
+				match {
+					path /app/releases/*
+				}
+				key    {vars.client_ip}
+				events 12
 				window 5m
 			}
 			zone all_per_ip {
