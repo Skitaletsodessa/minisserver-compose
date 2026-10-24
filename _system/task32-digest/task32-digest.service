@@ -1,0 +1,8 @@
+[Unit]
+Description=Task 32 daily digest to Telegram (temporary; removed at the end of the task)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/usr/bin/python3 /srv/compose/_system/task32-digest/digest.py
