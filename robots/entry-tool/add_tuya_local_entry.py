@@ -31,16 +31,17 @@ def new_entry_id(now_ms=None):
     return head + "".join(secrets.choice(CROCKFORD) for _ in range(16))
 
 
-def read_env(path):
+def read_env(path, allow_missing_key=False):
     cfg = {}
     for line in open(path, encoding="utf-8"):
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
             cfg[k.strip()] = v.strip()
-    for need in ("DEVICE_ID", "LOCAL_KEY", "HOST", "VERSION"):
+    for need in ("DEVICE_ID", "HOST", "VERSION") + (() if allow_missing_key else ("LOCAL_KEY",)):
         if not cfg.get(need):
             raise SystemExit("missing %s in %s" % (need, path))
+    cfg.setdefault("LOCAL_KEY", "")
     return cfg
 
 
@@ -78,7 +79,9 @@ def main(argv):
         raise SystemExit("device config %s.yaml is not installed in %s" % (ctype, DEVICES))
     if ha_running() and not dry:
         raise SystemExit("homeassistant is running: stop it first (the restart conditions of Task 32 apply)")
-    cfg = read_env(ENV)
+    cfg = read_env(ENV, allow_missing_key=dry)
+    if dry and not cfg["LOCAL_KEY"]:
+        print("local key: MISSING (the only step left: the Smart Life QR login in the HA UI); everything else is ready")
     doc = json.load(open(STORAGE, encoding="utf-8"))
     new = add_entry(doc, cfg, ctype, title)
     print("would add entry '%s' of type %s (%d -> %d entries)" % (title, ctype, len(doc["data"]["entries"]), len(new["data"]["entries"])))
