@@ -1,0 +1,5 @@
+[project]
+name = "tuya-map"
+version = "0.1.0"
+description = "Decoder and PNG renderer for Tuya cloud map files of robot vacuums (formats reconstructed from public sources, not verified on the ETA Tiger)"
+requires-python = ">=3.9"
