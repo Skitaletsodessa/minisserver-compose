@@ -17,7 +17,12 @@ entities:
         name: power
       - id: 2
         type: boolean
-        name: activate          # VERIFY polarity: Tuya's own "pause" is true = paused, tuya_local's "activate" is true = running
+        name: activate          # Tuya's DP 2 is "pause" (true = paused); seen 2026-11-03: false while the robot was cleaning. tuya_local's "activate" is true = running, so it is inverted here
+        mapping:
+          - dps_val: false
+            value: true
+          - dps_val: true
+            value: false
       - id: 4
         type: string
         name: command
@@ -106,7 +111,7 @@ entities:
       - id: 6
         type: integer
         name: sensor
-        unit: min               # VERIFY unit (minutes vs seconds)
+        unit: min               # confirmed 2026-11-03: 0..12 over a 12-minute run
 
   - entity: sensor
     name: Cleaning area
