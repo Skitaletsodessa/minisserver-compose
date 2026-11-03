@@ -218,16 +218,14 @@ class ExceptionsAndEffective(unittest.TestCase):
         self.assertEqual(self.e.req("POST", "/v1/exceptions", role="readonly", json={"entity_id": "plant_rack1", "kind": "skip_date", "date": d}).status_code, 403)
         self.assertEqual(self.e.req("POST", "/v1/exceptions", json={"entity_id": "nope", "kind": "skip_date", "date": d}).status_code, 404)
 
-    def test_override_is_modelled_and_reported_not_enforced(self):
+    def test_override_until_is_refused(self):
         r = self.e.req("POST", "/v1/exceptions", json={"entity_id": "plant_rack1", "kind": "override_until", "until": "21:00", "state": "on"})
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(self.e.req("POST", "/v1/exceptions", json={"entity_id": "plant_rack1", "kind": "override_until", "until": "23:00", "state": "on"}).status_code, 422)
-        snap = json.load(open(os.path.join(self.e.store.out, "schedules.json")))
-        self.assertNotIn("override", json.dumps(snap))        # an override never reaches the rendered config in step (a)
+        self.assertEqual(r.status_code, 422)
 
     def test_effective(self):
         eff = self.e.req("GET", "/v1/effective?entity=bathroom_towels&at=2026-10-19T07:00:00%2B02:00").json()
-        self.assertEqual((eff["state"], eff["source"], eff["next_edge"]["action"], eff["next_edge"]["at"][11:16]), ("on", "schedule", "off", "08:00"))
+        self.assertEqual((eff["state"], eff["next_edge"]["action"], eff["next_edge"]["at"][11:16]), ("on", "off", "08:00"))
+        self.assertNotIn("source", eff)
         eff = self.e.req("GET", "/v1/effective?entity=vacuum_bedroom&at=2026-10-19T10:00:00%2B02:00").json()
         self.assertEqual((eff["state"], eff["next_edge"]["action"], eff["next_edge"]["rule"]), (None, "trigger", "evening"))
         self.assertEqual(self.e.req("GET", "/v1/effective").status_code, 400)

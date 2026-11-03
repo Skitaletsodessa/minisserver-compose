@@ -89,12 +89,13 @@ class Render(unittest.TestCase):
     def test_weekday_and_skip_conditions(self):
         sch = self.store.schedule("plant_rack1")
         self.store.put_schedule(SYSTEM, "plant_rack1", [{"id": "day", "days": [1, 2, 3, 4, 5], "start": "07:00", "end": "20:00"}], sch["version"])
-        self.store.add_exception(SYSTEM, "plant_rack1", {"kind": "skip_date", "date": "2026-10-21"}, today=dt.date(2026, 10, 19))
+        skip = (dt.date.today() + dt.timedelta(days=2)).isoformat()      # must lie ahead of the real clock: past skips are pruned at render time
+        self.store.add_exception(SYSTEM, "plant_rack1", {"kind": "skip_date", "date": skip}, today=dt.date.today())
         doc = yaml.safe_load(self.r({"plant_rack1"})["files"]["automations/sch_plant_rack1.yaml"])
         on = [a for a in doc if a["id"].endswith("_on")][0]
         off = [a for a in doc if a["id"].endswith("_off")][0]
         self.assertEqual(on["condition"][0], {"condition": "time", "weekday": ["mon", "tue", "wed", "thu", "fri"]})
-        self.assertIn("2026-10-21", on["condition"][1]["value_template"])
+        self.assertIn(skip, on["condition"][1]["value_template"])
         self.assertEqual(len(off["condition"]), 1)             # the OFF edge ignores skipped dates on purpose
 
     def test_reconcile_template_equals_the_model_for_every_minute(self):

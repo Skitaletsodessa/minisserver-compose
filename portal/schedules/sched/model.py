@@ -305,11 +305,11 @@ def validate_rules(entity, rules):
 # ── exceptions ────────────────────────────────────────────────────────────────
 
 def validate_exception(entity, body, today):
-    """Returns (normalised exception, problems). kind: skip_date {date} | override_until {until, state}."""
+    """Returns (normalised exception, problems). kind: skip_date {date}. (override_until was removed 2026-11-03: a timed run is the enforced mechanism, see runs below.)"""
     probs = []
     kind = body.get("kind")
     out = {"kind": kind}
-    allowed = {"kind", "entity_id", "date", "until", "state"}
+    allowed = {"kind", "entity_id", "date"}
     for k in body:
         if k not in allowed:
             probs.append(problem("unknown_key", k, "unknown field '%s'" % k))
@@ -323,26 +323,8 @@ def validate_exception(entity, body, today):
             probs.append(problem("far", "date", "a skipped date is limited to one year ahead"))
         else:
             out["date"] = d.isoformat()
-    elif kind == "override_until":
-        u = parse_hhmm(body.get("until"))
-        st = body.get("state")
-        if entity["kind"] != "plug":
-            probs.append(problem("kind", "kind", "override_until applies to plugs only"))
-        if u is None:
-            probs.append(problem("format", "until", "until must be HH:MM (today)"))
-        elif u in DST_FORBIDDEN:
-            probs.append(problem("dst_ambiguous", "until", "until is inside 02:00-03:59"))
-        if st not in ("on", "off"):
-            probs.append(problem("value", "state", "state must be 'on' or 'off'"))
-        g = entity.get("guardrails", {})
-        if st == "on" and u is not None and not probs:
-            hi = parse_hhmm(g["allowed_to"]) if "allowed_to" in g else 1439
-            if u > hi:
-                probs.append(problem("allowed_range", "until", "an override may not run past the allowed range end %s" % g.get("allowed_to")))
-        if not probs:
-            out["until"], out["state"] = body["until"], st
     else:
-        probs.append(problem("kind", "kind", "kind must be skip_date or override_until"))
+        probs.append(problem("kind", "kind", "kind must be skip_date"))
     return out, probs
 
 
@@ -409,19 +391,12 @@ def next_edge(kind, rules, at, skips=()):
 
 
 def effective(entity, rules, exceptions, at):
-    """What the schedule says at `at`: {state, source, next_edge{at, action, rule}, overrides}. Overrides are reported, not enforced here (ADR 2/Task 27: model and API only)."""
+    """What the schedule says at `at`: {state, next_edge{at, action, rule}, skipped_today}."""
     at = at.astimezone(TZ)
     skips = skip_dates(exceptions)
     st = target_state(entity["kind"], rules, at, skips)
-    src = "schedule"
-    active = []
-    for x in exceptions:
-        if x["kind"] == "override_until" and at.date() == dt.date.fromisoformat(x["created_at"][:10]) \
-                and at.hour * 60 + at.minute < parse_hhmm(x["until"]):
-            active.append(x["id"])
-            st, src = x["state"], "override"
     ne = next_edge(entity["kind"], rules, at, skips)
-    return {"entity": entity["id"], "at": at.isoformat(), "state": st, "source": src, "active_overrides": active,
+    return {"entity": entity["id"], "at": at.isoformat(), "state": st,
             "skipped_today": at.date().isoformat() in skips,
             "next_edge": ({"at": ne[0].isoformat(), "action": ne[1], "rule": ne[2]} if ne else None)}
 

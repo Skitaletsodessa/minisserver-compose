@@ -10,7 +10,7 @@
   schedctl undo ENTITY
   schedctl effective ENTITY [ISO-TIME]
   schedctl audit [ENTITY] [LIMIT]
-  schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | add ENTITY override_until HH:MM on|off | rm ID
+  schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | rm ID
   schedctl plug add ID "Name" switch.xxx LIKE_ID     # admin: a new plug entity with the windows/guardrails of LIKE_ID, starts unmanaged (then: managed ID on)
   schedctl child list | add NAME IP [--mac MAC] [--like ID | --closed] [--label L] [--icon I] | remove ID [--forget] | removed | restore REMOVAL_ID    # admin: devices of the children; a removal can be undone for 24 h
   schedctl guardrails ENTITY FILE.json       # admin
@@ -140,9 +140,6 @@ def main(a):
             return done(st, b)
         if rest[0] == "add" and len(rest) >= 4 and rest[2] == "skip_date":
             st, b, _ = call("POST", "/v1/exceptions", {"entity_id": rest[1], "kind": "skip_date", "date": rest[3]})
-            return done(st, b)
-        if rest[0] == "add" and len(rest) == 5 and rest[2] == "override_until":
-            st, b, _ = call("POST", "/v1/exceptions", {"entity_id": rest[1], "kind": "override_until", "until": rest[3], "state": rest[4]})
             return done(st, b)
         if rest[0] == "rm" and len(rest) == 2:
             st, b, _ = call("DELETE", "/v1/exceptions/" + rest[1])

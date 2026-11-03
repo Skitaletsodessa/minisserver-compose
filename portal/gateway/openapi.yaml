@@ -523,11 +523,11 @@ paths:
         "502": {$ref: "#/components/responses/Error"}
     post:
       operationId: addException
-      summary: Proxy. skip_date {date} or override_until {until, state} (modelled in the schedule service, not enforced in HA in step a)
+      summary: Proxy. skip_date {date}
       parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
       requestBody:
         required: true
-        content: {application/json: {schema: {type: object, required: [kind], properties: {kind: {type: string, enum: [skip_date, override_until]}, date: {type: string}, until: {type: string}, state: {type: string}}}}}
+        content: {application/json: {schema: {type: object, required: [kind], properties: {kind: {type: string, enum: [skip_date]}, date: {type: string}}}}}
       responses:
         "201": {description: created, content: {application/json: {schema: {type: object, required: [id], properties: {id: {type: string}}}}}}
         "401": {$ref: "#/components/responses/Error"}

@@ -160,7 +160,7 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
     post:
       operationId: addException
-      summary: "skip_date (date) or override_until (until, state); override is model and API only in step a"
+      summary: "skip_date (date). A timed switch-on is a run (/v1/runs)."
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: "#/components/schemas/ExceptionRequest"}}}
@@ -652,10 +652,8 @@ components:
       additionalProperties: false
       properties:
         entity_id: {type: string}
-        kind: {type: string, enum: [skip_date, override_until]}
+        kind: {type: string, enum: [skip_date]}
         date: {type: string}
-        until: {type: string}
-        state: {type: string, enum: ["on", "off"]}
     Actor:
       type: object
       required: [token, name, role]
@@ -760,13 +758,11 @@ components:
         devices: {type: array, items: {type: object}}
     Effective:
       type: object
-      required: [entity, at, state, source, active_overrides, skipped_today, next_edge]
+      required: [entity, at, state, skipped_today, next_edge]
       properties:
         entity: {type: string}
         at: {type: string}
         state: {type: [string, "null"], enum: ["on", "off", null]}
-        source: {type: string, enum: [schedule, override]}
-        active_overrides: {type: array, items: {type: string}}
         skipped_today: {type: boolean}
         next_edge: {oneOf: [{type: "null"}, {$ref: "#/components/schemas/Edge"}]}
     AuditRow:

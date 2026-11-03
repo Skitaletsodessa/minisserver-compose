@@ -154,9 +154,6 @@ class Edges(unittest.TestCase):
         ex = [{"id": "x1", "kind": "skip_date", "date": "2026-10-19", "created_at": "2026-10-18T10:00:00+02:00"}]
         eff = model.effective(ent, self.RULES, ex, at)
         self.assertEqual((eff["state"], eff["skipped_today"]), ("off", True))
-        ov = [{"id": "x2", "kind": "override_until", "until": "09:00", "state": "on", "created_at": "2026-10-19T06:00:00+02:00"}]
-        eff = model.effective(ent, self.RULES, ov, dt.datetime(2026, 10, 19, 8, 30, tzinfo=model.TZ))
-        self.assertEqual((eff["state"], eff["source"]), ("on", "override"))
 
 
 class Exceptions(unittest.TestCase):
@@ -169,15 +166,12 @@ class Exceptions(unittest.TestCase):
         self.assertEqual(model.validate_exception(PLUG, {"kind": "skip_date", "date": "2028-01-01"}, self.TODAY)[1][0]["code"], "far")
         self.assertEqual(model.validate_exception(PLUG, {"kind": "skip_date", "date": "tomorrow"}, self.TODAY)[1][0]["code"], "format")
 
-    def test_override(self):
-        ok, p = model.validate_exception(PLUG, {"kind": "override_until", "until": "20:00", "state": "on"}, self.TODAY)
-        self.assertEqual(p, [])
-        _o, p = model.validate_exception(PLUG, {"kind": "override_until", "until": "22:00", "state": "on"}, self.TODAY)
-        self.assertEqual([x["code"] for x in p], ["allowed_range"])      # an override may not run past the allowed range
-        _o, p = model.validate_exception(PLUG, {"kind": "override_until", "until": "03:00", "state": "off"}, self.TODAY)
-        self.assertEqual([x["code"] for x in p], ["dst_ambiguous"])
-        _o, p = model.validate_exception(VAC, {"kind": "override_until", "until": "20:00", "state": "on"}, self.TODAY)
-        self.assertTrue(p)
+    def test_override_until_is_gone(self):
+        _o, p = model.validate_exception(PLUG, {"kind": "override_until", "until": "20:00", "state": "on"}, self.TODAY)
+        self.assertIn("kind", [x["code"] for x in p])
+        _o, p = model.validate_exception(PLUG, {"kind": "skip_date", "date": "2026-10-21", "until": "20:00"}, self.TODAY)
+        self.assertEqual(p[0]["code"], "unknown_key")
+
 
 
 if __name__ == "__main__":
