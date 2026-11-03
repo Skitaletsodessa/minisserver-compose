@@ -1,0 +1,194 @@
+name: ETA Tiger robot vacuum
+# SKELETON (Task 32, 2026-10-24) built from documentation only; NOT yet confirmed on the robot.
+# Sources: localtuya issue #1964 (DP names), Tuya's common sweeping-robot instruction set (enum values marked "guess").
+# Every line marked "VERIFY" is settled by the Phase 2/3 capture on the real robot; unknown status strings must be added to the
+# status mapping BEFORE the entity is trusted (tuya_local shows an unmapped status as "cleaning").
+# Master copy lives in git (docs/robots/tuya-local/); the installed copy goes to
+# /srv/apps/homeassistant/custom_components/tuya_local/devices/ and must be re-copied after any upgrade of tuya_local.
+products:
+  - id: PRODUCT_ID_TO_BE_FILLED_FROM_THE_LAN_SCAN
+    manufacturer: ETA
+    model: Tiger 4242 90000
+entities:
+  - entity: vacuum
+    dps:
+      - id: 1
+        type: boolean
+        name: power
+      - id: 2
+        type: boolean
+        name: activate          # VERIFY polarity: Tuya's own "pause" is true = paused, tuya_local's "activate" is true = running
+      - id: 4
+        type: string
+        name: command
+        mapping:
+          - dps_val: smart
+            value: clean
+          - dps_val: chargego
+            value: return_to_base
+          - dps_val: pose
+            value: clean_spot   # VERIFY: "pose" = point-to-sweep in Tuya's set
+          - dps_val: zone
+            value: zone         # VERIFY
+          - dps_val: part
+            value: partial      # VERIFY
+      - id: 5
+        type: string
+        name: status
+        mapping:                # guess: Tuya sweeper "status" enum; VERIFY every value on the robot
+          - dps_val: standby
+            value: standby
+          - dps_val: smart
+            value: cleaning
+          - dps_val: zone_clean
+            value: cleaning
+          - dps_val: part_clean
+            value: cleaning
+          - dps_val: cleaning
+            value: cleaning
+          - dps_val: paused
+            value: paused
+          - dps_val: goto_pos
+            value: cleaning
+          - dps_val: pos_arrived
+            value: cleaning
+          - dps_val: pos_unarrive
+            value: cleaning
+          - dps_val: goto_charge
+            value: returning
+          - dps_val: charging
+            value: charging
+          - dps_val: charge_done
+            value: charged
+          - dps_val: sleep
+            value: sleep
+      - id: 9
+        type: string
+        name: fan_speed
+        mapping:
+          - dps_val: gentle
+            value: low
+          - dps_val: normal
+            value: medium
+          - dps_val: strong
+            value: high
+      - id: 11
+        type: boolean
+        name: locate            # VERIFY: the localtuya report says this DP "returns -1"
+        optional: true
+      - id: 28
+        type: bitfield
+        name: error
+        hidden: true
+
+  - entity: button
+    name: Return to dock (DP 3)
+    icon: "mdi:home-import-outline"
+    dps:
+      - id: 3
+        type: boolean
+        name: button          # VERIFY: the only route the localtuya author found for "recharge"; keep or hide after the Phase 3 session
+
+  - entity: sensor
+    class: battery
+    dps:
+      - id: 8
+        type: integer
+        name: sensor
+        unit: "%"
+        class: measurement
+
+  - entity: sensor
+    name: Cleaning time
+    category: diagnostic
+    class: duration
+    dps:
+      - id: 6
+        type: integer
+        name: sensor
+        unit: min               # VERIFY unit (minutes vs seconds)
+
+  - entity: sensor
+    name: Cleaning area
+    category: diagnostic
+    class: area
+    dps:
+      - id: 7
+        type: integer
+        name: sensor
+        unit: "m²"              # VERIFY unit
+
+  - entity: sensor
+    name: Total cleaning area
+    category: diagnostic
+    dps:
+      - id: 29
+        type: integer
+        name: sensor
+        optional: true
+
+  - entity: sensor
+    name: Total cleaning count
+    category: diagnostic
+    dps:
+      - id: 30
+        type: integer
+        name: sensor
+        optional: true
+
+  - entity: sensor
+    name: Total cleaning time
+    category: diagnostic
+    dps:
+      - id: 31
+        type: integer
+        name: sensor
+        optional: true
+
+  - entity: sensor
+    name: Edge brush life
+    category: diagnostic
+    dps:
+      - id: 17
+        type: integer
+        name: sensor
+        unit: "%"
+        class: measurement
+        optional: true
+
+  - entity: sensor
+    name: Roller brush life
+    category: diagnostic
+    dps:
+      - id: 19
+        type: integer
+        name: sensor
+        unit: "%"
+        class: measurement
+        optional: true
+
+  - entity: sensor
+    translation_key: filter_life
+    category: diagnostic
+    dps:
+      - id: 21
+        type: integer
+        name: sensor
+        unit: "%"
+        class: measurement
+        optional: true
+
+  - entity: binary_sensor
+    class: problem
+    category: diagnostic
+    dps:
+      - id: 28
+        type: bitfield
+        name: sensor
+        mapping:
+          - dps_val: 0
+            value: false
+          - value: true
+      - id: 28
+        type: bitfield
+        name: fault_code

@@ -1,0 +1,315 @@
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/gw/api.py /tmp/t32gw/gw/api.py
+--- /srv/compose/portal/gateway/gw/api.py	2026-10-22 20:32:38.000000000 +0200
++++ /tmp/t32gw/gw/api.py	2026-10-24 10:38:01.599531543 +0200
+@@ -476,6 +476,8 @@
+                 return 200, await self.core.resume(p, vid)
+             if action == "pause":
+                 return 200, await self.core.pause(p, vid)
++            if action == "locate":
++                return 200, await self.core.locate(p, vid)
+             return 200, await self.core.dock(p, vid)
+         st, body = await self.idem(request, p, "vac.%s:%s:%s" % (action, vid, scenario), go)
+         return JSONResponse(body, status_code=st)
+@@ -492,6 +494,9 @@
+     async def vac_dock(self, request):
+         return await self.vac_action(request, "dock")
+ 
++    async def vac_locate(self, request):
++        return await self.vac_action(request, "locate")
++
+     # schedules (proxy)
+     async def _sched_entity(self, sid):
+         for e in await self.sched.entities():
+@@ -1023,6 +1028,7 @@
+         Route("/v1/vacuums/{id}/pause", a.vac_pause, methods=["POST"]),
+         Route("/v1/vacuums/{id}/resume", a.vac_resume, methods=["POST"]),
+         Route("/v1/vacuums/{id}/dock", a.vac_dock, methods=["POST"]),
++        Route("/v1/vacuums/{id}/locate", a.vac_locate, methods=["POST"]),
+         Route("/v1/schedules/{id}", a.schedule_get, methods=["GET"]),
+         Route("/v1/schedules/{id}", a.schedule_put, methods=["PUT"]),
+         Route("/v1/schedules/{id}/preview", a.schedule_preview, methods=["POST"]),
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/gw/config.py /tmp/t32gw/gw/config.py
+--- /srv/compose/portal/gateway/gw/config.py	2026-10-22 20:32:12.000000000 +0200
++++ /tmp/t32gw/gw/config.py	2026-10-24 10:38:01.599531543 +0200
+@@ -1,6 +1,8 @@
+ """Gateway configuration: environment, feature flags and the SEED data (device meta, icon keywords, scenarios, service tiles).
+ The seed tables are inserted into the database on first start and are then DATA (editable), not code."""
++import json
+ import os
++import re
+ 
+ VERSION = "1.0.0"
+ DATA = os.environ.get("GW_DATA", "/data")
+@@ -46,7 +48,7 @@
+ IDEM_TTL_S = 24 * 3600
+ 
+ # HA: what the gateway may touch (in addition to what the schedule service lists); everything else is refused by the gateway itself
+-HA_ALLOWED_SERVICES = {"switch": {"turn_on", "turn_off"}, "script": {"turn_on", "turn_off"}, "vacuum": {"pause", "start", "return_to_base"}}
++HA_ALLOWED_SERVICES = {"switch": {"turn_on", "turn_off"}, "script": {"turn_on", "turn_off"}, "vacuum": {"pause", "start", "return_to_base", "locate"}}
+ 
+ # plug meta that HA/the schedule service do not carry: kind, power sensor (None = no trustworthy meter), switchable by the household
+ DEVICE_SEED = {
+@@ -70,6 +72,27 @@
+                    "scenarios": {"full": {"name": "Полная уборка", "description": "Коридор, ванная, гостиная, кухня: пылесос и протирка, станция после пылесоса.", "variables": {}}}},
+ }
+ 
++# Task 32: robots WITHOUT a plan script (the ETA Tiger). They exist only when the operator writes the feature-flag file (default: <data>/robots.json, or $GW_ROBOTS_FILE):
++#   {"tiger": {"enabled": true, "vacuum": "vacuum.<entity id of the robot in Home Assistant>"}}
++# No plan script, no schedule, no scenario beyond one plain "start" made by a person; the card also gets a "locate" button.
++_VACUUM_ENTITY = re.compile(r"^vacuum\.[a-z0-9_]{1,64}$")
++
++
++def vacuum_seed(data_dir=None):
++    out = dict(VACUUM_SEED)
++    path = os.environ.get("GW_ROBOTS_FILE") or os.path.join(data_dir or DATA, "robots.json")
++    try:
++        with open(path, encoding="utf-8") as f:
++            flag = json.load(f)
++    except (OSError, ValueError):
++        return out
++    t = flag.get("tiger") if isinstance(flag, dict) else None
++    if isinstance(t, dict) and t.get("enabled") is True and isinstance(t.get("vacuum"), str) and _VACUUM_ENTITY.match(t["vacuum"]):
++        out["tiger"] = {"name": "Пылесос — ETA Tiger", "vacuum": t["vacuum"], "script": None, "schedule_id": None, "icon": "vacuum", "can_locate": True,
++                        "scenarios": {"clean": {"name": "Уборка", "description": "Обычная уборка. Запускает только человек: расписаний у этого робота нет.", "variables": {}}}}
++    return out
++
++
+ # keyword -> icon key (matched against the lower-cased display name and id); Russian and English; first match by priority wins
+ ICON_SEED = [
+     ("сушилк", "towel_dryer"), ("towel", "towel_dryer"), ("dryer", "towel_dryer"),
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/gw/core.py /tmp/t32gw/gw/core.py
+--- /srv/compose/portal/gateway/gw/core.py	2026-10-22 11:25:17.000000000 +0200
++++ /tmp/t32gw/gw/core.py	2026-10-24 10:38:01.599531543 +0200
+@@ -79,12 +79,13 @@
+         self.vacuums = {}
+         self.eid_vacuum = {}
+         sched_ids = {e["id"] for e in ents}
+-        for vid, v in config.VACUUM_SEED.items():
++        for vid, v in config.vacuum_seed(self.db.dir).items():
+             self.vacuums[vid] = v
+-            watch |= {v["vacuum"], v["script"]}
+-            ctl |= {v["vacuum"], v["script"]}
+-            self.eid_vacuum[v["vacuum"]] = vid
+-            self.eid_vacuum[v["script"]] = vid
++            ents_v = {v["vacuum"]} | ({v["script"]} if v.get("script") else set())      # a robot without a plan script (Task 32) has no script entity
++            watch |= ents_v
++            ctl |= ents_v
++            for eid_v in ents_v:
++                self.eid_vacuum[eid_v] = vid
+         self.ha.set_scope(watch, ctl)
+         return len(self.devices), len(self.vacuums)
+ 
+@@ -96,12 +97,16 @@
+             self.hub.publish("device", {"id": did, "state": self._norm(new["state"]), "stale": self.ha.stale()})
+         elif eid in self.eid_vacuum:
+             vid = self.eid_vacuum[eid]
+-            if eid == self.vacuums[vid]["script"] and old and old["state"] == "on" and new["state"] == "off":
++            if self.vacuums[vid].get("script") and eid == self.vacuums[vid]["script"] and old and old["state"] == "on" and new["state"] == "off":
+                 vs = self.ha.state(self.vacuums[vid]["vacuum"])
+                 res = "finished" if vs in ("docked", "charging", "charged") else "interrupted"
+                 self.db.x("INSERT INTO vacuum_runs(vacuum_id,last_result,last_result_ts) VALUES (?,?,?) ON CONFLICT(vacuum_id) DO UPDATE SET last_result=excluded.last_result, last_result_ts=excluded.last_result_ts",
+                           (vid, res, self.clock()))
+-            self.hub.publish("vacuum", {"id": vid, "state": self.ha.state(self.vacuums[vid]["vacuum"]), "script": self.ha.state(self.vacuums[vid]["script"])})
++            self.hub.publish("vacuum", {"id": vid, "state": self.ha.state(self.vacuums[vid]["vacuum"]), "script": self._ss(self.vacuums[vid])})
++
++    def _ss(self, v):
++        """State of the robot's plan script; None for a robot that has none."""
++        return self.ha.state(v["script"]) if v.get("script") else None
+ 
+     @staticmethod
+     def _norm(s):
+@@ -376,7 +381,7 @@
+     # ── vacuums ──
+     def vacuum_view(self, principal, vid):
+         v = self.vacuums[vid]
+-        vc, sc = self.ha.get(v["vacuum"]), self.ha.get(v["script"])
++        vc, sc = self.ha.get(v["vacuum"]), (self.ha.get(v["script"]) if v.get("script") else None)
+         state = vc["state"] if vc else "unavailable"
+         avail = state not in ("unavailable", "unknown")
+         script_on = bool(sc and sc["state"] == "on")
+@@ -391,7 +396,7 @@
+         return {"id": vid, "name": v["name"], "icon": v["icon"], "state": state, "battery": (vc["attrs"].get("battery_level") if vc else None), "available": avail,
+                 "stale": self.ha.stale() or vc is None, "running_scenario": running, "last_result": last,
+                 "scenarios": [{"id": sid, "name": s["name"], "description": s["description"]} for sid, s in v["scenarios"].items()],
+-                "schedule_id": v["schedule_id"], "can_start": principal["role"] in ("admin", "household") and avail and not busy and state == "docked" and not self.ha.stale()}
++                "schedule_id": v["schedule_id"], "can_locate": bool(v.get("can_locate")) and principal["role"] in ("admin", "household") and avail and not self.ha.stale(), "can_start": principal["role"] in ("admin", "household") and avail and not busy and state == "docked" and not self.ha.stale()}
+ 
+     def vacuums_view(self, principal):
+         return [self.vacuum_view(principal, vid) for vid in self.vacuums]
+@@ -410,6 +415,8 @@
+         v = self._vac(principal, vid)
+         if scenario not in v["scenarios"]:
+             raise GwError(404, "not_found", "no such scenario", {"scenario": scenario})
++        if not v.get("script"):
++            return await self._start_direct(principal, vid, v, scenario)
+         vs, ss = self.ha.state(v["vacuum"]), self.ha.state(v["script"])
+         tgt = "%s/%s" % (vid, scenario)
+         reason = None
+@@ -443,7 +450,7 @@
+         vs = self.ha.state(v["vacuum"])
+         if self.ha.stale():
+             raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
+-        if vs != "cleaning" and self.ha.state(v["script"]) == "on":
++        if vs != "cleaning" and self._ss(v) == "on":
+             # Found live 2026-10-20: the plan script is running but the robot has not left the dock yet (this robot reports "docked" for up to ~1 min
+             # after the start). Pausing nothing would leave the plan running, so a pause here cancels the plan and sends the robot home (with the guard).
+             res = await self.dock(principal, vid)
+@@ -452,7 +459,7 @@
+         if vs != "cleaning":
+             raise GwError(409, "not_running", "the robot is not cleaning (%s)" % vs, {"state": vs})
+         await self.ha.call("vacuum", "pause", v["vacuum"])
+-        if self.ha.state(v["script"]) == "on":
++        if self._ss(v) == "on":
+             self._note_stop(principal, v, "pause")
+         obs, waited = await self.ha.wait_state(v["vacuum"], lambda s: s == "paused", config.VACUUM_CONFIRM_S)
+         outcome = "confirmed" if obs == "paused" else "unconfirmed"
+@@ -479,7 +486,7 @@
+ 
+     async def dock(self, principal, vid):
+         v = self._vac(principal, vid)
+-        vs, ss = self.ha.state(v["vacuum"]), self.ha.state(v["script"])
++        vs, ss = self.ha.state(v["vacuum"]), self._ss(v)
+         if self.ha.stale():
+             raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
+         if vs in (None, "unavailable", "unknown"):
+@@ -494,13 +501,54 @@
+         ok_states = ("returning", "docked")
+         t0 = time.monotonic()
+         obs_v, _ = await self.ha.wait_state(v["vacuum"], lambda s: s in ok_states, config.VACUUM_CONFIRM_S)
+-        obs_s, _ = await self.ha.wait_state(v["script"], lambda s: s == "off", max(0.5, config.VACUUM_CONFIRM_S - (time.monotonic() - t0)))
++        if v.get("script"):
++            obs_s, _ = await self.ha.wait_state(v["script"], lambda s: s == "off", max(0.5, config.VACUUM_CONFIRM_S - (time.monotonic() - t0)))
++        else:
++            obs_s = "off"                                                # no plan script: nothing to wait for
+         outcome = "confirmed" if obs_v in ok_states and obs_s == "off" else "unconfirmed"
+         if ss == "on" and outcome == "confirmed":
+             self.db.x("INSERT INTO vacuum_runs(vacuum_id,last_result,last_result_ts) VALUES (?,?,?) ON CONFLICT(vacuum_id) DO UPDATE SET last_result='stopped', last_result_ts=excluded.last_result_ts", (vid, "stopped", self.clock()))
+         self.db.audit("vacuum_dock", target=vid, before={"state": vs, "script": ss}, after={"outcome": outcome, "vacuum": obs_v, "script": obs_s}, ok=outcome == "confirmed", **self._actor(principal))
+         return {"outcome": outcome, "vacuum_id": vid, "action": "dock", "scenario": None, "observed": {"vacuum": obs_v, "script": obs_s}, "waited_ms": int((time.monotonic() - t0) * 1000)}
+ 
++    async def _start_direct(self, principal, vid, v, scenario):
++        """Task 32: start a robot that has no plan script: vacuum.start by a person, only from the dock, confirmed by the robot reporting "cleaning"."""
++        vs = self.ha.state(v["vacuum"])
++        tgt = "%s/%s" % (vid, scenario)
++        reason = None
++        if self.ha.stale():
++            raise GwError(503, "ha_unavailable", "Home Assistant is not reachable; nothing was started")
++        if vs in (None, "unavailable", "unknown"):
++            reason = ("robot_unavailable", "the robot is unavailable")
++        elif vs != "docked":
++            reason = ("not_docked", "the robot is not on its dock (%s)" % vs)
++        if reason:
++            self.db.audit("vacuum_start", target=tgt, before={"state": vs}, after={"outcome": "refused", "reason": reason[0]}, ok=False, **self._actor(principal))
++            raise GwError(409, reason[0], reason[1], {"state": vs, "script": None})
++        try:
++            await self.ha.call("vacuum", "start", v["vacuum"])
++        except GwError as e:
++            self.db.audit("vacuum_start", target=tgt, before={"state": vs}, after={"outcome": "failed", "error": e.code}, ok=False, **self._actor(principal))
++            raise
++        obs, waited = await self.ha.wait_state(v["vacuum"], lambda s: s == "cleaning", config.VACUUM_CONFIRM_S)
++        outcome = "confirmed" if obs == "cleaning" else "unconfirmed"
++        self.db.audit("vacuum_start", target=tgt, before={"state": vs}, after={"outcome": outcome, "vacuum": obs}, ok=outcome == "confirmed", **self._actor(principal))
++        return {"outcome": outcome, "vacuum_id": vid, "action": "start", "scenario": scenario, "observed": {"vacuum": obs}, "waited_ms": int(waited * 1000)}
++
++    async def locate(self, principal, vid):
++        """Make the robot beep. There is no read-back for it, so the honest outcome is always 'unconfirmed' (the command was accepted by Home Assistant)."""
++        v = self._vac(principal, vid)
++        if not v.get("can_locate"):
++            raise GwError(404, "not_found", "this robot cannot be located from here", {"id": vid})
++        vs = self.ha.state(v["vacuum"])
++        if self.ha.stale():
++            raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
++        if vs in (None, "unavailable", "unknown"):
++            raise GwError(409, "robot_unavailable", "the robot is unavailable")
++        await self.ha.call("vacuum", "locate", v["vacuum"])
++        self.db.audit("vacuum_locate", target=vid, before={"state": vs}, after={"outcome": "sent"}, ok=True, **self._actor(principal))
++        return {"outcome": "unconfirmed", "vacuum_id": vid, "action": "locate", "scenario": None, "observed": {"vacuum": self.ha.state(v["vacuum"])}, "waited_ms": 0}
++
+     def _note_stop(self, principal, v, action):
+         """A person stopped a running plan. The host-side alert watcher (ha-alerts) reads this small file so that a plan someone cancelled on purpose is a
+         quiet line, not a 'plan did not finish' page. One JSON object per line, no secret in it; trimmed to the last 100 lines when it grows past 64 KB."""
+@@ -531,7 +579,7 @@
+                 await asyncio.sleep(config.STOP_GUARD_POLL_S)
+                 if self.ha.stale():
+                     continue
+-                if self.ha.state(v["script"]) == "on":
++                if self._ss(v) == "on":
+                     return
+                 if self.ha.state(v["vacuum"]) == "cleaning" and sends < 3 and time.monotonic() - last >= 8:
+                     try:
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/gw/static/app.js /tmp/t32gw/gw/static/app.js
+--- /srv/compose/portal/gateway/gw/static/app.js	2026-10-22 20:39:47.000000000 +0200
++++ /tmp/t32gw/gw/static/app.js	2026-10-24 10:38:01.599531543 +0200
+@@ -136,7 +136,7 @@
+     var card = btn.closest("[data-vacuum]");
+     var id = card.dataset.vacuum;
+     var act = btn.dataset.action;
+-    var path = act === "vac-start" ? "/v1/vacuums/" + id + "/scenarios/" + btn.dataset.scenario + "/start" : "/v1/vacuums/" + id + (act === "vac-pause" ? "/pause" : act === "vac-resume" ? "/resume" : "/dock");
++    var path = act === "vac-start" ? "/v1/vacuums/" + id + "/scenarios/" + btn.dataset.scenario + "/start" : "/v1/vacuums/" + id + (act === "vac-pause" ? "/pause" : act === "vac-resume" ? "/resume" : act === "vac-locate" ? "/locate" : "/dock");
+     btn.disabled = true;
+     api("POST", path).then(function (r) {
+       if (r.ok && act === "vac-pause" && r.json.action === "dock") { note(card, T("plan_cancelled"), true); }
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/gw/strings.py /tmp/t32gw/gw/strings.py
+--- /srv/compose/portal/gateway/gw/strings.py	2026-10-22 20:33:30.000000000 +0200
++++ /tmp/t32gw/gw/strings.py	2026-10-24 10:38:01.599531543 +0200
+@@ -13,7 +13,7 @@
+     "next_edge_on": "включится в {t}", "next_edge_off": "выключится в {t}", "next_edge_trigger": "запуск в {t}",
+     "stale": "данные устарели: нет связи с Home Assistant", "unconfirmed": "Не подтверждено: устройство сейчас «{s}»", "confirmed": "Готово",
+     "power": "{w} Вт", "menu": "Меню", "settings": "Настройки", "schedule": "Расписание", "close": "Закрыть",
+-    "vacuums": "Пылесосы", "start": "Запустить", "pause": "Пауза", "dock": "На базу", "cancel_start": "Отменить запуск", "resume": "Продолжить", "plan_cancelled": "План ещё запускался (робот не тронулся): он отменён, робот едет на базу.", "battery": "Заряд {p}%", "running": "идёт: {s}", "last_result": "последний раз: {r}",
++    "vacuums": "Пылесосы", "start": "Запустить", "pause": "Пауза", "dock": "На базу", "locate": "Найти", "cancel_start": "Отменить запуск", "resume": "Продолжить", "plan_cancelled": "План ещё запускался (робот не тронулся): он отменён, робот едет на базу.", "battery": "Заряд {p}%", "running": "идёт: {s}", "last_result": "последний раз: {r}",
+     "vac_docked": "на базе", "vac_cleaning": "убирает", "vac_paused": "пауза", "vac_returning": "едет на базу", "vac_idle": "стоит", "vac_error": "ошибка", "vac_unavailable": "недоступен",
+     "services_title": "Сервисы", "badge_ok": "работает", "badge_degraded": "с перебоями", "badge_down": "не отвечает", "badge_unknown": "нет данных", "open": "Открыть",
+     "people_title": "Люди и устройства", "person_role": "Роль", "person_parent": "Родитель", "web_login": "Вход через браузер", "phones": "Телефоны",
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/gw/templates/home.html /tmp/t32gw/gw/templates/home.html
+--- /srv/compose/portal/gateway/gw/templates/home.html	2026-10-20 19:46:23.000000000 +0200
++++ /tmp/t32gw/gw/templates/home.html	2026-10-24 10:38:01.599531543 +0200
+@@ -52,6 +52,7 @@
+       {% for s in v.scenarios %}<button class="primary" data-action="vac-start" data-scenario="{{ s.id }}" title="{{ s.description }}" {% if not v.can_start %}disabled{% endif %}>{{ t('start') }}: {{ s.name }}</button>{% endfor %}
+       <button data-action="vac-pause" {% if not (me.role in ("admin", "household")) or v.state != "cleaning" %}disabled{% endif %}>{{ t("pause") }}</button>
+       <button data-action="vac-resume" {% if not (me.role in ("admin", "household")) or v.state != "paused" %}disabled{% endif %}>{{ t("resume") }}</button>
++      {% if v.can_locate %}<button data-action="vac-locate">{{ t("locate") }}</button>{% endif %}
+       <button data-action="vac-dock" {% if not (me.role in ('admin', 'household')) %}disabled{% endif %}>{{ t("cancel_start") if (v.running_scenario and v.state in ("docked", "idle")) else t("dock") }}</button>
+     </div>
+     <p class="note" role="status" hidden></p>
+diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=test_tiger.py' /srv/compose/portal/gateway/openapi.yaml /tmp/t32gw/openapi.yaml
+--- /srv/compose/portal/gateway/openapi.yaml	2026-10-22 20:34:51.000000000 +0200
++++ /tmp/t32gw/openapi.yaml	2026-10-24 10:38:01.599531543 +0200
+@@ -443,6 +443,21 @@
+         "403": {$ref: "#/components/responses/Error"}
+         "404": {$ref: "#/components/responses/Error"}
+         "503": {$ref: "#/components/responses/Error"}
++  /v1/vacuums/{id}/locate:
++    post:
++      operationId: locateVacuum
++      summary: "Makes a robot that supports it beep (Task 32, only robots enabled by the robots.json feature flag). There is no read-back: the outcome is always unconfirmed"
++      parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Idem"}]
++      responses:
++        "200": {description: result, content: {application/json: {schema: {$ref: "#/components/schemas/VacuumResult"}}}}
++        "401": {$ref: "#/components/responses/Error"}
++        "429": {$ref: "#/components/responses/Error"}
++        "422": {$ref: "#/components/responses/Error"}
++        "502": {$ref: "#/components/responses/Error"}
++        "403": {$ref: "#/components/responses/Error"}
++        "404": {$ref: "#/components/responses/Error"}
++        "409": {$ref: "#/components/responses/Error"}
++        "503": {$ref: "#/components/responses/Error"}
+   /v1/schedules/{id}:
+     get:
+       operationId: getSchedule
+@@ -1497,13 +1512,14 @@
+         scenarios: {type: array, items: {type: object, required: [id, name, description], properties: {id: {type: string}, name: {type: string}, description: {type: string}}}}
+         schedule_id: {type: [string, "null"]}
+         can_start: {type: boolean}
++        can_locate: {type: boolean}
+     VacuumResult:
+       type: object
+       required: [outcome, vacuum_id, action, observed]
+       properties:
+         outcome: {type: string, enum: [confirmed, unconfirmed]}
+         vacuum_id: {type: string}
+-        action: {type: string, enum: [start, pause, resume, dock]}
++        action: {type: string, enum: [start, pause, resume, dock, locate]}
+         scenario: {type: [string, "null"]}
+         observed: {type: object}
+         waited_ms: {type: integer}

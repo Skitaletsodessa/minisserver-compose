@@ -167,6 +167,14 @@ VACUUM_STUCK_STATES = ("paused", "error", "idle")   # idle = stopped off the doc
 VACUUM_STUCK_SECS = 30 * 60
 VACUUM_UNAVAIL_QUIET_SECS = 60 * 60
 VACUUM_UNAVAIL_ESCALATE_SECS = 6 * 3600
+# Task 32: robots WITHOUT a plan script or schedule (the ETA Tiger: only calls made by a person or by the agent's supervised tests).
+# key: (label, vacuum entity, battery sensor). The entity ids are placeholders until the robot is paired and added to HA (an entity that does not exist is skipped).
+PLANLESS_VACUUMS = {
+    "tiger": ("Пылесос ETA Tiger", "vacuum.eta_tiger_robot_vacuum", "sensor.eta_tiger_robot_vacuum_battery"),
+}
+PLANLESS_ERROR_SECS = 5 * 60                        # a fault is reported after 5 minutes (a flicker is not)
+PLANLESS_RUN_MAX_SECS = 3 * 3600                    # cleaning/returning without a pause longer than a full battery allows (160 min + return)
+PLANLESS_CHARGE_STALL_SECS = 3 * 3600               # docked for this long and the battery did not rise while below 90 %
 PLAN_DUE_GRACE = 2 * 3600
 PLAN_HUNG_SECS = 4 * 3600
 PLAN_ALERT_FROM = 1792151514                        # earlier plan runs never wrote the 'ПЛАН ВЫПОЛНЕН' line
@@ -526,6 +534,53 @@ def check_vacuums(ctx, N):
                 N.clear(key_c, "")
 
 
+def check_planless_vacuums(ctx, N):
+    """Task 32 safety checks for a robot nobody schedules: fault, stuck off the dock, a run that never ends, a battery that stops charging, unavailable (quiet)."""
+    for key, (label, vac, battery) in PLANLESS_VACUUMS.items():
+        state, changed = ctx.state(vac)
+        if state is None:
+            continue
+        age = ctx.now - (changed or ctx.now)
+        key_e, key_s, key_r, key_c = (f"ha-planless-{k}-{key}" for k in ("error", "stuck", "run", "charge"))
+        if state == "error" and age >= PLANLESS_ERROR_SECS:                                  # B: a fault
+            N.alert(key_e, f"HA: {label} сообщает об ошибке уже {int(age // 60)} мин", tier="B")
+        elif state != "unavailable":
+            N.clear(key_e, "")
+        if state in ("paused", "idle") and age >= VACUUM_STUCK_SECS:                           # B: stopped off the dock
+            word = "на паузе" if state == "paused" else "стоит вне базы"
+            N.alert(key_s, f"HA: {label} {word} уже {int(age // 60)} мин. Возможно застрял.", tier="B")
+        elif state != "unavailable":
+            N.clear(key_s, "")
+        run_start = None                                                                       # start of the trailing stretch of cleaning/returning
+        if state in ("cleaning", "returning"):
+            for _ts, st in reversed(ctx.transitions(vac, ctx.now - 2 * PLANLESS_RUN_MAX_SECS)):
+                if st not in ("cleaning", "returning"):
+                    break
+                run_start = _ts
+        if run_start is not None and ctx.now - run_start >= PLANLESS_RUN_MAX_SECS:             # B: a run that does not end
+            N.alert(key_r, f"HA: {label} в работе уже {int((ctx.now - run_start) // 3600)} ч подряд, возможно застрял или не вернулся на базу", tier="B")
+        elif state != "unavailable":
+            N.clear(key_r, "")
+        stalled = False
+        if state == "docked" and age >= PLANLESS_CHARGE_STALL_SECS:                           # B: docked, not charging
+            readings = []
+            for _ts, val in ctx.transitions(battery, ctx.now - PLANLESS_CHARGE_STALL_SECS):
+                try:
+                    readings.append(float(val))
+                except (TypeError, ValueError):
+                    pass
+            stalled = bool(readings) and readings[-1] < 90 and max(readings) <= readings[0]
+        if stalled:
+            N.alert(key_c, f"HA: {label} на базе больше {int(age // 3600)} ч, но заряд не растёт ({readings[-1]:.0f}%)", tier="B")
+        elif state != "unavailable":
+            N.clear(key_c, "")
+        key_u = f"ha-planless-unavail-{key}"                                                   # C: simply off / unreachable
+        if state == "unavailable" and age >= VACUUM_UNAVAIL_QUIET_SECS:
+            N.alert(key_u, f"HA: {label} недоступен {int(age // 60)} мин", tier="C")
+        else:
+            N.clear(key_u, "")
+
+
 def evaluate(ctx, N):
     if not SCHEDULE:                                # B: the schedule snapshot (and its cached copy) is unreadable - say so, do not guess
         N.alert("ha-alerts-schedules", f"ha-alerts: расписания недоступны ({SCHEDULE_STATE['error']}); проверки розеток и планов пылесосов пропущены", tier="B")
@@ -534,6 +589,7 @@ def evaluate(ctx, N):
     check_plugs(ctx, N)
     check_purifiers(ctx, N)
     check_vacuums(ctx, N)
+    check_planless_vacuums(ctx, N)
 
 
 def main():
