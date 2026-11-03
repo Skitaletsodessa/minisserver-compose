@@ -9,7 +9,7 @@
 # Nothing here touches the live homeassistant container; the scratch copy is deleted on exit.
 set -euo pipefail
 WORK=/srv/apps/restore-test-ha; NAME=ha-restore-scratch
-IMG=$(docker inspect homeassistant --format '{{.Config.Image}}')            # the exact pinned image
+IMG=${HA_IMAGE:-$(docker inspect homeassistant --format '{{.Config.Image}}')}            # the exact pinned image (HA_IMAGE=... tests a candidate image before an upgrade)
 LIVE=/srv/apps/homeassistant; LIVEGIT=/srv/compose/homeassistant
 cleanup() { docker rm -f -v $NAME >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT

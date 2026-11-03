@@ -84,14 +84,6 @@ entities:
         name: error
         hidden: true
 
-  - entity: button
-    name: Return to dock (DP 3)
-    icon: "mdi:home-import-outline"
-    dps:
-      - id: 3
-        type: boolean
-        name: button          # VERIFY: the only route the localtuya author found for "recharge"; keep or hide after the Phase 3 session
-
   - entity: sensor
     class: battery
     dps:
