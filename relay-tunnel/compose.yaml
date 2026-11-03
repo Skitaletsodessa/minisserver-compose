@@ -6,7 +6,7 @@
 # metrics endpoint on loopback. Started only after the token exists:  docker compose up -d
 services:
   cloudflared:
-    image: cloudflare/cloudflared:2026.9.3
+    image: cloudflare/cloudflared:2026.10.7
     container_name: relay-tunnel
     restart: unless-stopped
     network_mode: host
