@@ -22,18 +22,20 @@ reconcile_all_plugs:
 # Resume after an abort: run with skip_phases = number of finished phases (Developer tools > Actions:
 #   action: script.vacuum_livingroom_plan / data: {skip_phases: 1}).
 # Aborting: stop the script (Settings > Scripts). A robot sent home by hand counts as "phase done".
+# 2026-11-03 (Ivan): the plan is now VACUUM ONLY, Turbo, one phase per room (Koridor, Bathroom, Living room, Kitchen) with the bin emptied after each room; the mop phases
+# were removed (the comments below still describe the mop handling, which no longer runs). Scheduled daily at 10:00 (schedule entity vacuum_livingroom).
 vacuum_livingroom_plan:
-  alias: 'Vacuum Livingroom: vacuum + mop plan, dust emptied after vacuum phases'
+  alias: 'Vacuum Livingroom: vacuum only (Turbo), room by room, dust emptied after each room'
   mode: single
   max_exceeded: silent
   fields:
     skip_phases:
-      description: 'How many first phases to skip (0 = the whole plan; 1 = start with the Koridor mop). Phases: 1 Koridor vacuum, 2 Koridor mop, 3 Bathroom vacuum, 4 Bathroom mop, 5 Living room vacuum, 6 Kitchen vacuum, 7 Kitchen mop.'
+      description: 'How many first phases (rooms) to skip (0 = the whole plan). Phases since 2026-11-03: 1 Koridor, 2 Bathroom, 3 Living room, 4 Kitchen (vacuum only).'
       default: 0
       selector:
         number:
           min: 0
-          max: 6
+          max: 3
           mode: box
   variables:
     st: sensor.xiaomi_ov51gl_b5f6_status
@@ -44,12 +46,9 @@ vacuum_livingroom_plan:
     skip_n: "{{ skip_phases | default(0) | int(0) }}"
     phases:
       - {room: 10, kind: vacuum, dust: true}
-      - {room: 10, kind: mop, dust: false}
       - {room: 9, kind: vacuum, dust: true}
-      - {room: 9, kind: mop, dust: false}
       - {room: 13, kind: vacuum, dust: true}
       - {room: 8, kind: vacuum, dust: true}
-      - {room: 8, kind: mop, dust: true}
   sequence:
     - if: "{{ states(st) not in ['charging', 'charged'] }}"
       then:

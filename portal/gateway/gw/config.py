@@ -67,7 +67,7 @@ VACUUM_SEED = {
                               "evening": {"name": "Турбо + мойка", "description": "Спальня: пылесос Turbo, затем протирка Level 3.", "variables": {"plan": "evening"}}}},
     "livingroom": {"name": "Пылесос — гостиная", "vacuum": "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "script": "script.vacuum_livingroom_plan",
                    "schedule_id": "vacuum_livingroom", "icon": "vacuum",
-                   "scenarios": {"full": {"name": "Полная уборка", "description": "Коридор, ванная, гостиная, кухня: пылесос и протирка, станция после пылесоса.", "variables": {}}}},
+                   "scenarios": {"full": {"name": "Полная уборка", "description": "Коридор, ванная, гостиная, кухня по очереди: только пылесос Turbo, мусор выгружается после каждой комнаты.", "variables": {}}}},
     # ETA Tiger (Task 32, 2026-11-03): a whole-flat cleaning; the scenarios differ only in the suction level, the water on the mop is always the minimum (Low).
     # The tuya_local vacuum entity has no battery attribute, so the card reads the separate battery sensor.
     "tiger": {"name": "Пылесос — Tiger", "vacuum": "vacuum.eta_tiger", "script": "script.vacuum_tiger_plan", "battery_sensor": "sensor.eta_tiger_battery",
