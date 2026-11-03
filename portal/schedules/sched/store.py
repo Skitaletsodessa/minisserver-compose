@@ -495,38 +495,41 @@ class Store(ChildMixin):
         self.publish()
         return self.entity(eid), True
 
-    def add_plug(self, actor, eid, name, ha_target, like):
-        """Admin only. A new smart plug as a schedule entity, copying guardrails, flags and rules of the plug `like` (so a plant-light plug starts with the plant-light
-        window). It starts UNMANAGED: nothing is rendered into Home Assistant until `managed on` (the usual one-entity cutover, after HA has the switch)."""
+    def add_plug(self, actor, eid, name, ha_target, like, kind="plug"):
+        """Admin only. A new smart plug (kind=plug, ha_target switch.*) or vacuum plan (kind=vacuum_plan, ha_target script.*) as a schedule entity, copying guardrails, flags and rules of the
+        entity `like` of the same kind (so a plant-light plug starts with the plant-light window). It starts UNMANAGED: nothing is rendered into Home Assistant until `managed on` (the usual one-entity cutover, after HA has the switch)."""
         import re
         with self._tx():
             if actor["role"] != "admin":
-                raise Forbidden("adding a plug is admin-only")
+                raise Forbidden("adding an entity is admin-only")
             probs = []
+            if kind not in ("plug", "vacuum_plan"):
+                raise model.ValidationError([model.problem("kind", "kind", "kind must be plug or vacuum_plan")])
             if not isinstance(eid, str) or not model.ENTITY_ID_RE.match(eid):
                 probs.append(model.problem("format", "id", "id must match [a-z][a-z0-9_]{0,39}"))
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
                 probs.append(model.problem("format", "name", "name must be 1..80 characters"))
-            if not isinstance(ha_target, str) or not re.match(r"^switch\.[a-z0-9_]{1,60}$", ha_target):
-                probs.append(model.problem("format", "ha_target", "ha_target must be a Home Assistant switch entity id (switch.something)"))
+            domain = "switch" if kind == "plug" else "script"
+            if not isinstance(ha_target, str) or not re.match(r"^%s\.[a-z0-9_]{1,60}$" % domain, ha_target):
+                probs.append(model.problem("format", "ha_target", "ha_target must be a Home Assistant %s entity id (%s.something)" % (domain, domain)))
             src = None
             for e in self.entities():
                 if e["id"] == eid:
                     probs.append(model.problem("duplicate", "id", "an entity %s already exists" % eid))
                 if e.get("ha_target") == ha_target:
                     probs.append(model.problem("duplicate", "ha_target", "%s is already the switch of %s" % (ha_target, e["id"])))
-                if e["id"] == like and e["kind"] == "plug":
+                if e["id"] == like and e["kind"] == kind:
                     src = e
             if not src:
-                probs.append(model.problem("like", "like", "like must name an existing plug entity to copy windows and guardrails from"))
+                probs.append(model.problem("like", "like", "like must name an existing %s entity to copy windows and guardrails from" % kind))
             if probs:
                 raise model.ValidationError(probs)
             rules = self.schedule(src["id"])["rules"]
             pos = (self.db.execute("SELECT COALESCE(MAX(position), 0) m FROM entities").fetchone()["m"]) + 1
             self.db.execute("INSERT INTO entities(id,kind,name,ha_target,managed,flags,guardrails,position) VALUES (?,?,?,?,?,?,?,?)",
-                            (eid, "plug", name.strip(), ha_target, 0, canon(src["flags"]), canon(src["guardrails"]), pos))
+                            (eid, kind, name.strip(), ha_target, 0, canon(src["flags"]), canon(src["guardrails"]), pos))
             self.db.execute("INSERT INTO schedules(entity_id,version,tz,rules,updated_at) VALUES (?,?,?,?,?)", (eid, 1, model.TZ_NAME, canon(rules), self.clock()))
-            seq = self._audit(actor, "entity_add", eid, None, {"kind": "plug", "name": name.strip(), "ha_target": ha_target, "like": like, "guardrails": src["guardrails"],
+            seq = self._audit(actor, "entity_add", eid, None, {"kind": kind, "name": name.strip(), "ha_target": ha_target, "like": like, "guardrails": src["guardrails"],
                                                               "flags": src["flags"], "rules": rules})
         self._mirror_audit(seq)
         self.publish()

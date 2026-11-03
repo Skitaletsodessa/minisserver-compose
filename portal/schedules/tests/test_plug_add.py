@@ -67,3 +67,42 @@ class AddPlug(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AddVacuumPlan(unittest.TestCase):
+    """A vacuum plan script as an entity (the ETA Tiger, 2026-11-03): same rules as a plug, but ha_target is a script and `like` a vacuum plan."""
+    def setUp(self):
+        self.e = Env()
+
+    def add(self, body, role="admin"):
+        return self.e.req("POST", "/v1/entities", role=role, json={"kind": "vacuum_plan", **body})
+
+    def test_add_copies_a_vacuum_plan_and_starts_unmanaged(self):
+        r = self.add({"id": "vacuum_tiger", "name": "Vacuum plan - tiger", "ha_target": "script.vacuum_tiger_plan", "like": "vacuum_livingroom"})
+        self.assertEqual(r.status_code, 201, r.text)
+        ent = r.json()
+        self.assertEqual((ent["id"], ent["kind"], ent["ha_target"], ent["managed"]), ("vacuum_tiger", "vacuum_plan", "script.vacuum_tiger_plan", False))
+        like = next(x for x in self.e.req("GET", "/v1/entities").json()["entities"] if x["id"] == "vacuum_livingroom")
+        self.assertEqual((ent["guardrails"], ent["flags"]), (like["guardrails"], like["flags"]))
+        self.assertEqual([x["start"] for x in self.e.req("GET", "/v1/schedules/vacuum_tiger").json()["rules"]], ["20:30"])
+
+    def test_the_rule_is_editable_with_variables_and_the_plan_can_be_managed(self):
+        self.add({"id": "vacuum_tiger", "name": "Tiger", "ha_target": "script.vacuum_tiger_plan", "like": "vacuum_livingroom"})
+        g = self.e.req("GET", "/v1/schedules/vacuum_tiger")
+        rules = [{"id": "evening", "days": [1, 2, 3, 4, 5, 6, 7], "start": "20:00", "variables": {"plan": "quiet"}}]
+        r = self.e.req("PUT", "/v1/schedules/vacuum_tiger", headers={"If-Match": g.headers["ETag"]}, json={"rules": rules})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.e.req("PATCH", "/v1/entities/vacuum_tiger", json={"managed": True}).status_code, 200)
+
+    def test_refusals(self):
+        ok = {"id": "vacuum_tiger", "name": "Tiger", "ha_target": "script.vacuum_tiger_plan", "like": "vacuum_livingroom"}
+        for role in ("household", "readonly"):
+            self.assertEqual(self.add(ok, role).status_code, 403, role)
+        for bad, code in (({**ok, "ha_target": "switch.vacuum_tiger_plan"}, "format"), ({**ok, "ha_target": "script.vacuum_bedroom_plan"}, "duplicate"),
+                          ({**ok, "like": "plant_rack1"}, "like"), ({**ok, "id": "vacuum_bedroom"}, "duplicate")):
+            r = self.add(bad)
+            self.assertEqual(r.status_code, 422, bad)
+            self.assertIn(code, [p["code"] for p in r.json()["error"]["problems"]], bad)
+        self.assertEqual(self.e.req("POST", "/v1/entities", json={**ok, "kind": "dimmer"}).status_code, 422)
+        self.assertEqual(self.add(ok).status_code, 201)
+        self.assertEqual(self.add(ok).status_code, 422)

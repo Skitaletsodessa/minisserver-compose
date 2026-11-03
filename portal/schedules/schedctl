@@ -11,6 +11,7 @@
   schedctl effective ENTITY [ISO-TIME]
   schedctl audit [ENTITY] [LIMIT]
   schedctl exception list|add|rm ...         # add ENTITY skip_date DATE | rm ID
+  schedctl vacuum add ID "Name" script.xxx LIKE_ID   # admin: a new vacuum plan entity copying windows/guardrails of LIKE_ID (a vacuum plan), starts unmanaged
   schedctl plug add ID "Name" switch.xxx LIKE_ID     # admin: a new plug entity with the windows/guardrails of LIKE_ID, starts unmanaged (then: managed ID on)
   schedctl child list | add NAME IP [--mac MAC] [--like ID | --closed] [--label L] [--icon I] | remove ID [--forget] | removed | restore REMOVAL_ID    # admin: devices of the children; a removal can be undone for 24 h
   schedctl guardrails ENTITY FILE.json       # admin
@@ -144,6 +145,9 @@ def main(a):
         if rest[0] == "rm" and len(rest) == 2:
             st, b, _ = call("DELETE", "/v1/exceptions/" + rest[1])
             return done(st, b)
+    if c == "vacuum" and len(rest) == 5 and rest[0] == "add":                # vacuum add ID "Name" script.xxx LIKE_ID
+        st, b, _ = call("POST", "/v1/entities", {"id": rest[1], "name": rest[2], "ha_target": rest[3], "like": rest[4], "kind": "vacuum_plan"})
+        return done(st, b, ok=(201,))
     if c == "plug" and len(rest) == 5 and rest[0] == "add":                  # plug add ID "Name" switch.xxx LIKE_ID
         st, b, _ = call("POST", "/v1/entities", {"id": rest[1], "name": rest[2], "ha_target": rest[3], "like": rest[4]})
         return done(st, b, ok=(201,))

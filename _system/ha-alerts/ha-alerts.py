@@ -160,6 +160,8 @@ VACUUMS = {                                         # key: (label, vacuum entity
                     "script.vacuum_bedroom_plan", "Vacuum Bedroom"),
     "ov51gl_b5f6": ("Пылесос H40 (гостиная)", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "xiaomi_ov51gl_b5f6",
                     "script.vacuum_livingroom_plan", "Vacuum Livingroom"),
+    "eta_tiger": ("Пылесос Tiger", "vacuum.eta_tiger", "eta_tiger",       # consumable sensors do not follow the xiaomi_miot names: skipped (raw minutes, not percent)
+                  "script.vacuum_tiger_plan", "Vacuum Tiger"),
 }
 VACUUM_CONSUMABLES = (("filter_life_level", "фильтр"), ("mop_life_level", "моп"), ("dust_bag_life_level", "мешок для пыли"),
                       ("brush_life_level", "щётка (1)"), ("brush_life_level_2", "щётка (2)"))
@@ -542,11 +544,16 @@ def check_planless_vacuums(ctx, N):
             continue
         age = ctx.now - (changed or ctx.now)
         key_e, key_s, key_r, key_c = (f"ha-planless-{k}-{key}" for k in ("error", "stuck", "run", "charge"))
-        if state == "error" and age >= PLANLESS_ERROR_SECS:                                  # B: a fault
+        covered = vac in {v[1] for v in VACUUMS.values()}            # a vacuum with a plan: check_vacuums already reports faults, stops off the dock and unavailability
+        if covered:
+            pass
+        elif state == "error" and age >= PLANLESS_ERROR_SECS:                                  # B: a fault
             N.alert(key_e, f"HA: {label} сообщает об ошибке уже {int(age // 60)} мин", tier="B")
         elif state != "unavailable":
             N.clear(key_e, "")
-        if state in ("paused", "idle") and age >= VACUUM_STUCK_SECS:                           # B: stopped off the dock
+        if covered:
+            pass
+        elif state in ("paused", "idle") and age >= VACUUM_STUCK_SECS:                           # B: stopped off the dock
             word = "на паузе" if state == "paused" else "стоит вне базы"
             N.alert(key_s, f"HA: {label} {word} уже {int(age // 60)} мин. Возможно застрял.", tier="B")
         elif state != "unavailable":
@@ -575,7 +582,9 @@ def check_planless_vacuums(ctx, N):
         elif state != "unavailable":
             N.clear(key_c, "")
         key_u = f"ha-planless-unavail-{key}"                                                   # C: simply off / unreachable
-        if state == "unavailable" and age >= VACUUM_UNAVAIL_QUIET_SECS:
+        if covered:
+            N.clear(key_u, "")
+        elif state == "unavailable" and age >= VACUUM_UNAVAIL_QUIET_SECS:
             N.alert(key_u, f"HA: {label} недоступен {int(age // 60)} мин", tier="C")
         else:
             N.clear(key_u, "")

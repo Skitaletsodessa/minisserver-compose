@@ -178,9 +178,10 @@ class App:
         data, e = await self.body(request)
         if e:
             return e
-        if (not isinstance(data, dict) or set(data) != {"id", "name", "ha_target", "like"} or any(not isinstance(v, str) for v in data.values())):
-            return err(400, "bad_body", "an object with id, name, ha_target and like (strings) is required")
-        return self._guard(lambda: JSONResponse(self.store.add_plug(who, data["id"], data["name"], data["ha_target"], data["like"]), status_code=201))
+        if (not isinstance(data, dict) or not {"id", "name", "ha_target", "like"} <= set(data) <= {"id", "name", "ha_target", "like", "kind"}
+                or any(not isinstance(v, str) for v in data.values())):
+            return err(400, "bad_body", "an object with id, name, ha_target and like (strings), and optionally kind (plug | vacuum_plan), is required")
+        return self._guard(lambda: JSONResponse(self.store.add_plug(who, data["id"], data["name"], data["ha_target"], data["like"], data.get("kind", "plug")), status_code=201))
 
     async def entity_patch(self, request):
         who, e = self.authenticate(request, "admin")

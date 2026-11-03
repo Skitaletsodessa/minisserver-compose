@@ -258,7 +258,7 @@ class Vacuums(Base):
 
     def test_list(self):
         v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="dasha").json()["vacuums"]}
-        self.assertEqual(sorted(v), ["bedroom", "livingroom"])
+        self.assertEqual(sorted(v), ["bedroom", "livingroom", "tiger"])
         self.assertEqual([s["id"] for s in v["bedroom"]["scenarios"]], ["morning", "evening"])
         self.assertEqual([s["id"] for s in v["livingroom"]["scenarios"]], ["full"])
         self.assertEqual((v["bedroom"]["state"], v["bedroom"]["battery"], v["bedroom"]["can_start"], v["bedroom"]["schedule_id"]), ("docked", 100, True, "vacuum_bedroom"))
@@ -273,6 +273,30 @@ class Vacuums(Base):
         v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="ivan").json()["vacuums"]}["bedroom"]
         self.assertEqual(v["running_scenario"], "evening")
         self.assertFalse(v["can_start"])
+
+    def test_tiger_scenarios_are_suction_levels_and_the_battery_comes_from_its_sensor(self):
+        v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="dasha").json()["vacuums"]}["tiger"]
+        self.assertEqual([s["id"] for s in v["scenarios"]], ["quiet", "standard", "strong"])
+        self.assertEqual((v["state"], v["battery"], v["can_start"], v["schedule_id"]), ("docked", 87, True, "vacuum_tiger"))
+
+    def test_tiger_start_runs_its_plan_with_the_chosen_level(self):
+        for level in ("quiet", "strong"):
+            self.e.ha.set("script.vacuum_tiger_plan", "off")
+            self.assertTrue(self.e.wait(lambda: self.e.haclient.state("script.vacuum_tiger_plan") == "off", 5))
+            self.e.ha.calls.clear()
+            j = self.e.req("POST", "/v1/vacuums/tiger/scenarios/%s/start" % level, who="ivan").json()
+            self.assertEqual((j["outcome"], j["scenario"]), ("confirmed", level))
+            self.assertEqual(self.e.ha.calls, [("script", "turn_on", "script.vacuum_tiger_plan", {"variables": {"plan": level}})])
+
+    def test_tiger_pause_resume_and_dock_use_the_vacuum_services(self):
+        self.e.ha.set("vacuum.eta_tiger", "cleaning")
+        self.assertTrue(self.e.wait(lambda: self.e.haclient.state("vacuum.eta_tiger") == "cleaning", 5))
+        self.e.ha.calls.clear()
+        self.assertEqual(self.e.req("POST", "/v1/vacuums/tiger/pause", who="ivan").json()["outcome"], "confirmed")
+        self.assertEqual(self.e.req("POST", "/v1/vacuums/tiger/resume", who="ivan").json()["outcome"], "confirmed")
+        self.assertEqual(self.e.req("POST", "/v1/vacuums/tiger/dock", who="ivan").json()["action"], "dock")
+        self.assertEqual([(c[0], c[1], c[2]) for c in self.e.ha.calls if c[0] == "vacuum"],
+                         [("vacuum", "pause", "vacuum.eta_tiger"), ("vacuum", "start", "vacuum.eta_tiger"), ("vacuum", "return_to_base", "vacuum.eta_tiger")])
 
     def test_livingroom_scenario_has_no_variables(self):
         self.e.req("POST", "/v1/vacuums/livingroom/scenarios/full/start", who="ivan")

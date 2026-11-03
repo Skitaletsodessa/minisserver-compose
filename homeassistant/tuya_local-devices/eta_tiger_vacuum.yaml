@@ -17,7 +17,7 @@ entities:
       #    So DP 1 is the vacuum's "activate": start and resume = true, pause = false.
       #  - DP 3 true  = return to the dock; it works while cleaning and while paused. The mode DP 4 "chargego" (what the stock return_to_base would write)
       #    was IGNORED while the robot was cleaning, so return_to_base is taken from DP 3 instead.
-      #  - DP 2 (pause) is therefore not mapped: the robot keeps it in step with DP 1.
+      #  - DP 2 (pause flag, true while paused) is a hidden helper: status "standby" together with DP 2 = true is reported as "paused", so HA and the portal can tell a pause from an idle robot on the dock.
       - id: 1
         type: boolean
         name: activate
@@ -27,12 +27,20 @@ entities:
         mapping:
           - dps_val: true
             value: return_to_base
+      - id: 2
+        type: boolean
+        name: pause_flag
+        hidden: true
       - id: 5
         type: string
         name: status
         mapping:                # guess: Tuya sweeper "status" enum. Seen on the robot 2026-11-03: charging, standby (docked-awake and paused), cleaning, returning
           - dps_val: standby
             value: standby
+            constraint: pause_flag
+            conditions:
+              - dps_val: true
+                value: paused
           - dps_val: smart
             value: cleaning
           - dps_val: zone_clean

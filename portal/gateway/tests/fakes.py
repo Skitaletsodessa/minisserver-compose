@@ -23,8 +23,8 @@ sys.path.insert(0, ROOT)
 HA_TOKEN = "test-ha-token-0123456789"
 SWITCHES = ["switch.bathroom_towels", "switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver", "switch.bedroom_parrot"]
 POWER = ["sensor.bathroom_towels_power", "sensor.living_room_rack_power", "sensor.livingroom_rack_big_power", "sensor.minisserver_power", "sensor.bedroom_parrot_power"]
-VAC = ["vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner"]
-SCRIPTS = ["script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan"]
+VAC = ["vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "vacuum.eta_tiger"]
+SCRIPTS = ["script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan", "script.vacuum_tiger_plan"]
 
 
 def free_port():
@@ -63,7 +63,8 @@ class FakeHA:
         for e in POWER:
             self.states[e] = {"s": "0.0", "a": {}, "lc": now, "lu": now}
         for e in VAC:
-            self.states[e] = {"s": "docked", "a": {"battery_level": 100}, "lc": now, "lu": now}
+            self.states[e] = {"s": "docked", "a": ({} if e == "vacuum.eta_tiger" else {"battery_level": 100}), "lc": now, "lu": now}   # the Tiger entity has no battery attribute
+        self.states["sensor.eta_tiger_battery"] = {"s": "87", "a": {}, "lc": now, "lu": now}
         for e in SCRIPTS:
             self.states[e] = {"s": "off", "a": {}, "lc": now, "lu": now}
         self.calls = []

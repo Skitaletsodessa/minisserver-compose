@@ -32,10 +32,10 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
     post:
       operationId: addPlug
-      summary: "Admin only. Adds a smart plug as an entity: copies guardrails, flags and windows of an existing plug (`like`). Starts UNMANAGED (nothing is rendered into Home Assistant until PATCH managed=true)"
+      summary: "Admin only. Adds a smart plug (default) or, with kind=vacuum_plan, a vacuum plan script as an entity: copies guardrails, flags and windows of an existing entity of that kind (`like`). Starts UNMANAGED (nothing is rendered into Home Assistant until PATCH managed=true)"
       requestBody:
         required: true
-        content: {application/json: {schema: {type: object, required: [id, name, ha_target, like], additionalProperties: false, properties: {id: {type: string}, name: {type: string}, ha_target: {type: string, pattern: "^switch[.][a-z0-9_]+$"}, like: {type: string}}}}}
+        content: {application/json: {schema: {type: object, required: [id, name, ha_target, like], additionalProperties: false, properties: {id: {type: string}, name: {type: string}, ha_target: {type: string, pattern: "^(switch|script)[.][a-z0-9_]+$"}, like: {type: string}, kind: {type: string, enum: [plug, vacuum_plan]}}}}}
       responses:
         "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/Entity"}}}}
         "400": {$ref: "#/components/responses/Error"}

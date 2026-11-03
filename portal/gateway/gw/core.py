@@ -85,6 +85,9 @@ class Core:
             ctl |= {v["vacuum"], v["script"]}
             self.eid_vacuum[v["vacuum"]] = vid
             self.eid_vacuum[v["script"]] = vid
+            if v.get("battery_sensor"):                                  # robots whose vacuum entity carries no battery attribute (the ETA Tiger)
+                watch.add(v["battery_sensor"])
+                self.eid_vacuum[v["battery_sensor"]] = vid
         self.ha.set_scope(watch, ctl)
         return len(self.devices), len(self.vacuums)
 
@@ -380,6 +383,13 @@ class Core:
         state = vc["state"] if vc else "unavailable"
         avail = state not in ("unavailable", "unknown")
         script_on = bool(sc and sc["state"] == "on")
+        battery = vc["attrs"].get("battery_level") if vc else None
+        if v.get("battery_sensor"):
+            bs = self.ha.get(v["battery_sensor"])
+            try:
+                battery = int(float(bs["state"])) if bs else battery
+            except (TypeError, ValueError):
+                pass
         run = self.db.q1("SELECT * FROM vacuum_runs WHERE vacuum_id=?", (vid,))
         running = None
         if script_on:
@@ -388,7 +398,7 @@ class Core:
         last = None
         if run and run["last_result"]:
             last = "%s %s" % (run["last_result"], time.strftime("%H:%M", time.localtime(run["last_result_ts"])))
-        return {"id": vid, "name": v["name"], "icon": v["icon"], "state": state, "battery": (vc["attrs"].get("battery_level") if vc else None), "available": avail,
+        return {"id": vid, "name": v["name"], "icon": v["icon"], "state": state, "battery": battery, "available": avail,
                 "stale": self.ha.stale() or vc is None, "running_scenario": running, "last_result": last,
                 "scenarios": [{"id": sid, "name": s["name"], "description": s["description"]} for sid, s in v["scenarios"].items()],
                 "schedule_id": v["schedule_id"], "can_start": principal["role"] in ("admin", "household") and avail and not busy and state == "docked" and not self.ha.stale()}

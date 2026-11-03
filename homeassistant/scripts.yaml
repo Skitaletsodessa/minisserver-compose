@@ -441,3 +441,117 @@ vacuum_bedroom_plan:
         notification_id: vacuum_bedroom
         title: 'Пылесос (спальня): план выполнен'
         message: "План {{ plan_name }} выполнен."
+
+
+# ── ETA Tiger (added 2026-11-03, Task 32 follow-up) ───────────────────────────────────────────────────────────────────────────
+# One whole-flat cleaning (the robot has its own map and routing; no room selection from HA). The plan only chooses the suction level; the water on the
+# mop is always the minimum (Low) - Ivan, 2026-11-03. Start = DP 1 true, which the robot treats as "start/resume"; the robot comes back to the dock by itself.
+# Verified on the robot (see docs/robots/STATE.md): suction gentle/normal/strong = low/medium/high, water closed/low/middle/high = Off/Low/Medium/High.
+# Start by hand: action script.vacuum_tiger_plan, data {plan: quiet}   (quiet | standard | strong).
+vacuum_tiger_plan:
+  alias: 'Vacuum Tiger: quiet / standard / strong cleaning, water Low'
+  mode: single
+  max_exceeded: silent
+  fields:
+    plan:
+      description: 'quiet = low suction (the evening 20:00 plan); standard = medium; strong = high. Water on the mop is always Low.'
+      default: quiet
+      selector:
+        select:
+          options:
+            - quiet
+            - standard
+            - strong
+  variables:
+    vac: vacuum.eta_tiger
+    bat: sensor.eta_tiger_battery
+    water: select.hall_eta_tiger_water_quantity
+    plan_name: "{{ plan | default('quiet') }}"
+    fans: {quiet: low, standard: medium, strong: high}
+    fan: "{{ fans[plan_name] | default('low') }}"
+  sequence:
+    - if: "{{ states(vac) != 'docked' }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: vacuum_tiger
+            title: 'Пылесос (Tiger): не запущено'
+            message: "Пылесос должен стоять на базе, сейчас состояние {{ states(vac) }}."
+        - stop: 'vacuum is not docked'
+          error: true
+    - if: "{{ states(bat) | float(0) < 40 }}"
+      then:
+        - wait_template: "{{ states(bat) | float(0) >= 40 }}"
+          timeout: '02:00:00'
+          continue_on_timeout: true
+        - if: "{{ not wait.completed }}"
+          then:
+            - action: persistent_notification.create
+              data:
+                notification_id: vacuum_tiger
+                title: 'Пылесос (Tiger): остановлено'
+                message: "Заряд {{ states(bat) }}% за 2 часа не дошёл до 40%."
+            - stop: 'battery did not reach 40 %'
+              error: true
+    - action: vacuum.set_fan_speed
+      target:
+        entity_id: vacuum.eta_tiger
+      data:
+        fan_speed: "{{ fan }}"
+    - action: select.select_option
+      target:
+        entity_id: select.hall_eta_tiger_water_quantity
+      data:
+        option: 'Low'
+    - wait_template: "{{ state_attr(vac, 'fan_speed') == fan and is_state(water, 'Low') }}"
+      timeout: '00:00:30'
+      continue_on_timeout: true
+    - if: "{{ not wait.completed }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: vacuum_tiger
+            title: 'Пылесос (Tiger): остановлено'
+            message: "Режим не применился (всасывание {{ state_attr(vac, 'fan_speed') }}, вода {{ states(water) }}), ожидалось {{ fan }} и Low."
+        - stop: 'cleaning settings were not applied'
+          error: true
+    - action: vacuum.start
+      target:
+        entity_id: vacuum.eta_tiger
+    - wait_template: "{{ states(vac) == 'cleaning' }}"
+      timeout: '00:02:00'
+      continue_on_timeout: true
+    - if: "{{ not wait.completed }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: vacuum_tiger
+            title: 'Пылесос (Tiger): остановлено'
+            message: "Команда старта не принята, состояние {{ states(vac) }}."
+        - stop: 'start was not accepted'
+          error: true
+    - wait_template: "{{ states(vac) in ['docked', 'error'] }}"
+      timeout: '03:00:00'
+      continue_on_timeout: true
+    - if: "{{ not wait.completed or states(vac) == 'error' }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: vacuum_tiger
+            title: 'Пылесос (Tiger): остановлено'
+            message: "Не вернулся на базу (состояние {{ states(vac) }}, заряд {{ states(bat) }}%)."
+        - stop: 'robot did not return to the dock'
+          error: true
+    - action: logbook.log
+      data:
+        name: 'Vacuum Tiger'
+        message: "Уборка ({{ plan_name }}, всасывание {{ fan }}, вода Low) готова. Время {{ states('sensor.eta_tiger_cleaning_time') }} мин, площадь {{ states('sensor.eta_tiger_cleaning_area') }}."
+    - action: logbook.log
+      data:
+        name: 'Vacuum Tiger'
+        message: 'ПЛАН ВЫПОЛНЕН'
+    - action: persistent_notification.create
+      data:
+        notification_id: vacuum_tiger
+        title: 'Пылесос (Tiger): план выполнен'
+        message: "План {{ plan_name }} выполнен."
