@@ -304,6 +304,20 @@ class Vacuums(Base):
         self.e.req("POST", "/v1/vacuums/x20/scenarios/full/start", who="ivan")
         self.assertEqual(self.e.ha.calls, [("script", "turn_on", "script.vacuum_x20_plan", {})])
 
+    def test_x20_drying_is_docked_and_can_be_started(self):
+        """While the station dries the mop HA says the X20+ is 'cleaning'; the card and the start check must read the status sensor (found 2026-11-03)."""
+        self.e.ha.set("vacuum.xiaomi_c102gl_cadb_robot_cleaner", "cleaning")
+        self.e.ha.set("sensor.xiaomi_c102gl_cadb_status", "drying")
+        self.assertTrue(self.e.wait(lambda: self.e.haclient.state("sensor.xiaomi_c102gl_cadb_status") == "drying", 5))
+        v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="ivan").json()["vacuums"]}["x20"]
+        self.assertEqual((v["state"], v["can_start"]), ("docked", True))
+        self.assertEqual(self.e.req("POST", "/v1/vacuums/x20/scenarios/full/start", who="ivan").json()["outcome"], "confirmed")
+        # a really cleaning robot is still "cleaning"
+        self.e.ha.set("sensor.xiaomi_c102gl_cadb_status", "sweeping")
+        self.assertTrue(self.e.wait(lambda: self.e.haclient.state("sensor.xiaomi_c102gl_cadb_status") == "sweeping", 5))
+        v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="ivan").json()["vacuums"]}["x20"]
+        self.assertEqual(v["state"], "cleaning")
+
     def test_livingroom_scenario_has_no_variables(self):
         self.e.req("POST", "/v1/vacuums/livingroom/scenarios/full/start", who="ivan")
         self.assertEqual(self.e.ha.calls, [("script", "turn_on", "script.vacuum_livingroom_plan", {})])

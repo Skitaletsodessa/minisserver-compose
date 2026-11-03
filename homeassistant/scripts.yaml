@@ -565,7 +565,8 @@ vacuum_tiger_plan:
 # applied (props 2:3 and 4:5 are overwritten with the room's settings at the start) and stops the room when they differ from what is expected (Turbo; Level 3 for mop rooms).
 # The payload is a literal string per room (a templated JSON string would be turned into a dict by HA: see the H40 notes).
 # The end of a room = the robot sits "charging" for a minute, or the station started drying (end of a mop job); "dustcollecting" seen before that = the station emptied the bin
-# by itself (Mi Home station setting "every visit"); if it did not, the dust button is pressed.
+# by itself (Mi Home station setting "every visit"); if it did not (it does not after a mop job: seen 2026-11-03), the dust button is pressed - also while the station dries
+# (dustcollecting ~12 s, then drying goes on). While the station dries HA reports the vacuum as "cleaning", so "on the base" and "started" are decided by the status sensor.
 # Start by hand: action script.vacuum_x20_plan, data {skip_rooms: 2, max_rooms: 1} runs only the living room.
 vacuum_x20_plan:
   alias: 'Vacuum X20+: room by room (Koridor, Bathroom, Living Room, Kitchen), dust after each, mop wash + dry at the end'
@@ -601,13 +602,13 @@ vacuum_x20_plan:
     max_n: "{{ max_rooms | default(4) | int(4) }}"
     todo: "{{ rooms[skip_n:skip_n + max_n] }}"
   sequence:
-    - if: "{{ states(vac) != 'docked' }}"
+    - if: "{{ states(st) not in ['charging', 'charging completed', 'drying', 'dustcollecting'] }}"
       then:
         - action: persistent_notification.create
           data:
             notification_id: vacuum_x20
             title: 'Пылесос X20+: не запущено'
-            message: "Пылесос должен стоять на базе, сейчас состояние {{ states(vac) }}."
+            message: "Пылесос должен стоять на базе (заряд, сушка), сейчас статус {{ states(st) }}, состояние {{ states(vac) }}."
         - stop: 'vacuum is not docked'
           error: true
     - repeat:
@@ -684,7 +685,7 @@ vacuum_x20_plan:
                           value: 18
                         - piid: 10
                           value: '{"selects":[[4,1,1,2,1]]}'
-          - wait_template: "{{ states(vac) == 'cleaning' }}"
+          - wait_template: "{{ states(st) in ['sweeping', 'mopping', 'sweeping and mopping', 'washing', 'go washing'] }}"
             timeout: '00:04:00'
             continue_on_timeout: true
           - if: "{{ not wait.completed }}"
@@ -791,7 +792,7 @@ vacuum_x20_plan:
                         error: true
             default:
               # the room ended without the station ever emptying the bin: do it by hand (only while the robot simply sits charging)
-              - if: "{{ states(st) in ['charging', 'charging completed'] }}"
+              - if: "{{ states(st) in ['charging', 'charging completed', 'drying'] }}"
                 then:
                   - action: button.press
                     target:
@@ -799,7 +800,7 @@ vacuum_x20_plan:
                   - wait_template: "{{ states(st) == 'dustcollecting' }}"
                     timeout: '00:01:30'
                     continue_on_timeout: true
-                  - wait_template: "{{ states(st) in ['charging', 'charging completed'] }}"
+                  - wait_template: "{{ states(st) in ['charging', 'charging completed', 'drying'] }}"
                     timeout: '00:10:00'
                     continue_on_timeout: true
           - action: logbook.log

@@ -88,6 +88,9 @@ class Core:
             if v.get("battery_sensor"):                                  # robots whose vacuum entity carries no battery attribute (the ETA Tiger)
                 watch.add(v["battery_sensor"])
                 self.eid_vacuum[v["battery_sensor"]] = vid
+            if v.get("status_sensor"):                                   # robots whose station work makes HA say "cleaning" (the X20+)
+                watch.add(v["status_sensor"])
+                self.eid_vacuum[v["status_sensor"]] = vid
         self.ha.set_scope(watch, ctl)
         return len(self.devices), len(self.vacuums)
 
@@ -100,11 +103,11 @@ class Core:
         elif eid in self.eid_vacuum:
             vid = self.eid_vacuum[eid]
             if eid == self.vacuums[vid]["script"] and old and old["state"] == "on" and new["state"] == "off":
-                vs = self.ha.state(self.vacuums[vid]["vacuum"])
+                vs = self._vstate(self.vacuums[vid])
                 res = "finished" if vs in ("docked", "charging", "charged") else "interrupted"
                 self.db.x("INSERT INTO vacuum_runs(vacuum_id,last_result,last_result_ts) VALUES (?,?,?) ON CONFLICT(vacuum_id) DO UPDATE SET last_result=excluded.last_result, last_result_ts=excluded.last_result_ts",
                           (vid, res, self.clock()))
-            self.hub.publish("vacuum", {"id": vid, "state": self.ha.state(self.vacuums[vid]["vacuum"]), "script": self.ha.state(self.vacuums[vid]["script"])})
+            self.hub.publish("vacuum", {"id": vid, "state": self._vstate(self.vacuums[vid]), "script": self.ha.state(self.vacuums[vid]["script"])})
 
     @staticmethod
     def _norm(s):
@@ -377,10 +380,19 @@ class Core:
         return {"outcome": res["outcome"], "device_id": did, "action": "end", "run": None, "observed": res["observed"], "waited_ms": res["waited_ms"]}
 
     # ── vacuums ──
+    def _vstate(self, v):
+        """The vacuum's state as people mean it. While the base station dries the mop or empties the bin, HA reports the X20+ as "cleaning"; its status sensor
+        says "drying" / "dustcollecting" - for the card and for the start checks that is "docked" (found 2026-11-03)."""
+        s = self.ha.state(v["vacuum"])
+        ss = v.get("status_sensor")
+        if ss and s == "cleaning" and self.ha.state(ss) in ("drying", "dustcollecting"):
+            return "docked"
+        return s
+
     def vacuum_view(self, principal, vid):
         v = self.vacuums[vid]
         vc, sc = self.ha.get(v["vacuum"]), self.ha.get(v["script"])
-        state = vc["state"] if vc else "unavailable"
+        state = self._vstate(v) if vc else "unavailable"
         avail = state not in ("unavailable", "unknown")
         script_on = bool(sc and sc["state"] == "on")
         battery = vc["attrs"].get("battery_level") if vc else None
@@ -420,7 +432,7 @@ class Core:
         v = self._vac(principal, vid)
         if scenario not in v["scenarios"]:
             raise GwError(404, "not_found", "no such scenario", {"scenario": scenario})
-        vs, ss = self.ha.state(v["vacuum"]), self.ha.state(v["script"])
+        vs, ss = self._vstate(v), self.ha.state(v["script"])
         tgt = "%s/%s" % (vid, scenario)
         reason = None
         if self.ha.stale():
@@ -446,11 +458,11 @@ class Core:
             self.db.x("INSERT INTO vacuum_runs(vacuum_id,scenario,started,person) VALUES (?,?,?,?) ON CONFLICT(vacuum_id) DO UPDATE SET scenario=excluded.scenario, started=excluded.started, person=excluded.person",
                       (vid, scenario, self.clock(), principal["person_id"]))
         self.db.audit("vacuum_start", target=tgt, before={"state": vs, "script": ss}, after={"outcome": outcome, "script": obs}, ok=outcome == "confirmed", **self._actor(principal))
-        return {"outcome": outcome, "vacuum_id": vid, "action": "start", "scenario": scenario, "observed": {"script": obs, "vacuum": self.ha.state(v["vacuum"])}, "waited_ms": int(waited * 1000)}
+        return {"outcome": outcome, "vacuum_id": vid, "action": "start", "scenario": scenario, "observed": {"script": obs, "vacuum": self._vstate(v)}, "waited_ms": int(waited * 1000)}
 
     async def pause(self, principal, vid):
         v = self._vac(principal, vid)
-        vs = self.ha.state(v["vacuum"])
+        vs = self._vstate(v)
         if self.ha.stale():
             raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
         if vs != "cleaning" and self.ha.state(v["script"]) == "on":
@@ -473,7 +485,7 @@ class Core:
         """Continue a PAUSED robot. Only vacuum.start on a robot HA reports as paused; the plan script that was running at the pause has ended by now
         (it waits for the robot to stop cleaning), so the robot finishes its current job by itself and returns to the dock on its own."""
         v = self._vac(principal, vid)
-        vs = self.ha.state(v["vacuum"])
+        vs = self._vstate(v)
         if self.ha.stale():
             raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
         if vs != "paused":
@@ -489,7 +501,7 @@ class Core:
 
     async def dock(self, principal, vid):
         v = self._vac(principal, vid)
-        vs, ss = self.ha.state(v["vacuum"]), self.ha.state(v["script"])
+        vs, ss = self._vstate(v), self.ha.state(v["script"])
         if self.ha.stale():
             raise GwError(503, "ha_unavailable", "Home Assistant is not reachable")
         if vs in (None, "unavailable", "unknown"):
@@ -543,7 +555,7 @@ class Core:
                     continue
                 if self.ha.state(v["script"]) == "on":
                     return
-                if self.ha.state(v["vacuum"]) == "cleaning" and sends < 3 and time.monotonic() - last >= 8:
+                if self._vstate(v) == "cleaning" and sends < 3 and time.monotonic() - last >= 8:
                     try:
                         await self.ha.call("vacuum", "return_to_base", v["vacuum"])
                         sends += 1

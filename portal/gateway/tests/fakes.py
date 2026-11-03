@@ -65,6 +65,7 @@ class FakeHA:
         for e in VAC:
             self.states[e] = {"s": "docked", "a": ({} if e == "vacuum.eta_tiger" else {"battery_level": 100}), "lc": now, "lu": now}   # the Tiger entity has no battery attribute
         self.states["sensor.eta_tiger_battery"] = {"s": "87", "a": {}, "lc": now, "lu": now}
+        self.states["sensor.xiaomi_c102gl_cadb_status"] = {"s": "charging", "a": {}, "lc": now, "lu": now}
         for e in SCRIPTS:
             self.states[e] = {"s": "off", "a": {}, "lc": now, "lu": now}
         self.calls = []

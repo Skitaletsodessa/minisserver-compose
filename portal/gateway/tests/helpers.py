@@ -211,6 +211,7 @@ class BaseCase(unittest.TestCase):
         for v in ("vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "vacuum.eta_tiger", "vacuum.xiaomi_c102gl_cadb_robot_cleaner"):
             e.ha.set(v, "docked")
         e.ha.set("sensor.eta_tiger_battery", "87")
+        e.ha.set("sensor.xiaomi_c102gl_cadb_status", "charging")
         for sc in ("script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan", "script.vacuum_tiger_plan", "script.vacuum_x20_plan"):
             e.ha.set(sc, "off")
         e.core._last_switch.clear()

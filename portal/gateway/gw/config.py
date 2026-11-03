@@ -77,6 +77,7 @@ VACUUM_SEED = {
                             "strong": {"name": "Сильная уборка", "description": "Вся квартира: высокое всасывание, вода на тряпку минимум.", "variables": {"plan": "strong"}}}},
     # Xiaomi Robo Mop X20+ (2026-11-03): one job for the whole flat; rooms, order and per-room cleaning type are settings of the robot (Mi Home, Custom mode).
     "x20": {"name": "Пылесос Xiaomi X20+", "vacuum": "vacuum.xiaomi_c102gl_cadb_robot_cleaner", "script": "script.vacuum_x20_plan",
+            "status_sensor": "sensor.xiaomi_c102gl_cadb_status",              # while the station dries the mop / empties the bin HA reports the vacuum as "cleaning"
             "schedule_id": "vacuum_x20", "icon": "vacuum",
             "scenarios": {"full": {"name": "Все комнаты", "description": "Коридор, ванная, гостиная, кухня по очереди: пылесос Turbo и мойка Level 3 (в гостиной только пылесос), после каждой комнаты станция выгружает мусор, в конце моет и сушит тряпку.", "variables": {}}}},
 }
