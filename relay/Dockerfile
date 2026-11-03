@@ -1,5 +1,5 @@
-# Task 23 fetch relay. Pinned by digest (python:3.13-slim-trixie, Python 3.13.16, OpenSSL 3.5.7, checked 2026-10-02).
-FROM python@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81
+# Task 23 fetch relay. Pinned by digest (python:3.13.18-slim-trixie, rebuilt 2026-11-03; first pin was 3.13.16 of 2026-10-02).
+FROM python@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin relay \
  && mkdir /app /state && chown relay:relay /state
 COPY relay.py relayctl.py /app/
