@@ -201,3 +201,22 @@ entities:
       - id: 10
         type: string
         name: sensor
+
+  # Water quantity (mop). Raw values seen on the robot 2026-11-03 while Ivan went through the app's levels: closed, low, middle, high.
+  # Writes are verified once this entity has been tested (see docs/robots/STATE.md).
+  - entity: select
+    name: Water quantity
+    icon: "mdi:water"
+    dps:
+      - id: 10
+        type: string
+        name: option
+        mapping:
+          - dps_val: closed
+            value: "Off"
+          - dps_val: low
+            value: Low
+          - dps_val: middle
+            value: Medium
+          - dps_val: high
+            value: High
