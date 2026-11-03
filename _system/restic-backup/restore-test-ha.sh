@@ -33,7 +33,7 @@ cmp12() { a=$(sha256sum "$1" 2>/dev/null | cut -c1-12); b=$(sha256sum "$2" 2>/de
 for f in core.config_entries core.entity_registry core.device_registry core.area_registry http auth; do cmp12 "$CFG/.storage/$f" "$LIVE/.storage/$f" ".storage/$f"; done
 for f in configuration.yaml automations.yaml scripts.yaml; do cmp12 "$GIT/$f" "$LIVEGIT/$f" "compose/$f"; done
 for c in tuya_local xiaomi_miot; do
-    n=$(diff -rq -x __pycache__ "$CFG/custom_components/$c" "$LIVE/custom_components/$c" 2>&1 | wc -l)
+    n=$({ diff -rq -x __pycache__ "$CFG/custom_components/$c" "$LIVE/custom_components/$c" 2>&1 || true; } | wc -l)      # diff exits 1 when they differ: not an error here (set -e + pipefail used to abort the whole test)
     printf '   %-44s %s (%s differing paths)\n' "custom_components/$c" "$([ "$n" = 0 ] && echo same || echo DIFFERENT)" "$n"
 done
 echo "   config entries by domain, restored | live:"
