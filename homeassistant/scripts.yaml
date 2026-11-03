@@ -558,8 +558,8 @@ vacuum_tiger_plan:
 
 # ── Xiaomi Robo Mop X20+ (added 2026-11-03; rebuilt the same day as room-by-room) ────────────────────────────────────────────────
 # Same idea as vacuum_livingroom_plan (H40): rooms one after another, after each room the robot is back on the base and the bin is emptied; the mop is washed and the
-# station dries it at the END. Rooms (Mi Home map ids, found on the robot 2026-11-03: 1 Koridor, 3 Living Room confirmed by watching the robot; 2 Bathroom, 4 Kitchen by order):
-#   1 Коридор (vacuum + mop), 2 Ванная (vacuum + mop), 3 Гостиная (vacuum only), 4 Кухня (vacuum + mop).
+# station dries it at the END. Rooms (Mi Home map ids, all four confirmed by watching the robot, 2026-11-03: 1 Koridor, 2 KITCHEN, 3 Living Room, 4 BATHROOM; the first guess had 2 and 4 swapped):
+#   run order: 1 Коридор (vacuum + mop), 4 Ванная (vacuum + mop), 3 Гостиная (vacuum only), 2 Кухня (vacuum + mop).
 # HOW A ROOM IS STARTED (recipe for xiaomi.vacuum.c102gl, verified on the robot): action 4.1 with piid 1 = 18 and piid 10 = {"selects":[[room,1,1,2,1]]}; the robot then uses the
 # room's SAVED settings (Mi Home -> Custom mode: Turbo suction, mop Level 3, living room vacuum only). HA does not rewrite them; it READS BACK the suction / water level the robot
 # applied (props 2:3 and 4:5 are overwritten with the room's settings at the start) and stops the room when they differ from what is expected (Turbo; Level 3 for mop rooms).
@@ -593,11 +593,11 @@ vacuum_x20_plan:
     st: sensor.xiaomi_c102gl_cadb_status
     bat: sensor.xiaomi_c102gl_cadb_battery_level
     vac: vacuum.xiaomi_c102gl_cadb_robot_cleaner
-    rooms:
+    rooms:                      # the ORDER is Ivan's (corridor, bathroom, living room, kitchen); the ids are the robot's map ids: 2 = Kitchen, 4 = Bathroom (found by watching the first full run, 2026-11-03)
       - {id: 1, name: 'Коридор', mop: true}
-      - {id: 2, name: 'Ванная', mop: true}
+      - {id: 4, name: 'Ванная', mop: true}
       - {id: 3, name: 'Гостиная', mop: false}
-      - {id: 4, name: 'Кухня', mop: true}
+      - {id: 2, name: 'Кухня', mop: true}
     skip_n: "{{ skip_rooms | default(0) | int(0) }}"
     max_n: "{{ max_rooms | default(4) | int(4) }}"
     todo: "{{ rooms[skip_n:skip_n + max_n] }}"
