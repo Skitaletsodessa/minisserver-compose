@@ -184,3 +184,20 @@ entities:
       - id: 28
         type: bitfield
         name: fault_code
+
+  # Discovery (2026-11-03): raw values of the suction and water-quantity DPs, to learn the level names the robot uses.
+  # Replace by proper select entities once the values are known.
+  - entity: sensor
+    name: Suction raw (DP 9)
+    category: diagnostic
+    dps:
+      - id: 9
+        type: string
+        name: sensor
+  - entity: sensor
+    name: Water raw (DP 10)
+    category: diagnostic
+    dps:
+      - id: 10
+        type: string
+        name: sensor
