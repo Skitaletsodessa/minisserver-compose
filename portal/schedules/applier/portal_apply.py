@@ -37,6 +37,7 @@ DEFAULTS = {
     "webhook_file": "/srv/apps/portal/applier/webhook-id",
     "ha_url": "http://127.0.0.1:8123",
     "ha_db": "/srv/apps/homeassistant/home-assistant_v2.db",
+    "ha_token_file": "/srv/apps/portal/gateway-secrets/ha-token",    # the gateway's non-admin HA user: used here for GET /api/states only
     "git_repo": "/srv/compose",
     "git_path": "homeassistant/generated",
     "verify_timeout": 150,
@@ -103,10 +104,34 @@ class Applier:
         except (urllib.error.URLError, OSError) as e:
             return False, "HA unreachable (%s)" % e.__class__.__name__
 
-    def loaded(self):
-        """What HA currently has loaded, from the recorder: (set of automation aliases, {script key: alias}).
-        The recorder does not keep an automation's `id` attribute (HA marks it unrecorded), so automations are identified by their alias -
-        which carries the content hash. An entity whose last state is empty/unavailable/unknown is gone (removed by a reload)."""
+    @staticmethod
+    def collect(rows):
+        """rows of (entity_id, state, friendly_name) -> (set of automation aliases, {script key: alias}).
+        Automations are identified by their alias, which carries the content hash. An entity whose state is empty/unavailable/unknown is gone (removed by a reload)."""
+        autos, scripts = set(), {}
+        for eid, state, name in rows:
+            if state in (None, "", "unavailable", "unknown") or not name:
+                continue
+            if eid.startswith("automation."):
+                autos.add(name)
+            elif eid.startswith("script."):
+                scripts[eid[len("script."):]] = name
+        return autos, scripts
+
+    def loaded_from_api(self):
+        """What HA has loaded RIGHT NOW, asked from HA itself (GET /api/states with the read-only token of the gateway's HA user).
+        Added 2026-11-03: the recorder forgets an entity that has not changed state for purge_keep_days (10), so an automation or script that never fires looked
+        'not loaded' after ten days and every apply was rolled back."""
+        with open(self.c["ha_token_file"], encoding="utf-8") as f:
+            token = f.read().strip()
+        req = urllib.request.Request(self.c["ha_url"] + "/api/states", headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+        return self.collect((x["entity_id"], x["state"], (x.get("attributes") or {}).get("friendly_name"))
+                            for x in data if x["entity_id"].startswith(("automation.", "script.")))
+
+    def loaded_from_recorder(self):
+        """The fallback (HA API or token unusable): the last recorded state of each entity. Blind to an entity that has not changed for purge_keep_days."""
         conn = sqlite3.connect("file:%s?mode=ro" % self.c["ha_db"], uri=True, timeout=15)
         try:
             rows = conn.execute("""
@@ -116,19 +141,25 @@ class Applier:
                 WHERE m.entity_id LIKE 'automation.%' OR m.entity_id LIKE 'script.%'""").fetchall()
         finally:
             conn.close()
-        autos, scripts = set(), {}
+        out = []
         for eid, state, attrs in rows:
-            if state in (None, "", "unavailable", "unknown") or not attrs:
-                continue
             try:
-                name = json.loads(attrs).get("friendly_name")
+                name = json.loads(attrs).get("friendly_name") if attrs else None
             except ValueError:
-                continue
-            if eid.startswith("automation."):
-                autos.add(name)
-            else:
-                scripts[eid[len("script."):]] = name
-        return autos, scripts
+                name = None
+            out.append((eid, state, name))
+        return self.collect(out)
+
+    def loaded(self):
+        """(set of automation aliases, {script key: alias}) as HA runs them: from HA's own API; the recorder only when the API cannot be used."""
+        try:
+            res = self.loaded_from_api()
+            self.fallback = None
+            return res
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            self.fallback = e.__class__.__name__
+            self.log("verification: HA API not usable (%s); using the recorder (it forgets entities that did not change for 10 days)" % self.fallback)
+            return self.loaded_from_recorder()
 
     def git_commit_push(self, message):
         repo, path = self.c["git_repo"], self.c["git_path"]
@@ -241,6 +272,8 @@ class Applier:
             if not diffs:
                 return True, []
             if time.time() >= end:
+                if getattr(self, "fallback", None):
+                    diffs = ["(checked from the recorder because the HA API was not usable: %s; an automation or script unchanged for 10 days can look missing)" % self.fallback] + diffs
                 return False, diffs
             self.sleep(self.c["verify_every"])
 

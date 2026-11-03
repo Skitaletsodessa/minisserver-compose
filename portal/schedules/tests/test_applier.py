@@ -194,6 +194,98 @@ class Applier(unittest.TestCase):
         self.assertTrue([a for a in self.ap.alerts if a[0] == "portal-push" and a[1] == "alert"])
 
 
+class LoadedFromHA(unittest.TestCase):
+    """How the applier learns what HA runs (2026-11-03): from HA's API; the recorder only as a fallback."""
+
+    def setUp(self):
+        import http.server
+        import threading
+        self.tmp = tempfile.mkdtemp()
+        self.seen = []
+        states = [
+            {"entity_id": "automation.sch_x_evening_sch_aaaa1111", "state": "on", "attributes": {"friendly_name": "Sch x evening [sch aaaa1111]"}},
+            {"entity_id": "automation.old_one", "state": "unavailable", "attributes": {"friendly_name": "Sch gone [sch bbbb2222]"}},
+            {"entity_id": "script.sch_reconcile_x", "state": "off", "attributes": {"friendly_name": "Sch reconcile x [sch cccc3333]"}},
+            {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen"}},
+        ]
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.seen.append((self.path, self.headers.get("Authorization")))
+                if self.headers.get("Authorization") != "Bearer tok123":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                body = json.dumps(states).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        self.srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.token = os.path.join(self.tmp, "token")
+        open(self.token, "w").write("tok123\n")
+        self.cfg = dict(portal_apply.DEFAULTS, ha_url="http://127.0.0.1:%d" % self.srv.server_port, ha_token_file=self.token,
+                        ha_db=os.path.join(self.tmp, "ha.db"))
+        self.ap = portal_apply.Applier(self.cfg, log=lambda *_a: None)
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def make_db(self):
+        import sqlite3
+        c = sqlite3.connect(self.cfg["ha_db"])
+        c.executescript("""CREATE TABLE states_meta (metadata_id INTEGER PRIMARY KEY, entity_id TEXT);
+                           CREATE TABLE states (state_id INTEGER PRIMARY KEY, metadata_id INTEGER, state TEXT, attributes_id INTEGER, last_updated_ts REAL);
+                           CREATE TABLE state_attributes (attributes_id INTEGER PRIMARY KEY, shared_attrs TEXT);""")
+        c.execute("INSERT INTO states_meta VALUES (1, 'automation.recorded')")
+        c.execute("INSERT INTO state_attributes VALUES (1, ?)", (json.dumps({"friendly_name": "Sch recorded [sch dddd4444]"}),))
+        c.execute("INSERT INTO states VALUES (1, 1, 'on', 1, 100.0)")
+        c.commit()
+        c.close()
+
+    def test_the_api_is_the_source_and_only_loaded_entities_count(self):
+        autos, scripts = self.ap.loaded()
+        self.assertEqual(autos, {"Sch x evening [sch aaaa1111]"})                       # the unavailable (removed) one and the light are not there
+        self.assertEqual(scripts, {"sch_reconcile_x": "Sch reconcile x [sch cccc3333]"})
+        self.assertEqual(self.seen, [("/api/states", "Bearer tok123")])
+        self.assertIsNone(self.ap.fallback)
+
+    def test_an_entity_that_never_changed_is_still_seen(self):
+        """The recorder case that broke every apply after 10 days: nothing in the database, but HA runs it."""
+        self.make_db()                                                                   # a database that does not contain the automation at all
+        autos, _s = self.ap.loaded()
+        self.assertIn("Sch x evening [sch aaaa1111]", autos)
+
+    def test_a_refused_token_falls_back_to_the_recorder_and_the_verdict_says_so(self):
+        open(self.token, "w").write("wrong")
+        self.make_db()
+        autos, _s = self.ap.loaded()
+        self.assertEqual(autos, {"Sch recorded [sch dddd4444]"})
+        self.assertEqual(self.ap.fallback, "HTTPError")
+        self.ap.sleep = lambda _s: None
+        ok, diffs = self.ap.verify_loaded({"automations": {"x": "Sch x evening [sch aaaa1111]"}, "scripts": {}}, timeout=0)
+        self.assertFalse(ok)
+        self.assertIn("recorder", diffs[0])
+        self.assertIn("not loaded", " ".join(diffs))
+
+    def test_a_missing_token_file_falls_back_too(self):
+        os.remove(self.token)
+        self.make_db()
+        self.assertEqual(self.ap.loaded()[0], {"Sch recorded [sch dddd4444]"})
+        self.assertEqual(self.ap.fallback, "FileNotFoundError")
+
+    def test_collect_ignores_empty_names_and_unknown_states(self):
+        autos, scripts = portal_apply.Applier.collect([("automation.a", "on", "A"), ("automation.b", "unknown", "B"), ("automation.c", "on", None),
+                                                      ("script.s", "on", "S"), ("script.t", "", "T"), ("switch.z", "on", "Z")])
+        self.assertEqual((autos, scripts), ({"A"}, {"s": "S"}))
+
+
 class CheckConfigJudge(unittest.TestCase):
     ESC = chr(27)
 
