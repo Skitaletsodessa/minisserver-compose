@@ -1,12 +1,12 @@
 name: ETA Tiger robot vacuum
-# SKELETON (Task 32, 2026-10-24) built from documentation only; NOT yet confirmed on the robot.
+# Built from documentation 2026-10-24; first live DP dump 2026-11-03 (robot docked: 1 false, 2 false, 3 true, 4 chargego, 5 charging, 8 battery, 9 normal, 28 0). Only what is marked confirmed below has been seen.
 # Sources: localtuya issue #1964 (DP names), Tuya's common sweeping-robot instruction set (enum values marked "guess").
 # Every line marked "VERIFY" is settled by the Phase 2/3 capture on the real robot; unknown status strings must be added to the
 # status mapping BEFORE the entity is trusted (tuya_local shows an unmapped status as "cleaning").
 # Master copy lives in git (docs/robots/tuya-local/); the installed copy goes to
 # /srv/apps/homeassistant/custom_components/tuya_local/devices/ and must be re-copied after any upgrade of tuya_local.
 products:
-  - id: PRODUCT_ID_TO_BE_FILLED_FROM_THE_LAN_SCAN
+  - id: ex7zonfgdg0hoht2   # confirmed 2026-11-03 from the robot's own LAN broadcast
     manufacturer: ETA
     model: Tiger 4242 90000
 entities:
@@ -152,8 +152,7 @@ entities:
       - id: 17
         type: integer
         name: sensor
-        unit: "%"
-        class: measurement
+        unit: min               # raw 6000 / 12000 / 9000 on a fresh-looking robot: minutes of life left (100 h / 200 h / 150 h), VERIFY after a cleaning
         optional: true
 
   - entity: sensor
@@ -163,8 +162,7 @@ entities:
       - id: 19
         type: integer
         name: sensor
-        unit: "%"
-        class: measurement
+        unit: min               # raw 6000 / 12000 / 9000 on a fresh-looking robot: minutes of life left (100 h / 200 h / 150 h), VERIFY after a cleaning
         optional: true
 
   - entity: sensor
@@ -174,8 +172,7 @@ entities:
       - id: 21
         type: integer
         name: sensor
-        unit: "%"
-        class: measurement
+        unit: min               # raw 6000 / 12000 / 9000 on a fresh-looking robot: minutes of life left (100 h / 200 h / 150 h), VERIFY after a cleaning
         optional: true
 
   - entity: binary_sensor

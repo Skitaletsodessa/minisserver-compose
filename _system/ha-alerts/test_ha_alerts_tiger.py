@@ -74,7 +74,7 @@ def every(a, b, step=300):
     return out
 
 
-V, B = "vacuum.eta_tiger_robot_vacuum", "sensor.eta_tiger_robot_vacuum_battery"
+V, B = "vacuum.eta_tiger", "sensor.eta_tiger_battery"
 print("== Task 32: plan-less robot (ETA Tiger) rules")
 db = reset()
 at(db, ts(10)); check("entity absent: nothing at all (not paired yet)", not SENT and not active_keys(), str((SENT, active_keys())))

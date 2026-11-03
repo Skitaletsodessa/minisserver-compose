@@ -168,9 +168,9 @@ VACUUM_STUCK_SECS = 30 * 60
 VACUUM_UNAVAIL_QUIET_SECS = 60 * 60
 VACUUM_UNAVAIL_ESCALATE_SECS = 6 * 3600
 # Task 32: robots WITHOUT a plan script or schedule (the ETA Tiger: only calls made by a person or by the agent's supervised tests).
-# key: (label, vacuum entity, battery sensor). The entity ids are placeholders until the robot is paired and added to HA (an entity that does not exist is skipped).
+# key: (label, vacuum entity, battery sensor). Entity ids confirmed 2026-11-03 (an entity that does not exist is skipped).
 PLANLESS_VACUUMS = {
-    "tiger": ("Пылесос ETA Tiger", "vacuum.eta_tiger_robot_vacuum", "sensor.eta_tiger_robot_vacuum_battery"),
+    "tiger": ("Пылесос ETA Tiger", "vacuum.eta_tiger", "sensor.eta_tiger_battery"),
 }
 PLANLESS_ERROR_SECS = 5 * 60                        # a fault is reported after 5 minutes (a flicker is not)
 PLANLESS_RUN_MAX_SECS = 3 * 3600                    # cleaning/returning without a pause longer than a full battery allows (160 min + return)
