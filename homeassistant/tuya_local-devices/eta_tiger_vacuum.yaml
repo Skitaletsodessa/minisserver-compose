@@ -194,3 +194,13 @@ entities:
       - id: 28
         type: bitfield
         name: fault_code
+
+  # Diagnostic (2026-11-03): DP 1 as its own switch, to learn what starts the robot (mode "smart" alone, or DP 1 too).
+  # Remove or hide once the vacuum entity's start/pause/resume are verified.
+  - entity: switch
+    name: Cleaning on/off (DP 1)
+    category: diagnostic
+    dps:
+      - id: 1
+        type: boolean
+        name: switch
