@@ -451,9 +451,13 @@ class Vacuums(Base):
         try:
             self.e.req("POST", "/v1/vacuums/bedroom/scenarios/morning/start", who="ivan")
             self.e.req("POST", "/v1/vacuums/bedroom/dock", who="ivan")
+            # the dock call is "confirmed" by the OLD docked state, so the gateway may not have seen "returning" yet: wait for it, otherwise the later docked event can
+            # still be in flight and the next start is refused as not_docked (the old flake: the guard then fought a plan that never started)
+            self.assertTrue(self.e.wait(lambda: self.e.haclient.state(self.LV) == "returning"))
             self.e.ha.set(self.LV, "docked")
             self.assertTrue(self.e.wait(lambda: self.e.haclient.state(self.LV) == "docked"))
-            self.e.req("POST", "/v1/vacuums/bedroom/scenarios/evening/start", who="ivan")                 # on purpose, a new plan
+            j = self.e.req("POST", "/v1/vacuums/bedroom/scenarios/evening/start", who="ivan").json()      # on purpose, a new plan
+            self.assertEqual(j.get("outcome"), "confirmed", j)
             self.e.ha.calls.clear()
             self.e.ha.set(self.LV, "cleaning")
             import time as _t
