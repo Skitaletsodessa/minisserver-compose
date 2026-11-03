@@ -160,6 +160,8 @@ VACUUMS = {                                         # key: (label, vacuum entity
                     "script.vacuum_bedroom_plan", "Vacuum Bedroom"),
     "ov51gl_b5f6": ("Пылесос H40 (гостиная)", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "xiaomi_ov51gl_b5f6",
                     "script.vacuum_livingroom_plan", "Vacuum Livingroom"),
+    "c102gl_cadb": ("Пылесос X20+", "vacuum.xiaomi_c102gl_cadb_robot_cleaner", "xiaomi_c102gl_cadb",
+                    "script.vacuum_x20_plan", "Vacuum X20"),
     "eta_tiger": ("Пылесос Tiger", "vacuum.eta_tiger", "eta_tiger",       # consumable sensors do not follow the xiaomi_miot names: skipped (raw minutes, not percent)
                   "script.vacuum_tiger_plan", "Vacuum Tiger"),
 }
@@ -179,6 +181,7 @@ PLANLESS_RUN_MAX_SECS = 3 * 3600                    # cleaning/returning without
 PLANLESS_CHARGE_STALL_SECS = 3 * 3600               # docked for this long and the battery did not rise while below 90 %
 PLAN_DUE_GRACE = 2 * 3600
 PLAN_HUNG_SECS = 4 * 3600
+PLAN_HUNG_BY_SCRIPT = {"script.vacuum_x20_plan": 6 * 3600}     # four rooms with mop washes: longer than the H40 plans
 PLAN_ALERT_FROM = 1792151514                        # earlier plan runs never wrote the 'ПЛАН ВЫПОЛНЕН' line
 PLAN_DONE_MARK = "ПЛАН ВЫПОЛНЕН"
 # Task 28: a person who stops a running plan through the portal gateway leaves one JSON line here ({ts, script, person, action}, no secret);
@@ -502,7 +505,7 @@ def check_vacuums(ctx, N):
         if last:
             start, end = last
             had_incident = any(e >= start for _s, e in ctx.periods(vac, start - 12 * 3600, VACUUM_STUCK_STATES + ("unavailable",), VACUUM_STUCK_SECS))
-            if end is None and ctx.now - start > PLAN_HUNG_SECS and not had_incident:
+            if end is None and ctx.now - start > PLAN_HUNG_BY_SCRIPT.get(script, PLAN_HUNG_SECS) and not had_incident:
                 N.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int((ctx.now - start) // 3600)} ч, возможно завис", tier="B")
             else:
                 N.clear(key_h, "")

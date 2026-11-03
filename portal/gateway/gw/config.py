@@ -75,6 +75,10 @@ VACUUM_SEED = {
               "scenarios": {"quiet": {"name": "Тихая уборка", "description": "Вся квартира: низкое всасывание, вода на тряпку минимум.", "variables": {"plan": "quiet"}},
                             "standard": {"name": "Обычная уборка", "description": "Вся квартира: среднее всасывание, вода на тряпку минимум.", "variables": {"plan": "standard"}},
                             "strong": {"name": "Сильная уборка", "description": "Вся квартира: высокое всасывание, вода на тряпку минимум.", "variables": {"plan": "strong"}}}},
+    # Xiaomi Robo Mop X20+ (2026-11-03): one job for the whole flat; rooms, order and per-room cleaning type are settings of the robot (Mi Home, Custom mode).
+    "x20": {"name": "Пылесос Xiaomi X20+", "vacuum": "vacuum.xiaomi_c102gl_cadb_robot_cleaner", "script": "script.vacuum_x20_plan",
+            "schedule_id": "vacuum_x20", "icon": "vacuum",
+            "scenarios": {"full": {"name": "Все комнаты", "description": "Коридор, ванная, гостиная, кухня по очереди: пылесос Turbo и мойка Level 3 (в гостиной только пылесос), после каждой комнаты станция выгружает мусор, в конце моет и сушит тряпку.", "variables": {}}}},
 }
 
 # keyword -> icon key (matched against the lower-cased display name and id); Russian and English; first match by priority wins

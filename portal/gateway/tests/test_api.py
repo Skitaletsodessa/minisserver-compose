@@ -258,7 +258,7 @@ class Vacuums(Base):
 
     def test_list(self):
         v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="dasha").json()["vacuums"]}
-        self.assertEqual(sorted(v), ["bedroom", "livingroom", "tiger"])
+        self.assertEqual(sorted(v), ["bedroom", "livingroom", "tiger", "x20"])
         self.assertEqual([s["id"] for s in v["bedroom"]["scenarios"]], ["morning", "evening"])
         self.assertEqual([s["id"] for s in v["livingroom"]["scenarios"]], ["full"])
         self.assertEqual((v["bedroom"]["state"], v["bedroom"]["battery"], v["bedroom"]["can_start"], v["bedroom"]["schedule_id"]), ("docked", 100, True, "vacuum_bedroom"))
@@ -297,6 +297,12 @@ class Vacuums(Base):
         self.assertEqual(self.e.req("POST", "/v1/vacuums/tiger/dock", who="ivan").json()["action"], "dock")
         self.assertEqual([(c[0], c[1], c[2]) for c in self.e.ha.calls if c[0] == "vacuum"],
                          [("vacuum", "pause", "vacuum.eta_tiger"), ("vacuum", "start", "vacuum.eta_tiger"), ("vacuum", "return_to_base", "vacuum.eta_tiger")])
+
+    def test_x20_has_one_scenario_for_the_whole_flat_and_runs_its_script_without_variables(self):
+        v = {x["id"]: x for x in self.e.req("GET", "/v1/vacuums", who="dasha").json()["vacuums"]}["x20"]
+        self.assertEqual(([s["id"] for s in v["scenarios"]], v["schedule_id"], v["name"]), (["full"], "vacuum_x20", "Пылесос Xiaomi X20+"))
+        self.e.req("POST", "/v1/vacuums/x20/scenarios/full/start", who="ivan")
+        self.assertEqual(self.e.ha.calls, [("script", "turn_on", "script.vacuum_x20_plan", {})])
 
     def test_livingroom_scenario_has_no_variables(self):
         self.e.req("POST", "/v1/vacuums/livingroom/scenarios/full/start", who="ivan")

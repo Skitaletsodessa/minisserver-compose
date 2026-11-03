@@ -23,8 +23,8 @@ sys.path.insert(0, ROOT)
 HA_TOKEN = "test-ha-token-0123456789"
 SWITCHES = ["switch.bathroom_towels", "switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver", "switch.bedroom_parrot"]
 POWER = ["sensor.bathroom_towels_power", "sensor.living_room_rack_power", "sensor.livingroom_rack_big_power", "sensor.minisserver_power", "sensor.bedroom_parrot_power"]
-VAC = ["vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "vacuum.eta_tiger"]
-SCRIPTS = ["script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan", "script.vacuum_tiger_plan"]
+VAC = ["vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "vacuum.eta_tiger", "vacuum.xiaomi_c102gl_cadb_robot_cleaner"]
+SCRIPTS = ["script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan", "script.vacuum_tiger_plan", "script.vacuum_x20_plan"]
 
 
 def free_port():

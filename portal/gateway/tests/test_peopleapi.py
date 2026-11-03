@@ -171,7 +171,7 @@ class SimulatedApp(BaseCase):
         # 4. cards, vacuums, tiles
         devs = e.req("GET", "/v1/devices", token=tok).json()["devices"]
         self.assertEqual(len(devs), 6)
-        self.assertEqual(len(e.req("GET", "/v1/vacuums", token=tok).json()["vacuums"]), 3)
+        self.assertEqual(len(e.req("GET", "/v1/vacuums", token=tok).json()["vacuums"]), 4)
         self.assertEqual([t["id"] for t in e.req("GET", "/v1/services", token=tok).json()["services"]], ["fakeweb"])
         # 5. an event stream, then a switch from this phone is seen on it
         st = Stream(e, tok)

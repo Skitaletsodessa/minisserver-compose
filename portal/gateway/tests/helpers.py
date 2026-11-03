@@ -208,17 +208,17 @@ class BaseCase(unittest.TestCase):
         e.ha.refuse = e.ha.down = e.ha.no_ws = False
         for s in ("switch.bathroom_towels", "switch.living_room_rack", "switch.livingroom_rack_big", "switch.kitchen_orchids", "switch.minisserver", "switch.bedroom_parrot"):
             e.ha.set(s, "off")
-        for v in ("vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "vacuum.eta_tiger"):
+        for v in ("vacuum.xiaomi_ov51gl_e160_robot_cleaner", "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner", "vacuum.eta_tiger", "vacuum.xiaomi_c102gl_cadb_robot_cleaner"):
             e.ha.set(v, "docked")
         e.ha.set("sensor.eta_tiger_battery", "87")
-        for sc in ("script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan", "script.vacuum_tiger_plan"):
+        for sc in ("script.vacuum_bedroom_plan", "script.vacuum_livingroom_plan", "script.vacuum_tiger_plan", "script.vacuum_x20_plan"):
             e.ha.set(sc, "off")
         e.core._last_switch.clear()
         e.core._eff.clear()
         want = {"switch.bathroom_towels": "off", "switch.living_room_rack": "off", "switch.livingroom_rack_big": "off", "switch.kitchen_orchids": "off",
                 "switch.minisserver": "off", "switch.bedroom_parrot": "off", "vacuum.xiaomi_ov51gl_e160_robot_cleaner": "docked",
-                "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner": "docked", "vacuum.eta_tiger": "docked", "script.vacuum_bedroom_plan": "off", "script.vacuum_livingroom_plan": "off",
-                "script.vacuum_tiger_plan": "off"}
+                "vacuum.xiaomi_ov51gl_b5f6_robot_cleaner": "docked", "vacuum.eta_tiger": "docked", "vacuum.xiaomi_c102gl_cadb_robot_cleaner": "docked", "script.vacuum_bedroom_plan": "off", "script.vacuum_livingroom_plan": "off",
+                "script.vacuum_tiger_plan": "off", "script.vacuum_x20_plan": "off"}
         self.assertTrue(e.wait(lambda: all(e.haclient.state(k) == v for k, v in want.items()), 10), "fake HA state did not settle")
         e.ha.calls.clear()
 
