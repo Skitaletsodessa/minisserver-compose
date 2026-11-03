@@ -1,5 +1,5 @@
 name: ETA Tiger robot vacuum
-# Built from documentation 2026-10-24; first live DP dump 2026-11-03 (robot docked: 1 false, 2 false, 3 true, 4 chargego, 5 charging, 8 battery, 9 normal, 28 0). Only what is marked confirmed below has been seen.
+# Built from documentation 2026-10-24; first live DP dump 2026-11-03; start/pause/resume/return verified on the robot the same day (comments in the vacuum entity). Locate (DP 11) and fan speed writes are NOT verified.
 # Sources: localtuya issue #1964 (DP names), Tuya's common sweeping-robot instruction set (enum values marked "guess").
 # Every line marked "VERIFY" is settled by the Phase 2/3 capture on the real robot; unknown status strings must be added to the
 # status mapping BEFORE the entity is trusted (tuya_local shows an unmapped status as "cleaning").
@@ -12,35 +12,25 @@ products:
 entities:
   - entity: vacuum
     dps:
+      # Verified on the robot 2026-11-03 (see docs/robots/STATE.md):
+      #  - DP 1 true  = start / resume (the robot sets its own mode to "smart"); DP 1 false = pause in place (the robot itself flips DP 2 to true).
+      #    So DP 1 is the vacuum's "activate": start and resume = true, pause = false.
+      #  - DP 3 true  = return to the dock; it works while cleaning and while paused. The mode DP 4 "chargego" (what the stock return_to_base would write)
+      #    was IGNORED while the robot was cleaning, so return_to_base is taken from DP 3 instead.
+      #  - DP 2 (pause) is therefore not mapped: the robot keeps it in step with DP 1.
       - id: 1
         type: boolean
-        name: power
-      - id: 2
+        name: activate
+      - id: 3
         type: boolean
-        name: activate          # Tuya's DP 2 is "pause" (true = paused); seen 2026-11-03: false while the robot was cleaning. tuya_local's "activate" is true = running, so it is inverted here
-        mapping:
-          - dps_val: false
-            value: true
-          - dps_val: true
-            value: false
-      - id: 4
-        type: string
         name: command
         mapping:
-          - dps_val: smart
-            value: clean
-          - dps_val: chargego
+          - dps_val: true
             value: return_to_base
-          - dps_val: pose
-            value: clean_spot   # VERIFY: "pose" = point-to-sweep in Tuya's set
-          - dps_val: zone
-            value: zone         # VERIFY
-          - dps_val: part
-            value: partial      # VERIFY
       - id: 5
         type: string
         name: status
-        mapping:                # guess: Tuya sweeper "status" enum; VERIFY every value on the robot
+        mapping:                # guess: Tuya sweeper "status" enum. Seen on the robot 2026-11-03: charging, standby (docked-awake and paused), cleaning, returning
           - dps_val: standby
             value: standby
           - dps_val: smart
@@ -194,13 +184,3 @@ entities:
       - id: 28
         type: bitfield
         name: fault_code
-
-  # Diagnostic (2026-11-03): DP 1 as its own switch, to learn what starts the robot (mode "smart" alone, or DP 1 too).
-  # Remove or hide once the vacuum entity's start/pause/resume are verified.
-  - entity: switch
-    name: Cleaning on/off (DP 1)
-    category: diagnostic
-    dps:
-      - id: 1
-        type: boolean
-        name: switch
