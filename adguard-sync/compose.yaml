@@ -4,7 +4,7 @@
 # Origin and replica are both reached over the tailnet HTTPS names (valid certificates).
 services:
   adguard-sync:
-    image: ghcr.io/bakito/adguardhome-sync:v0.9.3
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.6
     container_name: adguard-sync
     restart: unless-stopped
     # Pinned on purpose: both ends of the sync are tailnet names (*.ts.net) that only Tailscale's MagicDNS can

@@ -5,7 +5,7 @@
 # Update both on the same day.
 services:
   adguardhome:
-    image: adguard/adguardhome:v0.107.79
+    image: adguard/adguardhome:v0.107.80
     container_name: adguardhome
     restart: unless-stopped
     network_mode: host
