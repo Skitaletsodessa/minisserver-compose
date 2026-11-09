@@ -165,6 +165,27 @@ db.put(V, ts(20, 0), "docked"); db.put(SC, ts(20, 0), "off"); db.put(SC, t0, "on
 run(db, every(ts(20, 40), ts(21, 10)))
 check("plan stopped at once (robot not ready) with no incident: ONE message", len(msgs("не дошёл до конца")) == 1, str(msgs()))
 
+print("\n== X20+: an error state is reported after 3 minutes, in words about the water tanks (once, no duplicates)")
+VX, SX = "vacuum.xiaomi_c102gl_cadb_robot_cleaner", "script.vacuum_x20_plan"
+db = reset()
+db.put(VX, ts(20, 0), "docked"); db.put(SX, ts(20, 0), "off"); db.put(SX, ts(20, 1), "on"); db.put(VX, ts(20, 2), "cleaning"); db.put(VX, ts(20, 10), "error")
+run(db, every(ts(20, 11), ts(20, 12), 60))
+check("X20+ in error for 2 min: silent", not msgs(), str(msgs()))
+run(db, [ts(20, 14), ts(20, 15)])
+check("X20+ in error >= 3 min: ONE message naming both tanks", len(msgs("ЧИСТОЙ")) == 1 and "ГРЯЗНОЙ" in msgs()[0], str(msgs()))
+db.put(SX, ts(20, 16), "off"); run(db, every(ts(20, 30), ts(22, 0), 600) + every(ts(22, 0), ts(23, 55), 900))
+check("no 30-minute 'stuck' duplicate, no 'plan did not finish' duplicate, no repeat", len(msgs()) == 1, str(msgs()))
+db.put(VX, ts(8, 0, day_off=1), "docked"); at(db, ts(8, 5, day_off=1))
+check("recovery: no message, alert leaves the active list", len(msgs()) == 1 and not [k for k in active_keys() if "water" in k], str((msgs(), active_keys())))
+db = reset()
+db.put(VX, ts(20, 0), "docked"); db.put(VX, ts(20, 10), "error"); db.put(VX, ts(20, 12), "docked")
+run(db, every(ts(20, 11), ts(20, 20), 60))
+check("an error that clears within 2 minutes: silent", not msgs(), str(msgs()))
+db = reset()
+db.put(VX, ts(20, 0), "docked"); db.put(VX, ts(20, 10), "paused")
+run(db, every(ts(20, 11), ts(20, 25), 60))
+check("a pause is not a water message (generic 30-min rule unchanged)", not msgs("ЧИСТОЙ"), str(msgs()))
+
 _stops = os.path.join(STATE, "stops.jsonl")                              # Task 28: a stop made on purpose through the portal gateway
 _orig_stops = haa.GATEWAY_STOPS
 haa.GATEWAY_STOPS = _stops

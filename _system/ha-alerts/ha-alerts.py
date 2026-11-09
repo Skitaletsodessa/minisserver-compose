@@ -170,6 +170,10 @@ VACUUM_CONSUMABLES = (("filter_life_level", "фильтр"), ("mop_life_level", 
 VACUUM_STUCK_STATES = ("paused", "error", "idle")   # idle = stopped off the dock; vacuum.fault is a sticky code and is never used
 VACUUM_STUCK_SECS = 30 * 60
 VACUUM_UNAVAIL_QUIET_SECS = 60 * 60
+# Robots whose most common stop is a water-station fault (X20+: empty clean tank, full dirty tank; 2026-11-09 Ivan: the clean tank was empty).
+# The X20+ shows NO tank level at rest (all 133 MIoT properties compared with the tanks pulled out, 2026-11-09), so the only signal is the
+# robot's own "error" state: tell Ivan after 3 minutes, in words, instead of after the generic 30-minute "stuck".
+VACUUM_WATER_ERROR_SECS = {"c102gl_cadb": 3 * 60}
 VACUUM_UNAVAIL_ESCALATE_SECS = 6 * 3600
 # Task 32: robots WITHOUT a plan script or schedule (the ETA Tiger: only calls made by a person or by the agent's supervised tests).
 # key: (label, vacuum entity, battery sensor). Entity ids confirmed 2026-11-03 (an entity that does not exist is skipped).
@@ -475,7 +479,14 @@ def check_vacuums(ctx, N):
 
         # B: paused / error / stopped off the dock >= 30 min: ONE message per incident, says whether a plan was interrupted
         key_i = f"ha-vacuum-stuck-{key}"
-        if state in VACUUM_STUCK_STATES and age >= VACUUM_STUCK_SECS:
+        key_w = f"ha-vacuum-water-{key}"
+        water_secs = VACUUM_WATER_ERROR_SECS.get(key)
+        if water_secs and state == "error" and age >= water_secs:
+            where_w = "во время сценария уборки" if script_state == "on" else "вне сценария уборки"
+            N.alert(key_w, f"HA: {label} остановился с ошибкой ({where_w}). Чаще всего это вода: проверьте бак ЧИСТОЙ воды (пустой?) и бак ГРЯЗНОЙ воды (полный?) на станции, потом нажмите продолжить/домой.", tier="B")
+        elif water_secs and state != "unavailable":
+            N.clear(key_w, "")
+        if state in VACUUM_STUCK_STATES and age >= VACUUM_STUCK_SECS and not (water_secs and state == "error"):
             where = "во время сценария уборки (он остановится по таймауту)" if script_state == "on" else "вне сценария уборки"
             word = {"paused": "на паузе", "error": "в ошибке", "idle": "стоит вне базы"}[state]
             N.alert(key_i, f"HA: {label} {word} уже {int(age // 60)} мин, {where}. Возможно застрял.", tier="B")
@@ -505,6 +516,8 @@ def check_vacuums(ctx, N):
         if last:
             start, end = last
             had_incident = any(e >= start for _s, e in ctx.periods(vac, start - 12 * 3600, VACUUM_STUCK_STATES + ("unavailable",), VACUUM_STUCK_SECS))
+            if not had_incident and water_secs:                # the 3-minute water/error message already told Ivan
+                had_incident = any(e >= start for _s, e in ctx.periods(vac, start - 12 * 3600, ("error",), water_secs))
             if end is None and ctx.now - start > PLAN_HUNG_BY_SCRIPT.get(script, PLAN_HUNG_SECS) and not had_incident:
                 N.alert(key_h, f"HA: сценарий пылесоса ({label}) идёт уже {int((ctx.now - start) // 3600)} ч, возможно завис", tier="B")
             else:
