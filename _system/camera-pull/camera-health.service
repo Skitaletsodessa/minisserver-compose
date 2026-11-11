@@ -1,0 +1,14 @@
+[Unit]
+Description=Health check of the front-yard camera over DVRIP: reachable, SD card, loop length, clock (Task 34)
+After=network-online.target
+Wants=network-online.target
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=skit
+Nice=10
+StateDirectory=camera-pull
+WorkingDirectory=/srv/compose/_system/camera-pull
+ExecStart=/usr/bin/python3 /srv/compose/_system/camera-pull/camera_health.py
+TimeoutStartSec=300

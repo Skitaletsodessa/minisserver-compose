@@ -1,0 +1,16 @@
+[Unit]
+Description=Pull motion clips of the front-yard camera (192.168.31.95) from its SD card into /srv/library/camera (Task 34)
+RequiresMountsFor=/srv/library
+After=network-online.target
+Wants=network-online.target
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=skit
+Nice=15
+IOSchedulingClass=idle
+StateDirectory=camera-pull
+WorkingDirectory=/srv/compose/_system/camera-pull
+ExecStart=/usr/bin/python3 /srv/compose/_system/camera-pull/camera_pull.py
+TimeoutStartSec=4200

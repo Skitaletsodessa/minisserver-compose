@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly camera health check
+
+[Timer]
+OnCalendar=*-*-* *:20:00
+RandomizedDelaySec=60
+Persistent=false
+
+[Install]
+WantedBy=timers.target

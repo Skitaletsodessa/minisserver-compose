@@ -1,0 +1,2 @@
+OpenIPC/python-dvr (MIT) commit dfa77efd2b49fe135f17c47f7aa5171c61f45efb (2026-10-27), tarball sha256 c179565297c42647e1630cc657e563894802b414e65be2d01d6cb63b5554ced2
+Only dvrip.py (pure sockets to the camera, no subprocess, no HTTP) is installed here; reviewed 2026-11-11 before use. solarcam.py, DeviceManager.py, telnet_opener.py were NOT used.

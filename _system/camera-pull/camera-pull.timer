@@ -1,0 +1,10 @@
+[Unit]
+Description=Pull front-yard camera clips every 2 h between 08:00 and 20:00 (night clips arrive with the 08:00 run; nothing in quiet hours 21:00-08:00)
+
+[Timer]
+OnCalendar=*-*-* 08,10,12,14,16,18,20:00:00
+RandomizedDelaySec=300
+Persistent=false
+
+[Install]
+WantedBy=timers.target
