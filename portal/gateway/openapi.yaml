@@ -551,6 +551,75 @@ paths:
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
+  /v1/cameras:
+    get:
+      operationId: listCameras
+      summary: "Task 34. The three lenses and a summary of the clip archive. Household parents only (admin or household WITH the parent flag); anyone else 403, module not configured 404"
+      responses:
+        "200": {description: cameras, content: {application/json: {schema: {type: object, required: [cameras, live, archive], properties: {cameras: {type: array, items: {type: object, required: [id, name, channel], properties: {id: {type: string}, name: {type: string}, channel: {type: integer}}}}, live: {type: boolean, description: "go2rtc answers"}, archive: {type: object, required: [clips, bytes, newest_clip], properties: {clips: {type: integer}, bytes: {type: integer}, newest_clip: {type: [string, "null"]}}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/cameras/{id}/snapshot:
+    get:
+      operationId: cameraSnapshot
+      summary: "Current frame of one lens (JPEG, no-store). One audit row per person and camera per 10 minutes, not per image"
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: jpeg, content: {image/jpeg: {schema: {type: string, format: binary}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/cameras/{id}/live:
+    get:
+      operationId: cameraLive
+      summary: "Live view of one lens as a fragmented MP4 stream for a <video> tag (session cookie; the browser sends it). codec h264 (default, transcoded by go2rtc, plays everywhere) or h265 (the camera's own, needs hardware HEVC). At most 4 streams at once and 20 minutes per stream. Audited when it opens"
+      parameters: [{$ref: "#/components/parameters/Id"}, {name: codec, in: query, required: false, schema: {type: string, enum: [h264, h265], default: h264}}]
+      responses:
+        "200": {description: video, content: {video/mp4: {schema: {type: string, format: binary}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/cameras/archive/days:
+    get:
+      operationId: cameraArchiveDays
+      summary: "Days that have pulled motion clips, newest first, with counts per lens"
+      responses:
+        "200": {description: days, content: {application/json: {schema: {type: object, required: [days], properties: {days: {type: array, items: {type: object, required: [day, clips, bytes, by_channel], properties: {day: {type: string}, clips: {type: integer}, bytes: {type: integer}, by_channel: {type: object, additionalProperties: {type: integer}}}}}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/cameras/archive/clips:
+    get:
+      operationId: cameraArchiveClips
+      summary: "The clips of one day (optionally one lens), oldest first"
+      parameters: [{name: day, in: query, required: true, schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}}, {name: camera, in: query, required: false, schema: {type: string}}]
+      responses:
+        "200": {description: clips, content: {application/json: {schema: {type: object, required: [clips], properties: {clips: {type: array, items: {type: object, required: [id, camera, kind, begin, end, size, duration_s], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}}}}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/cameras/archive/clips/{id}/video:
+    get:
+      operationId: cameraClipVideo
+      summary: "One archived clip (mp4). Range requests are served (206) so the player can seek. Audited when played (the first range)"
+      parameters: [{$ref: "#/components/parameters/Id"}]
+      responses:
+        "200": {description: mp4, content: {video/mp4: {schema: {type: string, format: binary}}}}
+        "206": {description: partial mp4, content: {video/mp4: {schema: {type: string, format: binary}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /v1/services:
     get:
       operationId: listServices

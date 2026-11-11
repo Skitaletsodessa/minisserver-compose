@@ -189,3 +189,23 @@ button.step { width: 56px; min-width: 56px; font-size: 1.5rem; padding: 0; }
 .chip button, #snack button, .kid-pend button { white-space: nowrap; flex: none; }
 .chip > span { flex: 1; min-width: 0; }
 button.dur .dur-name, button.choice .choice-name { text-wrap: balance; text-align: center; }
+
+/* Task 34: cameras */
+.cam-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; margin-bottom: 16px; }
+.cam-tile { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+.cam-snap { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; object-fit: cover; }
+.cam-status { margin: 0; padding: 8px 12px; }
+.cam-cap { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; }
+.cam-name { font-weight: 600; min-width: 0; }
+.cam-open { min-height: var(--tap); }
+.cam-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.cam-live-name { margin: 0; font-size: 1.2rem; }
+.cam-video { display: block; width: 100%; max-height: 70vh; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); }
+.cam-connecting { margin: 8px 0; }
+.cam-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.cam-actions button { min-height: var(--tap); }
+.cam-archive select { min-height: var(--tap); width: 100%; margin: 6px 0; }
+.cam-chips { margin: 6px 0 10px; }
+ul.cam-clips { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
+button.cam-clip-btn { width: 100%; min-height: var(--tap); text-align: left; }
+.cam-player { margin-top: 8px; }

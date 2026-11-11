@@ -15,3 +15,7 @@ streams:
   cam_ch0: ${CAM95_RTSP_SUB}
   cam_ch1: ${CAM95_DVRIP_CH1}
   cam_ch2: ${CAM95_DVRIP_CH2}
+  # H.264 versions for browsers/WebViews without HEVC: transcoded by go2rtc (software x264, 640x360), started only while someone watches
+  cam_ch0_h264: ffmpeg:cam_ch0#video=h264
+  cam_ch1_h264: ffmpeg:cam_ch1#video=h264
+  cam_ch2_h264: ffmpeg:cam_ch2#video=h264

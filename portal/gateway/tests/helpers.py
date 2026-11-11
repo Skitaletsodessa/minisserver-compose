@@ -59,7 +59,7 @@ def validate_response(method, path, resp):
 
 
 class Env:
-    def __init__(self, background=True, probes=False):
+    def __init__(self, background=True, probes=False, camera_opts=None):
         self.tmp = tempfile.mkdtemp(prefix="gw-test-")
         self.ha = FakeHA().start()
         self.sched = SchedHarness(self.tmp).start()
@@ -100,7 +100,7 @@ class Env:
         self.app = server.make(data_dir=self.data, secrets_dir=self.secrets, ha_url=self.ha.url, ha_token_file=self.ha_token, sched_url=self.sched.url,
                                sched_admin=self.sched.admin_file, sched_household=self.sched.house_file, start_background=background,
                                agh_url=self.agh.url, agh_password_file=self.agh.password_file, parity_state=self.parity, oui_file=self.oui,
-                               filter_opts={"fetch": fetch, "dns": self.dns, "sleep": sleep, "poll_s": 0.01, "replica_wait_s": 0.3, "parity_wait_s": 0.5})
+                               filter_opts={"fetch": fetch, "dns": self.dns, "sleep": sleep, "poll_s": 0.01, "replica_wait_s": 0.3, "parity_wait_s": 0.5}, camera_opts=camera_opts)
         self.o = self.app.state.objs
         self.db, self.people, self.core, self.hub, self.haclient = self.o["db"], self.o["people"], self.o["core"], self.o["hub"], self.o["ha"]
         if not probes:                                       # probes would talk to the real network of the machine running the tests

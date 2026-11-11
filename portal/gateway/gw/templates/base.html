@@ -23,6 +23,7 @@
     <a class="tab" href="/home" {% if nav_active == 'home' %}aria-current="page"{% endif %}>{{ t('nav_home') }}</a>
     <a href="/services" {% if nav_active == 'services' %}aria-current="page"{% endif %}>{{ t('nav_services') }}</a>
     {% if me.parent %}<a class="tab" href="/parental" {% if nav_active == 'parental' %}aria-current="page"{% endif %}>{{ t('nav_parental') }}</a>{% endif %}
+    {% if cameras_on and me.parent and me.role in ('admin', 'household') %}<a class="tab" href="/cameras" {% if nav_active == 'cameras' %}aria-current="page"{% endif %}>{{ t('nav_cameras') }}</a>{% endif %}
     {% if me.role == 'admin' and not me.app %}
     <a href="/people" {% if nav_active == 'people' %}aria-current="page"{% endif %}>{{ t('nav_people') }}</a>
     <a href="/audit" {% if nav_active == 'audit' %}aria-current="page"{% endif %}>{{ t('nav_audit') }}</a>
@@ -43,6 +44,7 @@
 <nav class="bottomnav" aria-label="{{ t('menu') }}">
   <a href="/home" {% if nav_active == 'home' %}aria-current="page"{% endif %}><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#nav_home"/></svg><span>{{ t('nav_home') }}</span></a>
   {% if me.parent %}<a href="/parental" {% if nav_active == 'parental' %}aria-current="page"{% endif %}><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#nav_parental"/></svg><span>{{ t('nav_parental') }}</span></a>{% endif %}
+  {% if cameras_on and me.parent and me.role in ('admin', 'household') %}<a href="/cameras" {% if nav_active == 'cameras' %}aria-current="page"{% endif %}><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#nav_cameras"/></svg><span>{{ t('nav_cameras') }}</span></a>{% endif %}
 </nav>
 {% endif %}
 </body>

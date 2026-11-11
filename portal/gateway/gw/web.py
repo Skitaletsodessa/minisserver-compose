@@ -14,7 +14,7 @@ from .auth import GwError, otpauth_uri
 from .strings import S, ERRORS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; font-src 'self'; "
        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; manifest-src 'self'")
 HEADERS = {"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Frame-Options": "DENY"}
 ENV = Environment(loader=FileSystemLoader(os.path.join(HERE, "templates")), autoescape=select_autoescape(["html"]), undefined=StrictUndefined, trim_blocks=True, lstrip_blocks=True)
@@ -36,6 +36,7 @@ def routes(app):
         p = ctx.get("me")
         ctx.setdefault("csrf", p["csrf"] if p and p.get("csrf") else "")
         ctx.setdefault("nav_active", name.split(".")[0])
+        ctx.setdefault("cameras_on", bool(config.FEATURES.get("cameras")))
         ctx["i18n_json"] = json.dumps({"S": S, "E": ERRORS}, ensure_ascii=False).replace("<", "\\u003c")
         html = ENV.get_template(name).render(**ctx)
         return HTMLResponse(html, status_code=status, headers=HEADERS)
@@ -139,6 +140,16 @@ def routes(app):
         if not p["parent"]:
             return page(request, "message.html", status=403, me=p, title=S["nav_parental"], text="403")
         return page(request, "parental.html", me=p, nav_active="parental")
+
+    async def cameras(request):
+        p, r = me_or_redirect(request)
+        if r:
+            return r
+        if not config.FEATURES.get("cameras"):
+            return page(request, "message.html", status=404, me=p, title=S["nav_cameras"], text=ERRORS["not_available"])
+        if p["role"] not in ("admin", "household") or not p["parent"]:
+            return page(request, "message.html", status=403, me=p, title=S["nav_cameras"], text="403")
+        return page(request, "cameras.html", me=p, nav_active="cameras")
 
     async def parental_filters(request):
         p, r = me_or_redirect(request)
@@ -246,7 +257,7 @@ def routes(app):
         Route("/", root, methods=["GET"]), Route("/login", login_get, methods=["GET"]), Route("/login", login_post, methods=["POST"]),
         Route("/logout", logout_post, methods=["POST"]), Route("/home", home, methods=["GET"]), Route("/settings/{id}", settings, methods=["GET"]),
         Route("/services", services, methods=["GET"]), Route("/people", people, methods=["GET"]), Route("/audit", audit, methods=["GET"]),
-        Route("/parental", parental, methods=["GET"]), Route("/parental/filters", parental_filters, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
+        Route("/cameras", cameras, methods=["GET"]), Route("/parental", parental, methods=["GET"]), Route("/parental/filters", parental_filters, methods=["GET"]), Route("/setup/{token}", setup_get, methods=["GET"]), Route("/setup/{token}", setup_post, methods=["POST"]),
         Route("/app/download", download_page, methods=["GET"]), Route("/app/download.apk", download_file, methods=["GET"]),
         Route("/app/update.json", a.update_manifest, methods=["GET"]), Route("/app/releases", releases_page, methods=["GET"]),
         Route("/app/releases/{code:int}/app.apk", a.update_apk, methods=["GET"]),

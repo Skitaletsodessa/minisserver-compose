@@ -25,7 +25,16 @@ ORIGIN_DNS = os.environ.get("GW_ORIGIN_DNS", "192.168.31.2")
 REPLICA_DNS = os.environ.get("GW_REPLICA_DNS", "192.168.31.5")
 
 # feature flags (the app builds its tabs from them); cameras stay off
-FEATURES = {"parental": True, "cameras": False}
+FEATURES = {"parental": True, "cameras": False}          # "cameras" is switched on at start when GW_GO2RTC_URL is set (server.make)
+
+# Task 34: cameras. The gateway reads go2rtc (loopback, the only holder of camera sessions) and the clip archive (mounted read-only); it holds no camera login.
+GO2RTC_URL = os.environ.get("GW_GO2RTC_URL", "")                                        # e.g. http://127.0.0.1:18984 ; empty = module off
+CAMERA_ARCHIVE = os.environ.get("GW_CAMERA_ARCHIVE", "/ro/camera")
+CAMERAS = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Двор — поворотная"},
+           {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Двор — камера 2"},
+           {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Двор — камера 3"}]
+CAMERA_LIVE_MAX_STREAMS = 4         # live streams at once (the camera accepts 10 connections in total; go2rtc shares one per lens)
+CAMERA_LIVE_MAX_S = 20 * 60         # a forgotten tab must not hold a camera session for ever; the page offers "continue"
 
 # limits (ADR 0007)
 MAX_PHONES_TOTAL = 20

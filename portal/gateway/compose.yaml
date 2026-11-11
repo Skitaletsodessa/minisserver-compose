@@ -19,6 +19,7 @@ services:
       - GW_PUBLIC_URL=https://minisserver.tail6bf4d5.ts.net:17443
       - GW_HA_URL=http://127.0.0.1:8123
       - GW_SCHED_URL=http://127.0.0.1:16444
+      - GW_GO2RTC_URL=http://127.0.0.1:18984          # Task 34: go2rtc, the only holder of camera sessions (loopback)
     volumes:
       - /srv/apps/portal/gateway:/data
       - /srv/apps/portal/gateway-secrets:/secrets:ro
@@ -27,6 +28,7 @@ services:
       - /home/skit/adguard-admin-password.txt:/secrets-agh/password:ro
       - /var/lib/adguard-parity:/ro/adguard-parity:ro
       - /usr/share/ieee-data:/ro/ieee-data:ro
+      - /srv/library/camera:/ro/camera:ro                  # Task 34: the clip archive written by the host job camera-pull (read-only; docker.service waits for /srv/library)
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid,nodev

@@ -38,8 +38,10 @@ def err_response(e):
 
 
 class App:
-    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None, devices=None, releases=None):
+    def __init__(self, db, people, core, hub, sched, ha, clock=time.time, parental=None, filters=None, devices=None, releases=None, cameras=None):
         self.releases = releases
+        self.cameras = cameras
+        self.live_open = 0                                # live streams running now (Task 34)
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
         self.parental, self.filters, self.devices = parental, filters, devices
         self.bad = defaultdict(deque)                    # failed bearer attempts per address
@@ -986,6 +988,82 @@ class App:
                 self.hub.unsubscribe(sid)
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
+    # ── cameras (Task 34): the module owns no data and no login, see cameras.py. Household parents only (D5): Ivan and Dasha; children have no accounts. ──
+    def _cam(self, request):
+        p = self.authenticate(request, csrf=False)
+        if not self.cameras or not self.cameras.enabled:
+            raise GwError(404, "not_available", "the camera module is not configured")
+        if p["role"] not in ("admin", "household") or not p.get("parent"):
+            raise GwError(403, "forbidden", "the cameras are for the household's parents only", {"role": p["role"]})
+        return p
+
+    def _caudit(self, p, action, target, after=None, ok=True):
+        self.db.audit(action, person=p["person_id"], phone=p.get("phone_id"), target=target, after=after, ok=ok, ip=p.get("ip"))
+
+    async def cam_list(self, request):
+        p = self._cam(request)
+        loop = asyncio.get_running_loop()
+        h = await loop.run_in_executor(None, self.cameras.health)
+        return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"],
+                             "archive": {"clips": h["archive_clips"], "bytes": h["archive_bytes"], "newest_clip": h["newest_clip"]}})
+
+    async def cam_snapshot(self, request):
+        p = self._cam(request)
+        cid = request.path_params["id"]
+        self.cameras.get(cid)
+        data = await asyncio.get_running_loop().run_in_executor(None, self.cameras.snapshot, cid)
+        if self.cameras.audit_snapshot_due(p["person_id"], cid):
+            self._caudit(p, "camera_snapshot", cid)
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    async def cam_live(self, request):
+        p = self._cam(request)
+        cid = request.path_params["id"]
+        codec = request.query_params.get("codec", "h264")
+        self.cameras.get(cid)
+        if self.live_open >= config.CAMERA_LIVE_MAX_STREAMS:
+            raise GwError(429, "too_many_streams", "too many live views at once", {"max": config.CAMERA_LIVE_MAX_STREAMS}, {"Retry-After": "30"})
+        loop = asyncio.get_running_loop()
+        self.live_open += 1
+        try:
+            resp = await loop.run_in_executor(None, self.cameras.open_live, cid, codec)
+        except BaseException:
+            self.live_open -= 1
+            raise
+        self._caudit(p, "camera_live", cid, {"codec": codec})
+        deadline = self.clock() + config.CAMERA_LIVE_MAX_S
+
+        async def gen():
+            try:
+                while self.clock() < deadline:
+                    chunk = await loop.run_in_executor(None, resp.read, 64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                self.live_open -= 1
+                await loop.run_in_executor(None, resp.close)
+        return StreamingResponse(gen(), media_type="video/mp4", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+    async def cam_archive_days(self, request):
+        self._cam(request)
+        return JSONResponse({"days": await asyncio.get_running_loop().run_in_executor(None, self.cameras.days)})
+
+    async def cam_archive_clips(self, request):
+        self._cam(request)
+        day = request.query_params.get("day", "")
+        cid = request.query_params.get("camera") or None
+        if len(day) != 10 or day[4] != "-" or day[7] != "-" or not day.replace("-", "").isdigit():
+            raise GwError(400, "bad_query", "day must be YYYY-MM-DD")
+        return JSONResponse({"clips": await asyncio.get_running_loop().run_in_executor(None, self.cameras.clips, day, cid)})
+
+    async def cam_clip_video(self, request):
+        p = self._cam(request)
+        path, row = self.cameras.clip_file(request.path_params["cid"])
+        if "range" not in request.headers or request.headers["range"].replace(" ", "").startswith("bytes=0-"):
+            self._caudit(p, "camera_clip_play", str(row["id"]), {"camera": "cam%d" % row["ch"], "begin": row["begin"]})
+        return FileResponse(path, media_type="video/mp4")
+
 
 def build(app_obj, extra_routes=(), lifespan=None):
     a = app_obj
@@ -1030,6 +1108,12 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/schedules/{id}/exceptions", a.exceptions_list, methods=["GET"]),
         Route("/v1/schedules/{id}/exceptions", a.exception_add, methods=["POST"]),
         Route("/v1/exceptions/{xid}", a.exception_delete, methods=["DELETE"]),
+        Route("/v1/cameras", a.cam_list, methods=["GET"]),
+        Route("/v1/cameras/archive/days", a.cam_archive_days, methods=["GET"]),
+        Route("/v1/cameras/archive/clips", a.cam_archive_clips, methods=["GET"]),
+        Route("/v1/cameras/archive/clips/{cid:int}/video", a.cam_clip_video, methods=["GET"]),
+        Route("/v1/cameras/{id}/snapshot", a.cam_snapshot, methods=["GET"]),
+        Route("/v1/cameras/{id}/live", a.cam_live, methods=["GET"]),
         Route("/v1/services", a.services, methods=["GET"]),
         Route("/v1/events", a.events, methods=["GET"]),
         Route("/v1/audit", a.audit, methods=["GET"]),

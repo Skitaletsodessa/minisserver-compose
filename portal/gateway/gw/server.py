@@ -4,11 +4,11 @@ import contextlib
 import sys
 import time
 
-from . import agh as aghmod, api, childdevices, config, core as coremod, db as dbmod, filterlists, ha as hamod, hub as hubmod, parental as parentalmod, people as peoplemod, releases as relmod, sched as schedmod, web
+from . import agh as aghmod, api, cameras as camerasmod, childdevices, config, core as coremod, db as dbmod, filterlists, ha as hamod, hub as hubmod, parental as parentalmod, people as peoplemod, releases as relmod, sched as schedmod, web
 
 
 def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_admin=None, sched_household=None, clock=time.time, start_background=True,
-         agh_url=None, agh_password_file=None, parity_state=None, oui_file=None, filter_opts=None, device_opts=None, secrets_dir=None):
+         agh_url=None, agh_password_file=None, parity_state=None, oui_file=None, filter_opts=None, device_opts=None, secrets_dir=None, camera_opts=None):
     db = dbmod.DB(data_dir or config.DATA, clock=clock)
     hub = hubmod.Hub(clock=clock)
     ha = hamod.HA(ha_url or config.HA_URL, ha_token_file or config.HA_TOKEN_FILE, hub=hub, clock=clock)
@@ -26,7 +26,11 @@ def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_a
     dev_opts.update(device_opts or {})
     devices = childdevices.ChildDevices(parental, agh, db, clock, **dev_opts)
     releases = relmod.Releases(db, data_dir or config.DATA, secrets_dir=secrets_dir or config.SECRETS_DIR, clock=clock, hub=hub)
-    app_obj = api.App(db, people, core, hub, sched, ha, clock=clock, parental=parental, filters=filters, devices=devices, releases=releases)
+    copts = {"go2rtc_url": config.GO2RTC_URL, "archive_dir": config.CAMERA_ARCHIVE, "channels": config.CAMERAS}
+    copts.update(camera_opts or {})
+    cams = camerasmod.Cameras(copts["go2rtc_url"], copts["archive_dir"], copts["channels"], clock)
+    config.FEATURES["cameras"] = cams.enabled
+    app_obj = api.App(db, people, core, hub, sched, ha, clock=clock, parental=parental, filters=filters, devices=devices, releases=releases, cameras=cams)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
@@ -52,7 +56,7 @@ def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_a
             await ha.stop()
 
     app = api.build(app_obj, extra_routes=web.routes(app_obj), lifespan=lifespan)
-    app.state.objs = {"db": db, "people": people, "core": core, "hub": hub, "ha": ha, "sched": sched, "app": app_obj, "agh": agh, "parental": parental, "filters": filters, "devices": devices, "releases": releases}
+    app.state.objs = {"db": db, "people": people, "core": core, "hub": hub, "ha": ha, "sched": sched, "app": app_obj, "agh": agh, "parental": parental, "filters": filters, "devices": devices, "releases": releases, "cameras": cams}
     return app
 
 
