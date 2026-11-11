@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from . import config
+from . import config, door
 from .auth import GwError, sha
 from .db import iso
 from .hub import Hub
@@ -42,6 +42,7 @@ class App:
         self.releases = releases
         self.cameras = cameras
         self.live_open = 0                                # live streams running now (Task 34)
+        self.door_hits = defaultdict(deque)               # (person+device, rate class) -> times of door requests (camera module limits)
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
         self.parental, self.filters, self.devices = parental, filters, devices
         self.bad = defaultdict(deque)                    # failed bearer attempts per address
@@ -51,7 +52,19 @@ class App:
         return request.client.host if request.client else "?"
 
     def authenticate(self, request, csrf=True):
-        """Returns the principal dict, or raises GwError 401/403/429."""
+        """Returns the principal dict, or raises GwError 401/403/429. Task 34 / ADR 0009 amendment: a request that came through the PUBLIC door and whose route requires an app
+        credential is refused for a WEB session (password + code): the internet only ever gets the app (device token or device-bound app session)."""
+        p = self._authenticate(request, False)
+        d = request.scope.get("portal_door")
+        if d and d["auth"] == "app" and p.get("via") == "session" and not p.get("app"):
+            raise GwError(403, "door_requires_app_session", "from the internet only the app may sign in")
+        if csrf and p.get("via") == "session" and request.method not in SAFE:        # the CSRF rule, after the door rule (the door's refusal is the one reported)
+            if not request.headers.get("x-csrf-token") or request.headers.get("x-csrf-token") != p["csrf"]:
+                raise GwError(403, "csrf", "missing or wrong X-CSRF-Token")
+        return p
+
+    def _authenticate(self, request, csrf=True):
+        """The credential check itself (see authenticate)."""
         ip = self.ip(request)
         now = self.clock()
         q = self.bad[ip]
@@ -995,6 +1008,16 @@ class App:
             raise GwError(404, "not_available", "the camera module is not configured")
         if p["role"] not in ("admin", "household") or not p.get("parent"):
             raise GwError(403, "forbidden", "the cameras are for the household's parents only", {"role": p["role"]})
+        d = request.scope.get("portal_door")
+        if d and d["rate"] in door.DOOR_LIMITS:               # from the internet the camera calls are counted per person and device (Caddy adds a per-IP zone in front)
+            events, window = door.DOOR_LIMITS[d["rate"]]
+            q = self.door_hits[(p["person_id"] + "/" + str(p.get("phone_id")), d["rate"])]
+            now = self.clock()
+            while q and q[0] < now - window:
+                q.popleft()
+            if len(q) >= events:
+                raise GwError(429, "door_rate_limited", "too many requests from outside the house", {"retry_after_s": window}, {"Retry-After": str(window)})
+            q.append(now)
         return p
 
     def _caudit(self, p, action, target, after=None, ok=True):
@@ -1180,6 +1203,6 @@ def build(app_obj, extra_routes=(), lifespan=None):
                 await send(message)
             return await self.app(scope, receive, send2)
 
-    app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(NoStore)], exception_handlers={GwError: gw_error, 404: not_found, 405: method_not_allowed, Exception: server_error})
+    app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(door.DoorMiddleware), Middleware(NoStore)], exception_handlers={GwError: gw_error, 404: not_found, 405: method_not_allowed, Exception: server_error})
     app.state.core = a
     return app
