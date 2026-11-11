@@ -162,6 +162,20 @@ class Gate(BaseCase):
             door.DOOR_LIMITS.update(keep)
             e.o["app"].door_hits.clear()
 
+    def test_the_first_camera_call_from_outside_is_recorded_once_and_reported_in_health(self):
+        e = self.e
+        e.db.x("DELETE FROM camera_outside")
+        tok = {"Authorization": "Bearer " + e.tokens["webadmin"]}
+        self.call("GET", "/v1/cameras", headers=tok)                                         # the tailnet: not an outside call
+        self.assertEqual(e.req("GET", "/v1/health", who="webadmin").json()["camera_outside_new"], [])
+        app = self.app_cookie()
+        for _ in range(3):
+            self.assertEqual(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).status_code, 200)
+        rows = e.req("GET", "/v1/health", who="webadmin").json()["camera_outside_new"]
+        self.assertEqual(len(rows), 1)                                                       # once per device, however many calls
+        self.assertEqual(rows[0]["person"], "Webadmin")
+        self.assertTrue(rows[0]["id"].startswith("p-") or rows[0]["id"])
+
     def test_caddy_prefixes_cover_every_allowed_route_and_no_denied_one(self):
         pre = door.caddy_prefixes()
         self.assertIn("/v1/cameras", pre)

@@ -169,6 +169,20 @@ def evaluate(N, state, public, full, token_ok, addrs, door=None):
                     N.clear("gateway-new-device-" + did, "")
             state["nd_alerted"] = sorted(nd)
 
+    # Task 34: the first time a device opens a camera from OUTSIDE the house (public door, ADR 0009 amendment) is announced once, tier B; the first run only records.
+    if "camera_outside_new" in full:
+        co = {d["id"]: d for d in full.get("camera_outside_new") or []}
+        if "co_alerted" not in state:
+            state["co_alerted"] = sorted(co)
+        else:
+            for did, d in co.items():
+                if did not in state["co_alerted"]:
+                    N.alert("gateway-camera-outside-" + did, "Камеры двора впервые открыты из интернета: %s, %s. Если это не вы - отзовите устройство: «Люди и устройства» на сайте." % (d.get("person") or "?", d.get("device") or "?"), tier="B")
+            for did in state["co_alerted"]:
+                if did not in co:
+                    N.clear("gateway-camera-outside-" + did, "")
+            state["co_alerted"] = sorted(co)
+
     # Task 30: the portal now has a PUBLIC door (Funnel :443, ADR 0009): a burst of failed sign-ins is worth one message (tier B, no repeat) and is cleared when it calms down.
     fl = full.get("failed_logins_1h")
     if fl:

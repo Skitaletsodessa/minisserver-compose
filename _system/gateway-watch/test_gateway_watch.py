@@ -104,6 +104,18 @@ check("a device that left the list (revoked or older than 48 h) is cleared quiet
 n, _ = run(state={"nd_alerted": []}, full=dict(HEALTH))
 check("a gateway build that does not report new devices: no alert", n.alerts() == [])
 
+co1 = {"id": "p-aaa", "person": "Дарья", "device": "Pixel Daria", "first_at": "2026-11-12T09:00:00+0100"}
+n, st = run(full=dict(HEALTH, camera_outside_new=[co1]))
+check("camera-outside: the first run only records: no message", n.alerts() == [] and st["co_alerted"] == ["p-aaa"])
+n, st = run(state=st, full=dict(HEALTH, camera_outside_new=[co1, dict(co1, id="p-bbb")]))
+check("a device that opens a camera from outside for the first time: ONE tier-B message", n.alerts() == [("gateway-camera-outside-p-bbb", "B")])
+n, st = run(state=st, full=dict(HEALTH, camera_outside_new=[co1, dict(co1, id="p-bbb")]))
+check("the same device is not announced again", n.alerts() == [])
+n, st = run(state=st, full=dict(HEALTH, camera_outside_new=[dict(co1, id="p-bbb")]))
+check("a device that left the 48 h list is cleared quietly", ("clear", "gateway-camera-outside-p-aaa") in n.calls and n.alerts() == [])
+n, _ = run(state={"co_alerted": []}, full=dict(HEALTH))
+check("a gateway build without the field: no alert", n.alerts() == [])
+
 n, st = run(full=dict(HEALTH, failed_logins_1h={"count": 4, "addresses": 2}))
 check("a few failed sign-ins: nothing", n.alerts() == [])
 n, st = run(full=dict(HEALTH, failed_logins_1h={"count": 12, "addresses": 3}))

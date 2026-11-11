@@ -156,8 +156,15 @@ class App:
                              "audit_chain": {"ok": ok, "rows": rows},
                              "filter_reverts": self.filters.recent_reverts() if self.filters else [],
                              "new_devices": self.people.recent_new_phones(),
+                             "camera_outside_new": self.camera_outside_new(),
                              "failed_logins_1h": self.people.failed_login_stats(),
                              "release": self.releases.health() if self.releases else None})
+
+    def camera_outside_new(self, hours=48):
+        """For the host watcher: devices whose FIRST camera call from outside the house happened in the last hours (one tier-B message each)."""
+        rows = self.db.q("SELECT c.phone_id, c.first_ts, p.name AS pname, ph.label AS label FROM camera_outside c JOIN people p ON p.id=c.person_id "
+                         "LEFT JOIN phones ph ON ph.id=c.phone_id WHERE c.first_ts>? ORDER BY c.first_ts", (self.clock() - hours * 3600,))
+        return [{"id": r["phone_id"], "person": r["pname"], "device": r["label"], "first_at": iso(r["first_ts"])} for r in rows]
 
     async def login(self, request):
         b = await self.body(request)
@@ -1009,6 +1016,8 @@ class App:
         if p["role"] not in ("admin", "household") or not p.get("parent"):
             raise GwError(403, "forbidden", "the cameras are for the household's parents only", {"role": p["role"]})
         d = request.scope.get("portal_door")
+        if d and p.get("phone_id"):                           # Task 34: the first camera call of a device from the internet is recorded; the host watcher announces it once (tier B)
+            self.db.x("INSERT OR IGNORE INTO camera_outside(phone_id, person_id, first_ts) VALUES (?,?,?)", (p["phone_id"], p["person_id"], self.clock()))
         if d and d["rate"] in door.DOOR_LIMITS:               # from the internet the camera calls are counted per person and device (Caddy adds a per-IP zone in front)
             events, window = door.DOOR_LIMITS[d["rate"]]
             q = self.door_hits[(p["person_id"] + "/" + str(p.get("phone_id")), d["rate"])]
