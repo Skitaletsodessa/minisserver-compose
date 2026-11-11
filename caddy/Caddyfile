@@ -176,7 +176,9 @@ minisserver.tail6bf4d5.ts.net:17443 {
 	tls /certs/minisserver.tail6bf4d5.ts.net.crt /certs/minisserver.tail6bf4d5.ts.net.key
 	# Task 28: portal gateway (web UI + /v1 API for the Android app) - tailnet only, never on the LAN, never public (no Funnel, no tunnel).
 	# The service listens on 127.0.0.1:17444; every API call needs a device token or a login session, failures are rate-limited per real client IP.
-	reverse_proxy 127.0.0.1:17444
+	reverse_proxy 127.0.0.1:17444 {
+		header_up -X-Portal-Door     # ADR 0009 amendment: only the public door below may set it
+	}
 }
 
 # ── Task 30 (ADR 0009, Ivan's decision 2026-10-22: the family app must work WITHOUT Tailscale on the phone) ────────────────────────────────────────────────────────────
@@ -195,12 +197,10 @@ minisserver.tail6bf4d5.ts.net:17443 {
 		format json
 	}
 
-	@closed path /login /logout /setup /setup/* /v1/auth /v1/auth/* /v1/enrol /v1/people /v1/people/* /v1/phones /v1/phones/* /v1/audit /audit /people /app/download /app/download.apk /v1/health /app/releases /app/releases/ /v1/releases /v1/releases/*
-	handle @closed {
-		respond "not found" 404
-	}
-
-	handle {
+	# Task 34 / ADR 0009 amendment (accepted by Ivan 2026-11-11, option B): allow-by-INCLUSION. The list is generated from the gateway's door table
+	# (python3 -c "from gw import door; print(' '.join(door.caddy_prefixes()))" in portal/gateway); the gateway enforces the same table itself (default deny).
+	@gate path / /app/* /app/manifest.webmanifest /app/releases/* /app/update.json /cameras /home /parental /services /settings/* /static/* /v1/app/login /v1/app/logout /v1/app/session /v1/app/update-key /v1/cameras /v1/cameras/* /v1/cameras/archive/clips /v1/cameras/archive/clips/* /v1/cameras/archive/days /v1/capabilities /v1/devices /v1/devices/* /v1/events /v1/exceptions/* /v1/parental/children /v1/parental/children/* /v1/parental/health /v1/schedules/* /v1/services /v1/vacuums /v1/vacuums/*
+	handle @gate {
 		# Funnel traffic arrives over loopback from tailscaled: the real client IP is X-Forwarded-For (trusted_proxies above) = {vars.client_ip}. Caddy is the enforcement point
 		# (no raw connection for a firewall), and the gateway must see the SAME real address for its own per-address throttle (otherwise every public client would share 127.0.0.1).
 		rate_limit {
@@ -236,6 +236,46 @@ minisserver.tail6bf4d5.ts.net:17443 {
 				events 12
 				window 5m
 			}
+			zone camera_per_ip {
+				match {
+					path /v1/cameras /v1/cameras/archive/days /v1/cameras/archive/clips
+				}
+				key    {vars.client_ip}
+				events 120
+				window 1m
+			}
+			zone camera_snapshot_per_ip {
+				match {
+					path /v1/cameras/*/snapshot
+				}
+				key    {vars.client_ip}
+				events 150
+				window 1m
+			}
+			zone camera_live_per_ip {
+				match {
+					path /v1/cameras/*/live
+				}
+				key    {vars.client_ip}
+				events 8
+				window 5m
+			}
+			zone camera_clip_per_ip {
+				match {
+					path /v1/cameras/archive/clips/*/video
+				}
+				key    {vars.client_ip}
+				events 60
+				window 10m
+			}
+			zone events_per_ip {
+				match {
+					path /v1/events
+				}
+				key    {vars.client_ip}
+				events 12
+				window 1m
+			}
 			zone all_per_ip {
 				match {
 					path /*
@@ -247,6 +287,11 @@ minisserver.tail6bf4d5.ts.net:17443 {
 		}
 		reverse_proxy 127.0.0.1:17444 {
 			header_up X-Forwarded-For {vars.client_ip}
+			header_up X-Portal-Door funnel
 		}
+	}
+
+	handle {
+		respond "not found" 404
 	}
 }
