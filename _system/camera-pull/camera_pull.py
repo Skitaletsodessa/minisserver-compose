@@ -156,7 +156,7 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
     try:
         with camlib.dvrip_session(env, cam_factory=cam_factory) as cam:
             cands = list_candidates(cam, since, now, have)
-        st["last_list_ok"] = now.strftime(FMT)
+        listed_at = now.strftime(FMT)
     except camlib.CameraBusy:
         res["stopped"] = "camera busy"
         db.close()
@@ -167,7 +167,7 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
             res["stopped"] = "time budget"
             break
         if c["kb"] > MAX_CLIP_KB:
-            res["errors"] += 1
+            res["skipped_big"] = res.get("skipped_big", 0) + 1          # not an error: it must not hold the cursor back for ever
             print(f"skip {c['id']}: {c['kb'] // 1024} MB over the {MAX_CLIP_KB // 1024} MB limit")
             continue
         total, _used, free = disk() if disk else shutil.disk_usage(archive)
@@ -222,6 +222,9 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
     st["last_attempt"] = now.strftime(FMT)
     if res["stopped"] in ("", "time budget"):
         st["last_success"] = now.strftime(FMT)
+    if res["stopped"] == "" and res["errors"] == 0:
+        st["last_list_ok"] = listed_at       # the listing cursor moves ONLY when every candidate of it was handled; otherwise the next run lists from the same point again
+                                             # (found 2026-11-11: it moved after a run that stopped on its time budget and ~3200 clips on the card were never looked at again)
     st["last_result"] = res
     if res["forced_young"]:
         st["last_forced_young"] = now.strftime(FMT)

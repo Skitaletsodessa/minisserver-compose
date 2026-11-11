@@ -118,7 +118,8 @@ class Pull(unittest.TestCase):
         cam = FakeCam(self.files())
         r = P.run(ENV, NOW, cam_factory=cam, remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
         self.assertEqual(r["pulled"], 3, r)
-        self.assertEqual(r["errors"], 1)          # the 700 MB clip is skipped and counted
+        self.assertEqual(r["errors"], 0)
+        self.assertEqual(r["skipped_big"], 1)     # the 700 MB clip is skipped and counted, but it does not hold the cursor back
         names = " ".join(cam.downloads)
         self.assertNotIn("[R]", names)
         self.assertNotIn("11.59.30", names)
@@ -129,13 +130,32 @@ class Pull(unittest.TestCase):
         self.assertEqual(len(cam2.downloads), 1)
         self.assertEqual(len(os.listdir(arch)) >= 1, True)
 
+    def test_the_listing_cursor_moves_only_when_everything_was_handled(self):
+        arch = fresh()
+        fs = self.files()
+        P.MAX_RUN_SECONDS, keep = -1, P.MAX_RUN_SECONDS                                  # the time budget is over before the first clip
+        try:
+            r = P.run(ENV, NOW, cam_factory=FakeCam(fs), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
+        finally:
+            P.MAX_RUN_SECONDS = keep
+        self.assertEqual((r["stopped"], r["pulled"]), ("time budget", 0), r)
+        self.assertNotIn("last_list_ok", P.load_state())                                  # nothing was handled: the next run looks at the same clips again
+        r = P.run(ENV, NOW + timedelta(minutes=5), cam_factory=FakeCam(fs), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
+        self.assertEqual(r["pulled"], 4, r)                                               # the whole backlog is still found (the clip that was open a moment ago too)
+        self.assertIn("last_list_ok", P.load_state())                                     # now everything was handled (the oversized clip is skipped, not an error)
+        fresh()
+        fs2 = self.files()
+        r = P.run(ENV, NOW, cam_factory=FakeCam(fs2, fail_names=[fs2[0]["FileName"]]), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
+        self.assertEqual(r["errors"], 1)
+        self.assertNotIn("last_list_ok", P.load_state())                                  # a failed clip keeps the cursor where it was
+
     def test_failed_download_is_retried_and_does_not_stop_the_run(self):
         arch = fresh()
         fs = self.files()
         bad = fs[0]["FileName"]
         r = P.run(ENV, NOW, cam_factory=FakeCam(fs, fail_names=[bad]), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
         self.assertEqual(r["pulled"], 2, r)
-        self.assertGreaterEqual(r["errors"], 2)
+        self.assertEqual(r["errors"], 1)                                         # the failed download (the oversized clip is skipped, not an error)
         self.assertEqual(os.listdir(os.path.join(arch, ".tmp")) if os.path.exists(os.path.join(arch, ".tmp")) else [], [])
         P.save_state({})                          # a retry must see the failed clip again (not in the index)
         r2 = P.run(ENV, NOW + timedelta(hours=2), cam_factory=FakeCam(fs), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
