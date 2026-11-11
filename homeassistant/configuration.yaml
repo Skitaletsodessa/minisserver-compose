@@ -53,3 +53,11 @@ automation manual: !include automations.yaml
 automation generated: !include_dir_merge_list generated/automations/
 script manual: !include scripts.yaml
 script generated: !include_dir_merge_named generated/scripts/
+
+# Camera 192.168.31.95 (Xiongmai/JFTech, RTSP :554, HEVC 2560x1440; added 2026-11-11). LAN only, the URL with the login is in secrets.yaml.
+# The camera ignores the RTSP path and wants Digest auth; snapshots are scaled down so a still does not decode a full 1440p frame to the output size.
+camera:
+  - platform: ffmpeg
+    name: Cam 95
+    input: !secret cam95_rtsp
+    extra_arguments: "-vf scale=1280:-1"
