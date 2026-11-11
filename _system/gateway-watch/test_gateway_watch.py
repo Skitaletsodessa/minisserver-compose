@@ -155,9 +155,12 @@ check("door problem: tier A", n.alerts() == [("gateway-door-paths", "A")])
 n = Rec()
 gw.evaluate(n, {}, True, HEALTH, True, GOOD, door=None)
 check("door checks not enabled yet: silent", n.alerts() == [] and not [c for c in n.calls if c[1:2] == ("gateway-door-paths",)])
-ANSW = {"/app/update.json": 401, "/app/releases/1/app.apk": 401, "/app/releases": 404, "/v1/releases": 404, "/app/download": 404, "/v1/people": 404}
+ANSW = {"/app/update.json": 401, "/app/releases/1/app.apk": 401, "/app/releases": 404, "/v1/releases": 404, "/app/download": 404, "/v1/people": 404,
+        "/v1/zzz-not-a-route": 404, "/v1/auth/session": 404, "/v1/audit": 404, "/v1/parental/filter-lists": 404, "/people": 404, "/v1/health": 404,
+        "/v1/cameras": 401, "/v1/capabilities": 401, "/v1/devices": 401}          # Task 34: the single app gate
 check("door_problems: the decided answers are clean", gw.door_problems(lambda u: ANSW[u.replace(gw.DOOR_URL, "")]) == [])
-for path, got in (("/app/update.json", 200), ("/app/releases/1/app.apk", 200), ("/app/releases", 303), ("/v1/releases", 401), ("/app/download", 200)):
+for path, got in (("/app/update.json", 200), ("/app/releases/1/app.apk", 200), ("/app/releases", 303), ("/v1/releases", 401), ("/app/download", 200),
+                  ("/v1/zzz-not-a-route", 401), ("/v1/audit", 200), ("/v1/parental/filter-lists", 401), ("/v1/cameras", 200), ("/v1/cameras", 404), ("/v1/devices", 403)):
     a2 = dict(ANSW)
     a2[path] = got
     check("door_problems: %s answering %s is caught" % (path, got), len(gw.door_problems(lambda u: a2[u.replace(gw.DOOR_URL, "")])) == 1)

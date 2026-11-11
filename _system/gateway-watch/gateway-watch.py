@@ -108,6 +108,16 @@ def door_problems(status_of=http_status, include_apk=True):
         s = status_of(DOOR_URL + p)
         if s is not None and s != 404:
             bad.append("%s is reachable at the door (%s, must be 404)" % (p, s))
+    # Task 34 (ADR 0009 amendment "single app gate"): a route nobody classified and the admin/web-login routes are 404 at the door; the app's own routes (cameras
+    # included) answer an anonymous caller 401, never data
+    for p in ("/v1/zzz-not-a-route", "/v1/auth/session", "/v1/audit", "/v1/parental/filter-lists", "/people", "/v1/health"):
+        s = status_of(DOOR_URL + p)
+        if s is not None and s != 404:
+            bad.append("%s is reachable at the door (%s, must be 404)" % (p, s))
+    for p in ("/v1/cameras", "/v1/capabilities", "/v1/devices"):
+        s = status_of(DOOR_URL + p)
+        if s is not None and s != 401:
+            bad.append("%s answers an anonymous caller at the door with %s (must be 401)" % (p, s))
     return bad
 
 
