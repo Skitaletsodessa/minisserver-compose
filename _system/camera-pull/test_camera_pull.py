@@ -149,6 +149,15 @@ class Pull(unittest.TestCase):
         self.assertEqual(r["errors"], 1)
         self.assertNotIn("last_list_ok", P.load_state())                                  # a failed clip keeps the cursor where it was
 
+    def test_status_file_for_the_page(self):
+        arch = fresh()
+        P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
+        import json as _j
+        st = _j.load(open(os.path.join(arch, "status.json")))
+        self.assertEqual((st["backlog"], st["stopped"]), (4, ""))
+        self.assertEqual(st["listing_complete_until"], NOW.strftime(FMT))
+        self.assertEqual(oct(os.stat(os.path.join(arch, "status.json")).st_mode & 0o777), "0o644")
+
     def test_failed_download_is_retried_and_does_not_stop_the_run(self):
         arch = fresh()
         fs = self.files()

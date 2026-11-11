@@ -19,3 +19,11 @@ streams:
   cam_ch0_h264: ffmpeg:cam_ch0#video=h264
   cam_ch1_h264: ffmpeg:cam_ch1#video=h264
   cam_ch2_h264: ffmpeg:cam_ch2#video=h264
+  # Main streams (Task 34b): the full-screen "HD" view, TAILNET ONLY (the gateway refuses quality=hd through the public door). ch0 main = 2560x1440 H.265 over RTSP,
+  # ch1/ch2 main = 1920x1080 over DVRIP. The browser gets H.264 scaled to 720p (software x264; one stream at a time).
+  cam_ch0_hd: ${CAM95_RTSP_MAIN}
+  cam_ch1_hd: ${CAM95_DVRIP_HD1}
+  cam_ch2_hd: ${CAM95_DVRIP_HD2}
+  cam_ch0_hd_h264: ffmpeg:cam_ch0_hd#video=h264#height=720
+  cam_ch1_hd_h264: ffmpeg:cam_ch1_hd#video=h264#height=720
+  cam_ch2_hd_h264: ffmpeg:cam_ch2_hd#video=h264#height=720

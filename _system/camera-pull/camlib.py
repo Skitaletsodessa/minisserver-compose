@@ -50,7 +50,7 @@ def dvrip_session(env, wait=600, lock_path=None, cam_factory=DVRIPCam):
             if time.time() > deadline:
                 fd.close()
                 raise CameraBusy("another camera job holds the DVRIP lock")
-            time.sleep(2)
+            time.sleep(0.2)          # short poll: the pull job frees the lock only for a moment between clips
     cam = None
     try:
         cam = cam_factory(env["CAM_HOST"], user=env["CAM_USER"], password=env["CAM_PASS"])

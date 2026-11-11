@@ -230,7 +230,22 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
         st["last_forced_young"] = now.strftime(FMT)
     save_state(st)
     db.close()
+    try:
+        write_status(archive, st, res, now)
+    except OSError:
+        pass                                     # the status file is a convenience for the page; never fail the run over it
     return res
+
+
+def write_status(archive, st, res, now):
+    """/srv/library/camera/status.json: what the gateway shows next to the archive ("part of the clips is not loaded from the camera yet"). Atomic, world-readable, no secret."""
+    doc = {"updated": now.strftime(FMT), "last_success": st.get("last_success"), "listing_complete_until": st.get("last_list_ok"),
+           "backlog": res.get("backlog", 0), "pulled_last_run": res.get("pulled", 0), "stopped": res.get("stopped", ""), "errors": res.get("errors", 0)}
+    tmp = os.path.join(archive, ".status.json.tmp")
+    with open(tmp, "w") as fh:
+        json.dump(doc, fh)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, os.path.join(archive, "status.json"))
 
 
 def alerts(st, now, notify):
