@@ -352,6 +352,36 @@ class Page(BaseCase):
         finally:
             cams.base, config.FEATURES["cameras"] = keep, True
 
+    def test_a_lens_that_starts_a_second_later_is_the_same_event(self):
+        """Ivan 2026-11-11: clips at 13:15:26 and 13:15:27 on two lenses are ONE event; the later lens is returned with its delay."""
+        e = self.e
+        db = sqlite3.connect(os.path.join(e.archive_root, "index.sqlite"))
+        rows = [("0|s1", 0, "2026-11-12 13:15:26", "2026-11-12 13:15:46", 20.0), ("1|s2", 1, "2026-11-12 13:15:27", "2026-11-12 13:15:47", 20.0),
+                ("2|s3", 2, "2026-11-12 13:15:29", "2026-11-12 13:15:49", 20.0), ("2|far", 2, "2026-11-12 13:30:00", "2026-11-12 13:30:10", 10.0)]
+        for cid, ch, b, en, dur in rows:
+            db.execute("INSERT INTO clips VALUES (?,?,?,?,?,?,?,?,?,?,?)", (cid, ch, "M", b, en, 1, 1, "/srv/library/camera/none/%s.mp4" % cid, dur, 12.0, "2026-11-12 14:00:00"))
+        db.commit()
+        try:
+            r = e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 13:15:26", who="ivan").json()
+            lens = {x["camera"]: x["clip"] for x in r["lenses"]}
+            self.assertEqual((lens["cam0"]["delay_s"], lens["cam0"]["offset_s"]), (0.0, 0.0))
+            self.assertEqual((lens["cam1"]["delay_s"], lens["cam1"]["offset_s"]), (1.0, 0.0))      # one second later, not "no motion"
+            self.assertEqual(lens["cam2"]["delay_s"], 3.0)
+            r = e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 13:15:00", who="ivan").json()   # 26 s before: outside the slack, nothing
+            self.assertTrue(all(x["clip"] is None for x in r["lenses"]))
+            r = e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 13:15:30", who="ivan").json()   # a covering clip wins, no delay
+            self.assertEqual({x["camera"]: x["clip"]["delay_s"] for x in r["lenses"] if x["clip"]}, {"cam0": 0.0, "cam1": 0.0, "cam2": 0.0})
+        finally:
+            db.execute("DELETE FROM clips WHERE id IN ('0|s1','1|s2','2|s3','2|far')")
+            db.commit()
+            db.close()
+
+    def test_the_page_has_the_two_tabs_the_player_first_and_waits_for_all_lenses(self):
+        js = self.e.client.get("/static/cameras.js").text
+        for needle in ("cam_tab_live", "cam_tab_archive", "computeEvents", "EVENT_GAP_MS", "releaseLive", "releaseSync", "LIVE_WAIT_MS", "SYNC_WAIT_MS", "scrollIntoView"):
+            self.assertIn(needle, js)
+        self.assertLess(js.index('player.id = "cam-sync"'), js.index('el("ul", "cam-clips")'))     # the player is built before the list: it is at the top
+
     def test_the_script_builds_the_page_without_innerhtml_and_every_text_key_exists(self):
         r = self.e.client.get("/static/cameras.js")
         self.assertEqual((r.status_code, r.headers["content-type"].split(";")[0]), (200, "text/javascript"))

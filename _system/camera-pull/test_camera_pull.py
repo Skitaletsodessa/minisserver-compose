@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for camera_pull.py / camera_health.py: a fake camera, a temp archive, no network, no Telegram. Run: python3 test_camera_pull.py"""
 import os
+import time
 import shutil
 import sys
 import tempfile
@@ -165,6 +166,40 @@ class Pull(unittest.TestCase):
         self.assertEqual(r["pulled"], 3, r)
         self.assertEqual((calls["slept"], r["yielded_s"]), (30, 30))          # 3 polls x 10 s, then it went on
         self.assertFalse(REAL_LIVE_BUSY("http://127.0.0.1:9/api/streams"))      # an unreachable go2rtc API means idle
+
+    def test_a_download_is_cut_off_when_somebody_starts_watching(self):
+        import socket as sk
+        import threading
+        a, b = sk.socketpair()
+
+        class Cam:
+            socket = a
+
+            def download_file(self, begin, end, name, raw):
+                a.settimeout(5)
+                try:
+                    if not a.recv(10):                      # blocks like the real download until the socket is shut
+                        raise OSError("closed")
+                except OSError:
+                    raise OSError("closed")
+        t0 = time.time()
+        with self.assertRaises(P.Aborted):
+            P.download_unless_watched(Cam(), {"begin": "x", "end": "y", "name": "n"}, "/tmp/none", lambda: True, poll=0.05)
+        self.assertLess(time.time() - t0, 3)
+        a.close()
+        b.close()
+        self.assertEqual(threading.active_count() >= 1, True)
+
+    def test_a_download_nobody_watches_is_untouched(self):
+        calls = []
+
+        class Cam:
+            socket = None
+
+            def download_file(self, begin, end, name, raw):
+                calls.append(name)
+        P.download_unless_watched(Cam(), {"begin": "x", "end": "y", "name": "n"}, "/tmp/none", lambda: False, poll=0.05)
+        self.assertEqual(calls, ["n"])
 
     def test_status_file_for_the_page(self):
         arch = fresh()

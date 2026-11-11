@@ -611,10 +611,10 @@ paths:
   /v1/cameras/archive/at:
     get:
       operationId: cameraArchiveAt
-      summary: "The synchronised view: for ONE moment, the clip of each lens that covers it (or null) with the offset into the clip, plus the pull status"
+      summary: "The synchronised view: for ONE moment, the clip of each lens that covers it, or starts within 15 s after it (or null), with the offset into the clip / the delay, plus the pull status"
       parameters: [{name: time, in: query, required: true, schema: {type: string}, description: "YYYY-MM-DD HH:MM:SS (a T instead of the space is accepted)"}]
       responses:
-        "200": {description: lenses, content: {application/json: {schema: {type: object, required: [time, lenses], properties: {time: {type: string}, lenses: {type: array, items: {type: object, required: [camera, clip], properties: {camera: {type: string}, clip: {type: [object, "null"], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}, offset_s: {type: number}}}}}}, status: {type: [object, "null"]}}}}}}
+        "200": {description: lenses, content: {application/json: {schema: {type: object, required: [time, lenses], properties: {time: {type: string}, lenses: {type: array, items: {type: object, required: [camera, clip], properties: {camera: {type: string}, clip: {type: [object, "null"], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}, offset_s: {type: number}, delay_s: {type: number, description: "a lens whose clip starts up to 15 s AFTER the moment: the seconds it starts later (offset_s is then 0)"}}}}}}, status: {type: [object, "null"]}}}}}}
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}

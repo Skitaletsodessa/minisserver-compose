@@ -20,6 +20,7 @@ SNAPSHOT_TIMEOUT = 15
 OPEN_TIMEOUT = 15
 CODECS = {"h265": "", "h264": "_h264"}
 RETRY_PAUSE = 4.0
+AT_SLACK_S = 15
 
 
 class LiveStream:
@@ -38,7 +39,7 @@ class LiveStream:
         try:
             while not self.closed and self.resp.read(CHUNK):
                 pass
-        except (OSError, ValueError):
+        except (OSError, ValueError, AttributeError):         # AttributeError: close() from another thread empties the socket under read()
             pass
 
     def read(self, n):
@@ -104,13 +105,13 @@ class Cameras:
             raise GwError(503, "camera_unavailable", "the camera did not answer")
         return data
 
-    def _open_plain(self, src):
-        """Opens the camera's own (H.265) stream `src` in go2rtc, with retries."""
-        for attempt in (1, 2, 3):
+    def _open_plain(self, src, attempts=3):
+        """Opens the camera's own (H.265) stream `src` in go2rtc, with retries (the main stream gets ONE try: when the camera does not deliver it, the page falls back at once)."""
+        for attempt in range(1, attempts + 1):
             try:
                 return self.opener.open(urllib.request.Request(self._url("/api/stream.mp4", src)), timeout=OPEN_TIMEOUT)
             except urllib.error.HTTPError as e:
-                if e.code < 500 or attempt == 3:
+                if e.code < 500 or attempt == attempts:
                     break
                 time.sleep(RETRY_PAUSE)
             except (urllib.error.URLError, OSError, ValueError):
@@ -130,9 +131,10 @@ class Cameras:
         if quality not in ("sub", "hd"):
             raise GwError(422, "invalid_quality", "quality must be sub or hd")
         base = c["src"] + ("_hd" if quality == "hd" else "")
+        tries = 1 if quality == "hd" else 3
         if codec == "h265":
-            return LiveStream(self._open_plain(base), None, ttl=self.live_ttl)
-        holder = self._open_plain(base)
+            return LiveStream(self._open_plain(base, tries), None, ttl=self.live_ttl)
+        holder = self._open_plain(base, tries)
         try:
             if not holder.read(1):                       # first byte = the source is running
                 raise OSError("empty stream")
@@ -202,8 +204,10 @@ class Cameras:
         return [{"id": r["id"], "camera": names.get(r["ch"], "cam%d" % r["ch"]), "kind": r["kind"], "begin": r["begin"], "end": r["end"],
                  "size": r["size"], "duration_s": round(r["dur"] or 0, 1)} for r in rows]
 
-    def at(self, moment):
-        """The synchronised view: for each lens the clip that covers `moment` ('YYYY-MM-DD HH:MM:SS') or None, with the offset into the clip."""
+    def at(self, moment, slack_s=AT_SLACK_S):
+        """The synchronised view: for each lens the clip that covers `moment` ('YYYY-MM-DD HH:MM:SS') or None, with the offset into the clip.
+        A lens whose clip starts up to `slack_s` seconds AFTER the moment (the lenses trigger a second or two apart) is returned too, offset 0 and delay_s = how much later it
+        starts, so one event is one event (Ivan 2026-11-11: clips at 13:15:26 and 13:15:27 were not recognised as the same event)."""
         from datetime import datetime
         t = datetime.strptime(moment, "%Y-%m-%d %H:%M:%S")
         db = self._db()
@@ -216,7 +220,14 @@ class Cameras:
                     off = max(0.0, (t - datetime.strptime(r["begin"], "%Y-%m-%d %H:%M:%S")).total_seconds())
                     off = min(off, max(0.0, (r["dur"] or 0) - 0.5))
                     clip = {"id": r["id"], "camera": c["id"], "kind": r["kind"], "begin": r["begin"], "end": r["end"], "size": r["size"],
-                            "duration_s": round(r["dur"] or 0, 1), "offset_s": round(off, 1)}
+                            "duration_s": round(r["dur"] or 0, 1), "offset_s": round(off, 1), "delay_s": 0.0}
+                else:
+                    r = db.execute("SELECT rowid AS id, kind, begin, end, size, dur FROM clips WHERE ch=? AND begin>? AND begin<=datetime(?, ?) ORDER BY begin LIMIT 1",
+                                   (c["channel"], moment, moment, "+%d seconds" % slack_s)).fetchone()
+                    if r:
+                        late = (datetime.strptime(r["begin"], "%Y-%m-%d %H:%M:%S") - t).total_seconds()
+                        clip = {"id": r["id"], "camera": c["id"], "kind": r["kind"], "begin": r["begin"], "end": r["end"], "size": r["size"],
+                                "duration_s": round(r["dur"] or 0, 1), "offset_s": 0.0, "delay_s": round(late, 1)}
             out.append({"camera": c["id"], "clip": clip})
         if db is not None:
             db.close()

@@ -223,4 +223,12 @@ button.cam-clip-btn { width: 100%; min-height: var(--tap); text-align: left; }
 body.cam-has-big { overflow: hidden; }
 .cam-syncgrid { margin-top: 8px; }
 .cam-none { display: flex; align-items: center; justify-content: center; margin: 0; min-height: 120px; padding: 12px; text-align: center; background: var(--off-bg); color: var(--muted); aspect-ratio: 16 / 9; }
-@media (max-width: 520px) { .cam-syncgrid { grid-template-columns: 1fr; } }
+.cam-tabs { margin: 0 0 12px; }
+.cam-player { margin: 8px 0 12px; scroll-margin-top: 132px; }
+.cam-event-title { margin: 0 0 6px; font-weight: 600; }
+.cam-controls { align-items: stretch; }
+.cam-controls button { min-height: 48px; }
+.cam-slider { width: 100%; min-height: 48px; margin: 4px 0; }
+ul.cam-clips { max-height: 42vh; overflow-y: auto; }
+button.cam-clip-btn[aria-current="true"] { outline: 3px solid var(--accent); outline-offset: -3px; font-weight: 600; }
+.cam-pane[hidden], .cam-archive[hidden] { display: none; }

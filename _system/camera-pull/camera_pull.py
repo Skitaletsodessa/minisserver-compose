@@ -118,6 +118,43 @@ def live_busy(url=GO2RTC_API):
     return any(v.get("consumers") for v in (data or {}).values() if isinstance(v, dict))
 
 
+ABORT_POLL_S = 2
+
+
+class Aborted(Exception):
+    pass
+
+
+def download_unless_watched(cam, c, raw, busy, poll=ABORT_POLL_S):
+    """cam.download_file(...) that is cut off as soon as somebody starts watching a lens (the camera's Wi-Fi link is the bottleneck)."""
+    import socket as _socket
+    import threading
+    done = threading.Event()
+    hit = []
+
+    def watch():
+        while not done.wait(poll):
+            if busy():
+                hit.append(1)
+                try:
+                    cam.socket.shutdown(_socket.SHUT_RDWR)
+                except (OSError, AttributeError):
+                    pass
+                return
+    th = threading.Thread(target=watch, daemon=True)
+    th.start()
+    try:
+        cam.download_file(c["begin"], c["end"], c["name"], raw)
+    except Exception:
+        if hit:
+            raise Aborted()
+        raise
+    finally:
+        done.set()
+    if hit:
+        raise Aborted()
+
+
 def load_state():
     try:
         with open(STATE_PATH) as fh:
@@ -216,7 +253,7 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
         out = out_path(archive, c["ch"], c["begin"], c["end"])
         try:
             with camlib.dvrip_session(env, cam_factory=cam_factory) as cam:
-                cam.download_file(c["begin"], c["end"], c["name"], raw)
+                download_unless_watched(cam, c, raw, busy)
             if os.path.getsize(raw) < c["kb"] * 1024 * 0.9:
                 raise RuntimeError(f"short download {os.path.getsize(raw)} of {c['kb'] * 1024}")
             listed = (datetime.strptime(c["end"], FMT) - datetime.strptime(c["begin"], FMT)).total_seconds()
@@ -230,6 +267,10 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
         except camlib.CameraBusy:
             res["stopped"] = "camera busy"
             break
+        except Aborted:                             # somebody started watching: not an error, the clip is simply retried
+            res["aborted_for_live"] = res.get("aborted_for_live", 0) + 1
+            if os.path.exists(out + ".part.mp4"):
+                os.unlink(out + ".part.mp4")
         except Exception as e:                      # one bad clip must not stop the run; it is retried next time (not in the index)
             res["errors"] += 1
             print(f"error {c['id']}: {type(e).__name__}: {str(e)[:160]}")
