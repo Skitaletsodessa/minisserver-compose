@@ -1,0 +1,17 @@
+# Task 34. Credentials come from the git-ignored .env (${VAR} is expanded by go2rtc); nothing secret in this file.
+api:
+  listen: ":1984"          # container-internal; published to 127.0.0.1:18984 only
+  origin: ""               # no CORS: only the gateway (same host) talks to it
+rtsp:
+  listen: ":8554"          # container-internal; published to 127.0.0.1:18554 only
+webrtc:
+  listen: ""               # off (no UDP/TCP 8555)
+srtp:
+  listen: ""               # off (no 8443)
+log:
+  level: info
+streams:
+  # ch0 (the PTZ) over RTSP, sub stream; ch1/ch2 (IPC_01, IPC_02) are not reachable over RTSP, only DVRIP (0-based channel, subtype 1 = sub stream)
+  cam_ch0: ${CAM95_RTSP_SUB}
+  cam_ch1: ${CAM95_DVRIP_CH1}
+  cam_ch2: ${CAM95_DVRIP_CH2}

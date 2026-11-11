@@ -55,9 +55,9 @@ script manual: !include scripts.yaml
 script generated: !include_dir_merge_named generated/scripts/
 
 # Camera 192.168.31.95, front yard, PTZ (Xiongmai/JFTech, RTSP :554, HEVC 2560x1440; added 2026-11-11). LAN only, the URL with the login is in secrets.yaml.
-# Digest auth; the plain path gives the main stream (2560x1440 H.265), "...stream=1.sdp?real_stream" the sub stream (640x360): HA uses the sub stream (cam95_rtsp_sub), a snapshot is
+# Digest auth; the plain path gives the main stream (2560x1440 H.265), "...stream=1.sdp?real_stream" the sub stream (640x360): HA reads the go2rtc restream of the sub stream (/srv/compose/go2rtc, 127.0.0.1:18554), a snapshot is
 # about 4x cheaper for the camera and does not wait for a main-stream keyframe. The main-stream URL stays in secrets.yaml as cam95_rtsp. Channels 2/3 of the RTSP path return the same picture as 1 (SSIM 0.985, 2026-11-11).
 camera:
   - platform: ffmpeg
     name: Front Yard
-    input: !secret cam95_rtsp_sub
+    input: rtsp://127.0.0.1:18554/cam_ch0   # go2rtc restream (Task 34), the only holder of camera sessions; no login here

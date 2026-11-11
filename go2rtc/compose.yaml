@@ -1,0 +1,42 @@
+# Task 34: the ONLY process that holds live sessions to the front-yard camera (192.168.31.95). HA's camera.front_yard and the portal gateway read
+# its restream. Published on 127.0.0.1 ONLY (API 18984, RTSP restream 18554); WebRTC/SRTP/mDNS listeners are off in config/go2rtc.yaml.
+# Verify after every start: ./check-bind.sh (kernel socket table, not docker inspect).
+# Config is a DIRECTORY mount (never a single-file mount: a replaced file keeps the old inode inside the container).
+services:
+  go2rtc:
+    image: ghcr.io/alexxit/go2rtc:1.9.15@sha256:e098de5c2f8040dc3d4784ed2d5cfdac3b0979f9349afe587ef6a670a14b9f4d
+    container_name: go2rtc
+    restart: unless-stopped
+    user: "10042:10042"
+    env_file: .env
+    ports:
+      - "127.0.0.1:18984:1984"
+      - "127.0.0.1:18554:8554"
+    volumes:
+      - ./config:/config:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 256
+    networks: [go2rtc-net]
+    labels:
+      - "diun.enable=true"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=lexicographical"
+      - "diun.max_tags=5"
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:1984/api"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  go2rtc-net:
+    driver: bridge
