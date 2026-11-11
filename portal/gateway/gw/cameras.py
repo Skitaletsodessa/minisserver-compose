@@ -25,10 +25,14 @@ RETRY_PAUSE = 4.0
 class LiveStream:
     """A go2rtc response plus an optional companion that must stay open as long as it does (the plain consumer that keeps a cold source alive).
     drain=True reads and discards the response in a thread until it is closed or ends."""
-    def __init__(self, resp, companion, drain=False):
+    def __init__(self, resp, companion, drain=False, ttl=None):
         self.resp, self.companion, self.closed = resp, companion, False
         if drain:
             threading.Thread(target=self._drain, daemon=True).start()
+        if ttl:                                      # the reaper: whatever happens to the request, the stream is closed after `ttl` seconds
+            t = threading.Timer(ttl, self.close)
+            t.daemon = True
+            t.start()
 
     def _drain(self):
         try:
@@ -51,7 +55,8 @@ class LiveStream:
 
 
 class Cameras:
-    def __init__(self, go2rtc_url, archive_dir, channels, clock, opener=None):
+    def __init__(self, go2rtc_url, archive_dir, channels, clock, opener=None, live_ttl=1800 + 60):
+        self.live_ttl = live_ttl
         self.base = (go2rtc_url or "").rstrip("/")
         self.archive = archive_dir
         self.channels = list(channels)
@@ -99,11 +104,11 @@ class Cameras:
             raise GwError(503, "camera_unavailable", "the camera did not answer")
         return data
 
-    def _open_plain(self, c):
-        """Opens the camera's own (H.265) stream, with retries."""
+    def _open_plain(self, src):
+        """Opens the camera's own (H.265) stream `src` in go2rtc, with retries."""
         for attempt in (1, 2, 3):
             try:
-                return self.opener.open(urllib.request.Request(self._url("/api/stream.mp4", c["src"])), timeout=OPEN_TIMEOUT)
+                return self.opener.open(urllib.request.Request(self._url("/api/stream.mp4", src)), timeout=OPEN_TIMEOUT)
             except urllib.error.HTTPError as e:
                 if e.code < 500 or attempt == 3:
                     break
@@ -112,17 +117,22 @@ class Cameras:
                 break
         raise GwError(503, "camera_unavailable", "the camera did not answer")
 
-    def open_live(self, cid, codec):
+    def open_live(self, cid, codec, quality="sub"):
         """Opens the live stream (fragmented MP4) and returns an object with read()/close() (blocking: call in an executor).
+        quality "sub" = the camera's sub stream (640x360, what the public door may carry); "hd" = its MAIN stream (720p H.264 / the camera's own H.265), TAILNET ONLY
+        (the API refuses it through the door).
         h265 = the camera's own stream. h264 = go2rtc's ffmpeg transcode, which (measured 2026-11-11, cam1 and cam2) FAILS to open while the source is cold
         ("Invalid data found") and works once a consumer already holds the source: so the gateway first attaches a plain consumer, waits for its first bytes
         (a cold DVRIP source needs 5-20 s), keeps it attached and drained for as long as the h264 stream runs, and only then opens the transcode."""
         c = self.get(cid)
         if codec not in CODECS:
             raise GwError(422, "invalid_codec", "codec must be h265 or h264")
+        if quality not in ("sub", "hd"):
+            raise GwError(422, "invalid_quality", "quality must be sub or hd")
+        base = c["src"] + ("_hd" if quality == "hd" else "")
         if codec == "h265":
-            return LiveStream(self._open_plain(c), None)
-        holder = self._open_plain(c)
+            return LiveStream(self._open_plain(base), None, ttl=self.live_ttl)
+        holder = self._open_plain(base)
         try:
             if not holder.read(1):                       # first byte = the source is running
                 raise OSError("empty stream")
@@ -130,10 +140,10 @@ class Cameras:
             holder.close()
             raise GwError(503, "camera_unavailable", "the camera did not answer")
         drain = LiveStream(holder, None, drain=True)
-        src = c["src"] + CODECS[codec]
+        src = base + CODECS[codec]
         for attempt in (1, 2, 3):
             try:
-                return LiveStream(self.opener.open(urllib.request.Request(self._url("/api/stream.mp4", src)), timeout=OPEN_TIMEOUT), drain)
+                return LiveStream(self.opener.open(urllib.request.Request(self._url("/api/stream.mp4", src)), timeout=OPEN_TIMEOUT), drain, ttl=self.live_ttl)
             except urllib.error.HTTPError as e:
                 if e.code < 500 or attempt == 3:
                     break
@@ -191,6 +201,63 @@ class Cameras:
         names = {x["channel"]: x["id"] for x in self.channels}
         return [{"id": r["id"], "camera": names.get(r["ch"], "cam%d" % r["ch"]), "kind": r["kind"], "begin": r["begin"], "end": r["end"],
                  "size": r["size"], "duration_s": round(r["dur"] or 0, 1)} for r in rows]
+
+    def at(self, moment):
+        """The synchronised view: for each lens the clip that covers `moment` ('YYYY-MM-DD HH:MM:SS') or None, with the offset into the clip."""
+        from datetime import datetime
+        t = datetime.strptime(moment, "%Y-%m-%d %H:%M:%S")
+        db = self._db()
+        out = []
+        for c in self.channels:
+            clip = None
+            if db is not None:
+                r = db.execute("SELECT rowid AS id, kind, begin, end, size, dur FROM clips WHERE ch=? AND begin<=? AND end>=? ORDER BY begin DESC LIMIT 1", (c["channel"], moment, moment)).fetchone()
+                if r:
+                    off = max(0.0, (t - datetime.strptime(r["begin"], "%Y-%m-%d %H:%M:%S")).total_seconds())
+                    off = min(off, max(0.0, (r["dur"] or 0) - 0.5))
+                    clip = {"id": r["id"], "camera": c["id"], "kind": r["kind"], "begin": r["begin"], "end": r["end"], "size": r["size"],
+                            "duration_s": round(r["dur"] or 0, 1), "offset_s": round(off, 1)}
+            out.append({"camera": c["id"], "clip": clip})
+        if db is not None:
+            db.close()
+        return out
+
+    def step(self, moment, direction, gap_s=30):
+        """The previous/next EVENT across all lenses: the nearest clip start more than `gap_s` seconds away (the three lenses often trigger together: one step = one event)."""
+        if direction not in ("next", "prev"):
+            raise GwError(400, "bad_query", "dir must be next or prev")
+        db = self._db()
+        if db is None:
+            return None
+        try:
+            if direction == "next":
+                r = db.execute("SELECT min(begin) AS t FROM clips WHERE begin > datetime(?, ?)", (moment, "+%d seconds" % gap_s)).fetchone()
+            else:
+                r = db.execute("SELECT max(begin) AS t FROM clips WHERE begin < datetime(?, ?)", (moment, "-%d seconds" % gap_s)).fetchone()
+        finally:
+            db.close()
+        return r["t"] if r else None
+
+    def status(self, now=None):
+        """The pull job's status (status.json next to the index) plus the time of the next scheduled pull (timer: 08..20 every 2 h). None if the job never wrote one."""
+        import json
+        from datetime import datetime, timedelta
+        now = now or datetime.fromtimestamp(self.clock())
+        try:
+            with open(os.path.join(self.archive, "status.json")) as fh:
+                st = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        slot = None
+        for h in range(8, 21, 2):
+            cand = now.replace(hour=h, minute=0, second=0, microsecond=0)
+            if cand > now:
+                slot = cand
+                break
+        if slot is None:
+            slot = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+        return {"backlog": int(st.get("backlog") or 0), "loading": bool(st.get("backlog")) or st.get("stopped") == "time budget", "last_success": st.get("last_success"),
+                "listing_complete_until": st.get("listing_complete_until"), "next_pull": slot.strftime("%H:%M")}
 
     def clip_file(self, clip_id):
         """The path of one clip, or GwError 404. Only a file named by the index that resolves inside the archive directory is served."""

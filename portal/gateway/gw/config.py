@@ -30,11 +30,12 @@ FEATURES = {"parental": True, "cameras": False}          # "cameras" is switched
 # Task 34: cameras. The gateway reads go2rtc (loopback, the only holder of camera sessions) and the clip archive (mounted read-only); it holds no camera login.
 GO2RTC_URL = os.environ.get("GW_GO2RTC_URL", "")                                        # e.g. http://127.0.0.1:18984 ; empty = module off
 CAMERA_ARCHIVE = os.environ.get("GW_CAMERA_ARCHIVE", "/ro/camera")
-CAMERAS = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Двор — поворотная"},
-           {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Двор — камера 2"},
-           {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Двор — камера 3"}]
+# The camera calls them: ch0 "Camera Front Door" (the PTZ, "CH01"), ch1 "IPC_01" ("IP CH01"), ch2 "IPC_02" ("IP CH02"). Ivan's names, 2026-11-11 (if left/right are swapped, swap the two names below).
+CAMERAS = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Вход"},
+           {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Левая"},
+           {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Правая"}]
 CAMERA_LIVE_MAX_STREAMS = 4         # live streams at once (the camera accepts 10 connections in total; go2rtc shares one per lens)
-CAMERA_LIVE_MAX_S = 20 * 60         # a forgotten tab must not hold a camera session for ever; the page offers "continue"
+CAMERA_LIVE_MAX_S = 30 * 60         # a forgotten tab must not hold a camera session for ever; the page offers "continue"
 
 # limits (ADR 0007)
 MAX_PHONES_TOTAL = 20

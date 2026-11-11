@@ -17,6 +17,8 @@ import camlib              # noqa: E402
 FMT = P.FMT
 NOW = datetime(2026, 11, 12, 12, 0, 0)
 ENV = {"CAM_HOST": "x", "CAM_USER": "u", "CAM_PASS": "p"}
+REAL_LIVE_BUSY = P.live_busy
+P.live_busy = lambda url=None: False                   # tests never look at the real go2rtc (the yield test passes its own)
 
 
 def fname(ch, begin, end, kind="M", n=0):
@@ -148,6 +150,21 @@ class Pull(unittest.TestCase):
         r = P.run(ENV, NOW, cam_factory=FakeCam(fs2, fail_names=[fs2[0]["FileName"]]), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
         self.assertEqual(r["errors"], 1)
         self.assertNotIn("last_list_ok", P.load_state())                                  # a failed clip keeps the cursor where it was
+
+    def test_the_pull_yields_to_a_live_view(self):
+        arch = fresh()
+        calls = {"n": 0, "slept": 0}
+
+        def busy():
+            calls["n"] += 1
+            return calls["n"] <= 3                  # somebody watches for the first three looks, then stops
+
+        def sleep(s):
+            calls["slept"] += s
+        r = P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, busy=busy, sleep=sleep)
+        self.assertEqual(r["pulled"], 3, r)
+        self.assertEqual((calls["slept"], r["yielded_s"]), (30, 30))          # 3 polls x 10 s, then it went on
+        self.assertFalse(REAL_LIVE_BUSY("http://127.0.0.1:9/api/streams"))      # an unreachable go2rtc API means idle
 
     def test_status_file_for_the_page(self):
         arch = fresh()

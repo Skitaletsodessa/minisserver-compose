@@ -71,7 +71,7 @@ TABLE = [
     ("GET", "/v1/parental/health", "allow", "app", "default"),
     # ── cameras (Task 34): sub streams only (the gateway serves nothing else), archive clips with ranges ──
     ("GET", "/v1/cameras", "allow", "app", "camera"), ("GET", "/v1/cameras/archive/days", "allow", "app", "camera"),
-    ("GET", "/v1/cameras/archive/clips", "allow", "app", "camera"), ("GET", "/v1/cameras/archive/clips/{cid:int}/video", "allow", "app", "camera_clip"),
+    ("GET", "/v1/cameras/archive/clips", "allow", "app", "camera"), ("GET", "/v1/cameras/archive/at", "allow", "app", "camera"), ("GET", "/v1/cameras/archive/step", "allow", "app", "camera"), ("GET", "/v1/cameras/archive/clips/{cid:int}/video", "allow", "app", "camera_clip"),
     ("GET", "/v1/cameras/{id}/snapshot", "allow", "app", "camera_snapshot"), ("GET", "/v1/cameras/{id}/live", "allow", "app", "camera_live"),
 ]
 

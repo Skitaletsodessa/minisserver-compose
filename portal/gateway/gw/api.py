@@ -1036,8 +1036,9 @@ class App:
         p = self._cam(request)
         loop = asyncio.get_running_loop()
         h = await loop.run_in_executor(None, self.cameras.health)
-        return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"],
-                             "archive": {"clips": h["archive_clips"], "bytes": h["archive_bytes"], "newest_clip": h["newest_clip"]}})
+        st = await loop.run_in_executor(None, self.cameras.status)
+        return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"], "hd_available": not request.scope.get("portal_door"),
+                             "archive": {"clips": h["archive_clips"], "bytes": h["archive_bytes"], "newest_clip": h["newest_clip"], "status": st}})
 
     async def cam_snapshot(self, request):
         p = self._cam(request)
@@ -1052,17 +1053,20 @@ class App:
         p = self._cam(request)
         cid = request.path_params["id"]
         codec = request.query_params.get("codec", "h264")
+        quality = request.query_params.get("quality", "sub")
         self.cameras.get(cid)
+        if quality == "hd" and request.scope.get("portal_door"):
+            raise GwError(403, "hd_tailnet_only", "the full-quality picture is available at home or over Tailscale only")
         if self.live_open >= config.CAMERA_LIVE_MAX_STREAMS:
             raise GwError(429, "too_many_streams", "too many live views at once", {"max": config.CAMERA_LIVE_MAX_STREAMS}, {"Retry-After": "30"})
         loop = asyncio.get_running_loop()
         self.live_open += 1
         try:
-            resp = await loop.run_in_executor(None, self.cameras.open_live, cid, codec)
+            resp = await loop.run_in_executor(None, self.cameras.open_live, cid, codec, quality)
         except BaseException:
             self.live_open -= 1
             raise
-        self._caudit(p, "camera_live", cid, {"codec": codec})
+        self._caudit(p, "camera_live", cid, {"codec": codec, "quality": quality})
         deadline = self.clock() + config.CAMERA_LIVE_MAX_S
 
         async def gen():
@@ -1074,7 +1078,7 @@ class App:
                     yield chunk
             finally:
                 self.live_open -= 1
-                await loop.run_in_executor(None, resp.close)
+                resp.close()                          # synchronous on purpose: an await here is cancelled together with the generator and the stream would leak
         return StreamingResponse(gen(), media_type="video/mp4", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     async def cam_archive_days(self, request):
@@ -1088,6 +1092,28 @@ class App:
         if len(day) != 10 or day[4] != "-" or day[7] != "-" or not day.replace("-", "").isdigit():
             raise GwError(400, "bad_query", "day must be YYYY-MM-DD")
         return JSONResponse({"clips": await asyncio.get_running_loop().run_in_executor(None, self.cameras.clips, day, cid)})
+
+    @staticmethod
+    def _moment(request):
+        t = request.query_params.get("time", "").replace("T", " ")[:19]
+        import re as _re
+        if not _re.match(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$", t):
+            raise GwError(400, "bad_query", "time must be YYYY-MM-DD HH:MM:SS")
+        return t
+
+    async def cam_archive_at(self, request):
+        self._cam(request)
+        t = self._moment(request)
+        loop = asyncio.get_running_loop()
+        lenses = await loop.run_in_executor(None, self.cameras.at, t)
+        st = await loop.run_in_executor(None, self.cameras.status)
+        return JSONResponse({"time": t, "lenses": lenses, "status": st})
+
+    async def cam_archive_step(self, request):
+        self._cam(request)
+        t = self._moment(request)
+        d = request.query_params.get("dir", "")
+        return JSONResponse({"time": await asyncio.get_running_loop().run_in_executor(None, self.cameras.step, t, d)})
 
     async def cam_clip_video(self, request):
         p = self._cam(request)
@@ -1143,6 +1169,8 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/cameras", a.cam_list, methods=["GET"]),
         Route("/v1/cameras/archive/days", a.cam_archive_days, methods=["GET"]),
         Route("/v1/cameras/archive/clips", a.cam_archive_clips, methods=["GET"]),
+        Route("/v1/cameras/archive/at", a.cam_archive_at, methods=["GET"]),
+        Route("/v1/cameras/archive/step", a.cam_archive_step, methods=["GET"]),
         Route("/v1/cameras/archive/clips/{cid:int}/video", a.cam_clip_video, methods=["GET"]),
         Route("/v1/cameras/{id}/snapshot", a.cam_snapshot, methods=["GET"]),
         Route("/v1/cameras/{id}/live", a.cam_live, methods=["GET"]),

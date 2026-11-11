@@ -110,6 +110,33 @@ def main():
                 pr = probe(f.name)
             want = "h264" if codec == "h264" else "hevc"
             check("%s live %s: video/mp4, %d KB in %.1f s, ffprobe sees %s" % (cid, codec, len(b) // 1024, time.time() - t0, want), st == 200 and h.get("Content-Type") == "video/mp4" and want in pr, "%s %s %s" % (st, h.get("Content-Type"), pr[:120]))
+        # ── Task 34b: the grid of three (all lenses at once), HD on the tailnet, names, the synchronised view ──
+        import threading
+        res = {}
+
+        def grab(cid):
+            t = time.time()
+            st, b, h = call("GET", TAILNET + "/v1/cameras/%s/live?codec=h264" % cid, headers=ck, limit=250 * 1024, timeout=120)
+            res[cid] = (st, len(b), time.time() - t)
+        th = [threading.Thread(target=grab, args=(c,)) for c in ("cam0", "cam1", "cam2")]
+        t0 = time.time()
+        for i, x in enumerate(th):
+            x.start()
+            time.sleep(1.5)                                                                   # the page staggers the starts the same way
+        cpu = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}", "go2rtc"], capture_output=True, text=True).stdout.strip()
+        for x in th:
+            x.join()
+        stamp("grid of three: %s | all three done in %.1f s | go2rtc CPU while they ran: %s" % ({k: "%d KB in %.1f s" % (v[1] // 1024, v[2]) for k, v in sorted(res.items())}, time.time() - t0, cpu))
+        check("three live streams at once all deliver video (the grid)", all(v[0] == 200 and v[1] >= 200 * 1024 for v in res.values()) and len(res) == 3, str(res))
+        t = time.time()
+        st, b, h = call("GET", TAILNET + "/v1/cameras/cam0/live?codec=h264&quality=hd", headers=ck, limit=300 * 1024, timeout=90)
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+            f.write(b)
+            f.flush()
+            pr = probe(f.name)
+        check("HD (main stream) on the tailnet: %d KB in %.1f s, ffprobe sees h264 1280x720" % (len(b) // 1024, time.time() - t), st == 200 and "h264" in pr and "1280" in pr and "720" in pr, "%s %s" % (st, pr[:100]))
+        names = [c["name"] for c in json.loads(call("GET", TAILNET + "/v1/cameras", headers=ck)[1])["cameras"]]
+        check("lens names are Вход / Левая / Правая", names == ["Вход", "Левая", "Правая"], str(names))
         st, b, _ = call("GET", TAILNET + "/v1/cameras/cam0/live?codec=vp9", headers=ck)
         check("an unknown codec is refused (422)", st == 422, str(st))
 
@@ -130,6 +157,17 @@ def main():
                     f.flush()
                     pr = probe(f.name)
                 check("the whole clip is a valid HEVC mp4 (%d KB)" % (len(b) // 1024), st == 200 and "hevc" in pr, "%s %s" % (st, pr[:100]))
+        if days:
+            st, b, _ = call("GET", TAILNET + "/v1/cameras/archive/clips?day=" + days[0]["day"], headers=ck)
+            cl = json.loads(b)["clips"] if st == 200 else []
+            if cl:
+                m = cl[len(cl) // 2]["begin"]
+                st, b, _ = call("GET", TAILNET + "/v1/cameras/archive/at?time=" + urllib.parse.quote(m), headers=ck)
+                lens = json.loads(b)["lenses"] if st == 200 else []
+                check("synchronised view at %s: three lenses answered, at least one has a clip" % m, st == 200 and len(lens) == 3 and any(x["clip"] for x in lens), str(st))
+                st, b, _ = call("GET", TAILNET + "/v1/cameras/archive/step?dir=next&time=" + urllib.parse.quote(m), headers=ck)
+                nxt = json.loads(b)["time"] if st == 200 else "?"
+                check("next event across the lenses (%s)" % nxt, st == 200 and (nxt is None or nxt > m), str(st))
         st, b, _ = call("GET", TAILNET + "/v1/cameras/archive/clips/99999999/video", headers=ck)
         check("an unknown clip is 404", st == 404, str(st))
 

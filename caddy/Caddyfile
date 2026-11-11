@@ -199,7 +199,7 @@ minisserver.tail6bf4d5.ts.net:17443 {
 
 	# Task 34 / ADR 0009 amendment (accepted by Ivan 2026-11-11, option B): allow-by-INCLUSION. The list is generated from the gateway's door table
 	# (python3 -c "from gw import door; print(' '.join(door.caddy_prefixes()))" in portal/gateway); the gateway enforces the same table itself (default deny).
-	@gate path / /app/* /app/manifest.webmanifest /app/releases/* /app/update.json /cameras /home /parental /services /settings/* /static/* /v1/app/login /v1/app/logout /v1/app/session /v1/app/update-key /v1/cameras /v1/cameras/* /v1/cameras/archive/clips /v1/cameras/archive/clips/* /v1/cameras/archive/days /v1/capabilities /v1/devices /v1/devices/* /v1/events /v1/exceptions/* /v1/parental/children /v1/parental/children/* /v1/parental/health /v1/schedules/* /v1/services /v1/vacuums /v1/vacuums/*
+	@gate path / /app/* /app/manifest.webmanifest /app/releases/* /app/update.json /cameras /home /parental /services /settings/* /static/* /v1/app/login /v1/app/logout /v1/app/session /v1/app/update-key /v1/cameras /v1/cameras/* /v1/cameras/archive/at /v1/cameras/archive/clips /v1/cameras/archive/clips/* /v1/cameras/archive/days /v1/cameras/archive/step /v1/capabilities /v1/devices /v1/devices/* /v1/events /v1/exceptions/* /v1/parental/children /v1/parental/children/* /v1/parental/health /v1/schedules/* /v1/services /v1/vacuums /v1/vacuums/*
 	handle @gate {
 		# Funnel traffic arrives over loopback from tailscaled: the real client IP is X-Forwarded-For (trusted_proxies above) = {vars.client_ip}. Caddy is the enforcement point
 		# (no raw connection for a firewall), and the gateway must see the SAME real address for its own per-address throttle (otherwise every public client would share 127.0.0.1).
@@ -238,7 +238,7 @@ minisserver.tail6bf4d5.ts.net:17443 {
 			}
 			zone camera_per_ip {
 				match {
-					path /v1/cameras /v1/cameras/archive/days /v1/cameras/archive/clips
+					path /v1/cameras /v1/cameras/archive/days /v1/cameras/archive/clips /v1/cameras/archive/at /v1/cameras/archive/step
 				}
 				key    {vars.client_ip}
 				events 120

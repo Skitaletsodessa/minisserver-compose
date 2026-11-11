@@ -155,6 +155,7 @@ class Cam(BaseCase):
         r = self.e.req("GET", "/v1/cameras", who="ivan").json()
         self.assertEqual([c["id"] for c in r["cameras"]], ["cam0", "cam1", "cam2"])
         self.assertTrue(r["live"])
+        self.assertTrue(r["hd_available"])                                                 # on the tailnet the full-quality picture may be asked for
         self.assertEqual(r["archive"]["clips"], 5)
         self.assertEqual(r["archive"]["newest_clip"], "2026-11-12 11:00:00")
         caps = self.e.req("GET", "/v1/capabilities", who="ivan").json()
@@ -226,6 +227,61 @@ class Cam(BaseCase):
         self.assertEqual(e.req("GET", "/v1/cameras/cam2/live", who="ivan").status_code, 503)
         self.assertFalse([q for q in e.g2.requests if "_h264" in q])
         self.assertEqual(e.o["app"].live_open, 0)
+
+    def test_live_quality_hd_uses_the_main_stream_sources(self):
+        e = self.e
+        e.g2.requests.clear()
+        self.assertEqual(e.req("GET", "/v1/cameras/cam0/live?quality=hd", who="ivan").status_code, 200)
+        streams = [urllib.parse.parse_qs(urllib.parse.urlparse(q).query)["src"][0] for q in e.g2.requests if "/api/stream.mp4" in q]
+        self.assertEqual(streams, ["cam_ch0_hd", "cam_ch0_hd_h264"])                    # the plain main stream holds the source, then the 720p transcode
+        e.g2.requests.clear()
+        self.assertEqual(e.req("GET", "/v1/cameras/cam1/live?quality=hd&codec=h265", who="ivan").status_code, 200)
+        self.assertIn("src=cam_ch1_hd", e.g2.requests[-1])
+        self.assertNotIn("_h264", e.g2.requests[-1])
+        self.assertEqual(e.req("GET", "/v1/cameras/cam0/live?quality=ultra", who="ivan").status_code, 422)
+
+    def test_synchronised_view_and_event_steps(self):
+        e = self.e
+        r = e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 09:00:10", who="ivan").json()
+        lens = {x["camera"]: x["clip"] for x in r["lenses"]}
+        self.assertEqual(lens["cam0"]["offset_s"], 10.0)                                  # 09:00:00 clip, ten seconds in
+        self.assertIsNone(lens["cam1"])                                                   # the second lens has no clip at that moment
+        r = e.req("GET", "/v1/cameras/archive/at?time=2026-11-12T09:10:05", who="dasha").json()
+        lens = {x["camera"]: x["clip"] for x in r["lenses"]}
+        self.assertEqual((lens["cam1"]["begin"], lens["cam1"]["offset_s"]), ("2026-11-12 09:10:00", 5.0))
+        self.assertIsNone(lens["cam0"])
+        self.assertEqual(e.req("GET", "/v1/cameras/archive/at?time=soon", who="ivan").status_code, 400)
+        step = lambda t, d: e.req("GET", "/v1/cameras/archive/step?time=%s&dir=%s" % (t, d), who="ivan").json()["time"]   # noqa: E731
+        self.assertEqual(step("2026-11-12 09:00:00", "next"), "2026-11-12 09:10:00")       # the next event across all lenses
+        self.assertEqual(step("2026-11-12 09:10:00", "prev"), "2026-11-12 09:00:00")
+        self.assertEqual(step("2026-11-12 09:10:00", "next"), "2026-11-12 10:00:00")
+        self.assertIsNone(step("2026-11-12 11:00:00", "next"))
+        self.assertIsNone(step("2026-11-11 22:00:00", "prev"))
+        self.assertEqual(e.req("GET", "/v1/cameras/archive/step?time=2026-11-12 09:00:00&dir=sideways", who="ivan").status_code, 400)
+        self.assertEqual(e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 09:00:10", who="ola").status_code, 403)
+
+    def test_pull_status_and_next_pull_slot(self):
+        e = self.e
+        cams = e.o["cameras"]
+        self.assertIsNone(e.req("GET", "/v1/cameras", who="ivan").json()["archive"]["status"])          # no status file yet
+        with open(os.path.join(e.archive_root, "status.json"), "w") as f:
+            json.dump({"backlog": 12, "last_success": "2026-11-12 08:00:00", "listing_complete_until": "2026-11-12 08:00:00", "stopped": ""}, f)
+        try:
+            st = e.req("GET", "/v1/cameras", who="ivan").json()["archive"]["status"]
+            self.assertEqual((st["backlog"], st["loading"]), (12, True))
+            self.assertRegex(st["next_pull"], r"^(0[89]|1[0-9]|20|08):00$")
+            from datetime import datetime
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 9, 30))["next_pull"], "10:00")
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 20, 30))["next_pull"], "08:00")            # after the last run of the day: tomorrow morning
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 6, 0))["next_pull"], "08:00")
+            json.dump({"backlog": 0, "stopped": ""}, open(os.path.join(e.archive_root, "status.json"), "w"))
+            self.assertFalse(e.req("GET", "/v1/cameras", who="ivan").json()["archive"]["status"]["loading"])
+        finally:
+            os.remove(os.path.join(e.archive_root, "status.json"))
+
+    def test_lens_names_are_from_the_config(self):
+        from gw import config as cfg
+        self.assertEqual([c["name"] for c in cfg.CAMERAS], ["Вход", "Левая", "Правая"])       # Ivan's names, in ONE place
 
     def test_archive_lists(self):
         e = self.e

@@ -101,6 +101,23 @@ def real_remux(raw, out, listed_seconds):
     return dur, fps
 
 
+GO2RTC_API = os.environ.get("CAMERA_GO2RTC_API", "http://127.0.0.1:18984/api/streams")
+YIELD_POLL_S = 10
+YIELD_MAX_WAIT_S = 900
+
+
+def live_busy(url=GO2RTC_API):
+    """True while anybody is WATCHING a lens (a consumer on any go2rtc stream). The camera's Wi-Fi link is the bottleneck: a backfill download starves a live view
+    (measured 2026-11-11: HD live failed and cold sub streams took 17-25 s while the pull ran), so the pull waits between clips. An unreachable API means idle."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            data = json.loads(r.read())
+    except (OSError, ValueError):
+        return False
+    return any(v.get("consumers") for v in (data or {}).values() if isinstance(v, dict))
+
+
 def load_state():
     try:
         with open(STATE_PATH) as fh:
@@ -141,14 +158,15 @@ def list_candidates(cam, since, now, have_ids):
     return out
 
 
-def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=None, disk=None):
+def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=None, disk=None, busy=None, sleep=time.sleep):
     now = now or datetime.now()
     cap = CAP_BYTES if cap is None else cap
     cam_factory = cam_factory or camlib.DVRIPCam
     st = load_state()
     db = db_open(archive)
     t0 = time.time()
-    res = {"pulled": 0, "bytes": 0, "deleted": 0, "forced_young": 0, "errors": 0, "backlog": 0, "stopped": ""}
+    busy = busy or live_busy
+    res = {"pulled": 0, "bytes": 0, "deleted": 0, "forced_young": 0, "errors": 0, "backlog": 0, "stopped": "", "yielded_s": 0}
     have = {r[0] for r in db.execute("SELECT id FROM clips")}
     last = st.get("last_list_ok")
     since = (datetime.strptime(last, FMT) - timedelta(hours=3)) if last else now - timedelta(days=8)
@@ -166,6 +184,11 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
         if time.time() - t0 > MAX_RUN_SECONDS:
             res["stopped"] = "time budget"
             break
+        waited = 0                                                             # a live view comes first: wait (between clips) while somebody watches
+        while busy() and waited < YIELD_MAX_WAIT_S and time.time() - t0 < MAX_RUN_SECONDS:
+            sleep(YIELD_POLL_S)
+            waited += YIELD_POLL_S
+        res["yielded_s"] += waited
         if c["kb"] > MAX_CLIP_KB:
             res["skipped_big"] = res.get("skipped_big", 0) + 1          # not an error: it must not hold the cursor back for ever
             print(f"skip {c['id']}: {c['kb'] // 1024} MB over the {MAX_CLIP_KB // 1024} MB limit")

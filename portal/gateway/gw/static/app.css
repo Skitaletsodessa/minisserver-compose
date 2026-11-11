@@ -191,7 +191,7 @@ button.step { width: 56px; min-width: 56px; font-size: 1.5rem; padding: 0; }
 button.dur .dur-name, button.choice .choice-name { text-wrap: balance; text-align: center; }
 
 /* Task 34: cameras */
-.cam-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; margin-bottom: 16px; }
+.cam-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
 .cam-tile { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
 .cam-snap { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; object-fit: cover; }
 .cam-status { margin: 0; padding: 8px 12px; }
@@ -209,3 +209,18 @@ button.dur .dur-name, button.choice .choice-name { text-wrap: balance; text-alig
 ul.cam-clips { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
 button.cam-clip-btn { width: 100%; min-height: var(--tap); text-align: left; }
 .cam-player { margin-top: 8px; }
+
+/* Task 34b: 2x2 live grid, big tile, synchronised view */
+.cam-tile .cam-video { border-radius: 0; max-height: none; cursor: pointer; }
+.cam-tile .cam-cap { padding: 4px 8px; flex-wrap: wrap; }
+.cam-tile .cam-cap button { min-height: 44px; padding: 0 10px; }
+.cam-more { padding: 12px; gap: 8px; justify-content: center; }
+.cam-more .meta { margin: 0 0 8px; }
+.cam-tile.cam-big { position: fixed; inset: 0; z-index: 40; border-radius: 0; border: 0; background: #000; color: #fff; display: flex; flex-direction: column; justify-content: center; }
+.cam-tile.cam-big .cam-video { width: 100%; max-height: calc(100vh - 110px); aspect-ratio: 16 / 9; background: #000; }
+.cam-tile.cam-big .cam-cap { background: #111; color: #fff; }
+.cam-tile.cam-big .cam-status { color: #fff; background: transparent; }
+body.cam-has-big { overflow: hidden; }
+.cam-syncgrid { margin-top: 8px; }
+.cam-none { display: flex; align-items: center; justify-content: center; margin: 0; min-height: 120px; padding: 12px; text-align: center; background: var(--off-bg); color: var(--muted); aspect-ratio: 16 / 9; }
+@media (max-width: 520px) { .cam-syncgrid { grid-template-columns: 1fr; } }

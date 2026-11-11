@@ -162,6 +162,17 @@ class Gate(BaseCase):
             door.DOOR_LIMITS.update(keep)
             e.o["app"].door_hits.clear()
 
+    def test_the_full_quality_picture_is_tailnet_only(self):
+        e = self.e
+        e.o["app"].door_hits.clear()
+        app = self.app_cookie()
+        r = self.call("GET", "/v1/cameras/cam0/live?quality=hd", headers={**DOOR, **app})
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (403, "hd_tailnet_only"))
+        self.assertEqual(self.call("GET", "/v1/cameras/cam0/live?quality=hd&codec=h265", headers={"Authorization": "Bearer " + e.tokens["webadmin"]}).status_code, 200)
+        self.assertEqual(self.call("GET", "/v1/cameras/cam0/live?codec=h265", headers={**DOOR, **app}).status_code, 200)               # the sub stream is what the door carries
+        self.assertFalse(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["hd_available"])                                # the page hides the button through the door
+        e.o["app"].door_hits.clear()
+
     def test_the_first_camera_call_from_outside_is_recorded_once_and_reported_in_health(self):
         e = self.e
         e.db.x("DELETE FROM camera_outside")
