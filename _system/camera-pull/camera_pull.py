@@ -24,7 +24,7 @@ SETTLE_SECONDS = 120                                                      # a cl
 YOUNG_DAYS = 7                                                            # forced deletion of clips younger than this = tier-B alert
 FRESH_STALE_HOURS = 2                                                     # tier B when no successful FRESH run for this long (Task 34c; was 26 h for any run)
 META = os.environ.get("CAMERA_META_DIR", "/var/lib/camera-staging")       # NVMe: index.sqlite, status.json, night staging (clips/), temporary downloads
-NIGHT_FROM, NIGHT_TO = 21, 8                                              # clips pulled in [21:00, 08:00) go to the staging area; the library disk stays idle
+NIGHT_FROM, NIGHT_TO = int(os.environ.get("CAMERA_NIGHT_FROM", "21")), int(os.environ.get("CAMERA_NIGHT_TO", "8"))                                             # clips pulled in [21:00, 08:00) go to the staging area; the library disk stays idle
 STAGING_CAP_BYTES = int(float(os.environ.get("CAMERA_STAGING_CAP_GB", "10")) * 1e9)     # backfill stops at this much staged; fresh clips are never held back by it
 ROOT_FREE_FLOOR_PCT = 20                                                  # staging never leaves / with less than this free
 FRESH_MARGIN = timedelta(hours=3)                                         # fresh = newer than the newest archived clip minus this (catches an earlier failed clip)
@@ -198,6 +198,7 @@ def list_candidates(cam, since, now, have_ids):
                 out.append({"id": cid, "ch": ch, "kind": kind, "name": f["FileName"], "begin": f["BeginTime"], "end": f["EndTime"],
                             "kb": kb(f["FileLength"])})
         day += timedelta(days=1)
+    out = list({c["id"]: c for c in out}.values())              # the paged listing can return an entry twice: one download per clip
     out.sort(key=lambda c: (c["begin"], c["ch"]))
     return out
 
