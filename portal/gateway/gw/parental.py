@@ -500,7 +500,9 @@ class Parental:
         age = max(0, int(self.clock() - mtime))
         if age > 900:
             return "unknown", age
-        return ("mismatch" if st.get("streak") else "ok"), age
+        # same threshold as the parity checker's Telegram alert (2 runs in a row): a one-off mismatch at a window edge heals within a minute and is not shown
+        streak = st.get("streak") or {}
+        return ("mismatch" if any(isinstance(n, int) and n >= 2 for n in streak.values()) else "ok"), age
 
     async def health(self, p):
         self._need(p, view_only=True)

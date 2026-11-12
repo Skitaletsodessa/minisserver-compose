@@ -472,6 +472,11 @@ class Health(P):
         e._write_parity(__import__("time").time())
         js = e.req("GET", "/v1/parental/health", who="ivan").json()
         self.assertEqual((js["replica"]["parity"], js["status"]), ("mismatch", "degraded"))
+        e.parity_streak = {"rules": 1}                                                                                  # one run only: a window-edge blip, not shown
+        e._write_parity(__import__("time").time())
+        e.o["parental"]._cache.clear()
+        js = e.req("GET", "/v1/parental/health", who="ivan").json()
+        self.assertEqual((js["replica"]["parity"], js["status"]), ("ok", "ok"))
         e.parity_streak = {}
         e._write_parity(__import__("time").time() - 3600)                                                               # the checker stopped running
         self.assertEqual(e.req("GET", "/v1/parental/health", who="ivan").json()["replica"]["parity"], "unknown")
