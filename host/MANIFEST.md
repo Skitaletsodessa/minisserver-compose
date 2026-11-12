@@ -263,3 +263,6 @@ IPv4 and IPv6 forwarding on, for the Tailscale exit node (`tailscale set --adver
 
 ## Relay firewall — `/srv/compose/relay/relay-firewall.sh` + `relay-firewall.service` (Task 23)
 Not a file under `/etc`, but host network policy: nftables table `inet relay_guard` (priority -10) and the iptables layer `RELAY-EGRESS` drop the relay container's (`172.30.0.0/24`) traffic to every private/special range and to the host's own addresses. `relay-firewall.service` runs after Docker and is part of it. Linked into `/etc/systemd/system/` together with `relay-watch.{service,timer}`; the `relay-*` CLIs are symlinked in `/usr/local/bin`.
+
+## `etc/systemd/system/adguard-policy.service.d/killmode-process.conf` — sync trigger survives the oneshot (2026-11-12)
+`KillMode=process` for `adguard-policy.service`: `childpolicy.trigger_sync()` starts `sync-trigger.py` detached and the default cgroup kill removed it when the oneshot exited, so the replica lagged ~30 s at every window edge (parity run 1 MISMATCH, app banner «Запасной фильтр отстаёт»). Verified with systemd-run A/B; real edge: see docs/measurements.md 2026-11-12.
