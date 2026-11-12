@@ -252,4 +252,4 @@ S.update({
     "cam_play": "Пуск", "cam_pause": "Пауза", "cam_slider": "Положение по времени",
 })
 S.update({"cam_hd_failed": "Чёткая картинка сейчас недоступна, показываю обычную."})
-S.update({"cam_updated": "Обновлено в {t}"})
+S.update({"cam_updated": "Обновлено в {t}", "cam_until": "Записи до {t}", "cam_queue": "ещё {n} в очереди"})

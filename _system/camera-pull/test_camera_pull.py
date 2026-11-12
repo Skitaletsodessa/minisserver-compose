@@ -484,6 +484,56 @@ class Task34c(unittest.TestCase):
         self.assertEqual([a for a in rec.alerts if a[0] == "camera-pull-stale"], [])
 
 
+class Task34d(unittest.TestCase):
+    def run_(self, files, now, arch, meta, **kw):
+        kw.setdefault("cap", GB)
+        cam = kw.pop("cam", None) or FakeCam(files)
+        return P.run(ENV, now, cam_factory=cam, remux=fake_remux, archive=arch, disk=BIG_DISK, meta=meta, **kw)
+
+    def test_fresh_clips_are_pulled_newest_first_and_one_event_keeps_ch0_first(self):
+        arch, meta = setup_dirs()
+        files = clip_files((0, "2026-11-12 10:00:00", "2026-11-12 10:00:30", 100), (0, "2026-11-12 11:00:00", "2026-11-12 11:00:30", 100),
+                           (1, "2026-11-12 11:00:00", "2026-11-12 11:00:30", 100), (0, "2026-11-12 11:30:00", "2026-11-12 11:30:30", 100))
+        cam = FakeCam(files)
+        r = self.run_(files, NOW, arch, meta, cam=cam)
+        self.assertEqual(r["fresh_pulled"], 4, r)
+        stamps = [n.split("/")[-1][:8] for n in cam.downloads]
+        self.assertEqual(stamps, ["11.30.00", "11.00.00", "11.00.00", "10.00.00"], cam.downloads)
+        self.assertTrue("/001/" in cam.downloads[1] and "/002/" in cam.downloads[2], cam.downloads)                                   # the same moment: ch0 before ch1
+
+    def test_a_hole_left_by_the_time_budget_is_filled_by_backfill_once_fresh_is_empty(self):
+        arch, meta = setup_dirs()
+        files = clip_files((0, "2026-11-12 10:00:00", "2026-11-12 10:00:30", 100), (0, "2026-11-12 11:30:00", "2026-11-12 11:30:30", 100))
+        cam = FakeCam(files)
+        keep = P.MAX_RUN_SECONDS
+
+        def stop_after_first(begin, end, name, target):
+            FakeCam.download_file(cam, begin, end, name, target)
+            P.MAX_RUN_SECONDS = -1
+        cam.download_file = stop_after_first
+        try:
+            self.run_(files, NOW, arch, meta, cam=cam)
+        finally:
+            P.MAX_RUN_SECONDS = keep
+        self.assertEqual(len(cam.downloads), 1)
+        self.assertIn("11.30.00", cam.downloads[0])                                          # the newest first; the 10:00 clip is the hole
+        cam2 = FakeCam(files)
+        r = self.run_(files, NOW + timedelta(hours=2, minutes=30), arch, meta, cam=cam2)      # now 10:00 is older than the 3 h window: backfill, not fresh
+        self.assertEqual((r["fresh_pulled"], r["pulled"]), (0, 1), r)
+        self.assertIn("10.00.00", cam2.downloads[0])
+        self.assertEqual(len(P.db_open(meta).execute("SELECT id FROM clips").fetchall()), 2)
+
+    def test_a_clip_made_after_the_backfill_listing_is_not_lost_when_the_window_moves_on(self):
+        arch, meta = setup_dirs()
+        old = clip_files((1, "2026-11-10 08:00:00", "2026-11-10 08:00:30", 100))
+        self.run_(old, NOW, arch, meta)                                                       # lists the card for backfill at NOW and drains it
+        files = old + clip_files((0, "2026-11-12 12:20:00", "2026-11-12 12:20:30", 100))     # made after that listing
+        self.run_(files, NOW + timedelta(minutes=30), arch, meta, cam=FakeCam(files, fail_names=[files[1]["FileName"]]))     # its fresh pull fails once
+        r = self.run_(files, NOW + timedelta(hours=3, minutes=45), arch, meta)                 # 12:20 is older than the window; the listing cache (2 h) has expired
+        got = P.db_open(meta).execute("SELECT id FROM clips WHERE begin LIKE ?", ("2026-11-12 12:20%",)).fetchall()
+        self.assertEqual(len(got), 1, r)
+
+
 if __name__ == "__main__":
     try:
         unittest.main(verbosity=1)

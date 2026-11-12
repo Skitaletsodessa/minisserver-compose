@@ -402,6 +402,9 @@ class Page(BaseCase):
         self.assertEqual(len(cams.clips("2026-11-12")), 2)
         st = cams.status()
         self.assertEqual((st["fresh_ok_hhmm"], st["staged"], st["loading"]), ("23:15", 2, False))
+        from datetime import datetime as _dt
+        self.assertEqual(cams.status(_dt(2026, 11, 12, 23, 30))["until_label"], "23:00")                                  # the newest archived clip started today: just the time
+        self.assertEqual(cams.status(_dt(2026, 11, 13, 8, 5))["until_label"], "12.11 23:00")                                # on another day: with the date
 
     def test_the_page_has_the_two_tabs_the_player_first_and_waits_for_all_lenses(self):
         js = self.e.client.get("/static/cameras.js").text

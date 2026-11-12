@@ -27,8 +27,8 @@ META = os.environ.get("CAMERA_META_DIR", "/var/lib/camera-staging")       # NVMe
 NIGHT_FROM, NIGHT_TO = int(os.environ.get("CAMERA_NIGHT_FROM", "21")), int(os.environ.get("CAMERA_NIGHT_TO", "8"))                                             # clips pulled in [21:00, 08:00) go to the staging area; the library disk stays idle
 STAGING_CAP_BYTES = int(float(os.environ.get("CAMERA_STAGING_CAP_GB", "10")) * 1e9)     # backfill stops at this much staged; fresh clips are never held back by it
 ROOT_FREE_FLOOR_PCT = 20                                                  # staging never leaves / with less than this free
-FRESH_MARGIN = timedelta(hours=3)                                         # fresh = newer than the newest archived clip minus this (catches an earlier failed clip)
-BACKFILL_CACHE_H = 6                                                      # the card is re-listed for backfill at most this often
+FRESH_WINDOW = timedelta(hours=3)                                         # Task 34d: fresh = younger than this, pulled NEWEST first; whatever slips out of the window unpulled is a hole that backfill fills (oldest first)
+BACKFILL_CACHE_H = 2                                                      # the card is re-listed for backfill at most this often; must stay below FRESH_WINDOW, else clips made after a listing would fall in neither queue
 MAX_FAILS = 3                                                             # a clip that failed this many runs is given up (counted in the result)
 STATE_PATH = os.path.join(camlib.STATE_DIR, "pull-state.json")
 CHANNELS = (0, 1, 2)
@@ -262,7 +262,7 @@ def move_staged(db, archive, stage_root, cap, disk, now, res):
 
 def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=None, disk=None, busy=None, sleep=time.sleep, meta=None, stage_disk=None):
     """One run (Task 34c). meta = the directory of index.sqlite, status.json, the staging area `clips/` and the temporary download (NVMe in production; None = the archive itself,
-    no night staging). Order: (day) move staged clips -> FRESH (everything newer than the newest archived clip minus 3 h, oldest first) -> BACKFILL (the rest of the card,
+    no night staging). Order: (day) move staged clips -> FRESH (clips younger than FRESH_WINDOW = 3 h, NEWEST first) -> BACKFILL (the rest of the card,
     oldest first, only when no fresh clip is pending and time is left). Night: every clip goes to the staging area while it has room, so the library disk stays idle."""
     now = now or datetime.now()
     cap = CAP_BYTES if cap is None else cap
@@ -279,9 +279,8 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
     if staging and not is_night(now):
         move_staged(db, archive, stage_root, cap, disk, now, res)
     have = {r[0] for r in db.execute("SELECT id FROM clips")}
-    newest = db.execute("SELECT max(begin) FROM clips").fetchone()[0]
     floor = now - timedelta(days=8)
-    fresh_cut = max((datetime.strptime(newest, FMT) - FRESH_MARGIN) if newest else floor, floor).replace(microsecond=0)
+    fresh_cut = max(now - FRESH_WINDOW, floor).replace(microsecond=0)
     fails = {k: v for k, v in st.get("fails", {}).items() if k not in have}
 
     def usable(c):
@@ -300,7 +299,7 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
         res["stopped"] = "camera busy"
         db.close()
         return res
-    fresh = [c for c in fresh if usable(c)]
+    fresh = sorted((c for c in fresh if usable(c)), key=lambda c: (c["begin"], -c["ch"]), reverse=True)           # newest first (lenses of one event: ch0 first)
     res["fresh_backlog"] = len(fresh)
 
     def pull_loop(cands, backfill):
@@ -382,12 +381,12 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
             try:
                 with camlib.dvrip_session(env, cam_factory=cam_factory) as cam:
                     items = list_candidates(cam, since, now, have)
-                bf = {"listed_at": now.strftime(FMT), "items": [c for c in items if c["begin"] < fresh_cut.strftime(FMT)]}
+                bf = {"listed_at": now.strftime(FMT), "items": items}
             except camlib.CameraBusy:
                 res["stopped"] = "camera busy"
                 bf = None
         if bf is not None:
-            cands = [c for c in bf["items"] if c["id"] not in have and c["begin"] >= retention_cut and usable(c)]
+            cands = [c for c in bf["items"] if c["id"] not in have and retention_cut <= c["begin"] < fresh_cut.strftime(FMT) and usable(c)]       # the window is the fresh queue's, even if a cached listing still holds those clips
             res["backlog"] = len(cands)
             done = pull_loop(cands, True)
             left = [c for c in cands if c["id"] not in have]

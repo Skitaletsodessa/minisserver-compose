@@ -261,11 +261,22 @@ class Cameras:
                 st = json.load(fh)
         except (OSError, ValueError):
             return None
+        until = None                                           # start of the newest archived or staged clip: what the list really reaches (newest-first pulling leaves holes behind it)
+        db = self._db()
+        if db is not None:
+            try:
+                row = db.execute("SELECT max(begin) AS t FROM clips").fetchone()
+                until = row["t"] if row else None
+            finally:
+                db.close()
+        until_label = None
+        if until:
+            until_label = until[11:16] if until[:10] == now.strftime("%Y-%m-%d") else "%s.%s %s" % (until[8:10], until[5:7], until[11:16])
         slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=15 * (now.minute // 15 + 1))      # the timer fires every 15 minutes, around the clock
         fresh = int(st.get("fresh_backlog") or 0)
         fresh_ok = st.get("fresh_ok")
         return {"backlog": int(st.get("backlog") or 0), "fresh_backlog": fresh, "loading": bool(st.get("backlog")) or bool(fresh) or st.get("stopped") == "time budget",
-                "last_success": st.get("last_success"), "fresh_ok": fresh_ok, "fresh_ok_hhmm": fresh_ok[11:16] if fresh_ok else None, "staged": int(st.get("staged") or 0),
+                "last_success": st.get("last_success"), "fresh_ok": fresh_ok, "fresh_ok_hhmm": fresh_ok[11:16] if fresh_ok else None, "staged": int(st.get("staged") or 0), "until": until, "until_label": until_label,
                 "listing_complete_until": st.get("listing_complete_until"), "next_pull": slot.strftime("%H:%M")}
 
     def clip_file(self, clip_id):
