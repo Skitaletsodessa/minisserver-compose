@@ -26,9 +26,9 @@ def make(data_dir=None, ha_url=None, ha_token_file=None, sched_url=None, sched_a
     dev_opts.update(device_opts or {})
     devices = childdevices.ChildDevices(parental, agh, db, clock, **dev_opts)
     releases = relmod.Releases(db, data_dir or config.DATA, secrets_dir=secrets_dir or config.SECRETS_DIR, clock=clock, hub=hub)
-    copts = {"go2rtc_url": config.GO2RTC_URL, "archive_dir": config.CAMERA_ARCHIVE, "channels": config.CAMERAS}
+    copts = {"go2rtc_url": config.GO2RTC_URL, "archive_dir": config.CAMERA_ARCHIVE, "meta_dir": config.CAMERA_META, "channels": config.CAMERAS}
     copts.update(camera_opts or {})
-    cams = camerasmod.Cameras(copts["go2rtc_url"], copts["archive_dir"], copts["channels"], clock, live_ttl=config.CAMERA_LIVE_MAX_S + 60)
+    cams = camerasmod.Cameras(copts["go2rtc_url"], copts["archive_dir"], copts["channels"], clock, live_ttl=config.CAMERA_LIVE_MAX_S + 60, meta_dir=copts.get("meta_dir"))
     config.FEATURES["cameras"] = cams.enabled
     app_obj = api.App(db, people, core, hub, sched, ha, clock=clock, parental=parental, filters=filters, devices=devices, releases=releases, cameras=cams)
 

@@ -15,6 +15,7 @@ services:
       - TZ=Europe/Prague
       - GW_BIND=127.0.0.1
       - GW_PORT=17444
+      - GW_CAMERA_META=/ro/camera-meta
       - GW_DATA=/data
       - GW_PUBLIC_URL=https://minisserver.tail6bf4d5.ts.net:17443
       - GW_HA_URL=http://127.0.0.1:8123
@@ -28,6 +29,7 @@ services:
       - /home/skit/adguard-admin-password.txt:/secrets-agh/password:ro
       - /var/lib/adguard-parity:/ro/adguard-parity:ro
       - /usr/share/ieee-data:/ro/ieee-data:ro
+      - /var/lib/camera-staging:/ro/camera-meta:ro         # Task 34c: index.sqlite, status.json and the night staging area (NVMe; written by camera-pull)
       - /srv/library/camera:/ro/camera:ro                  # Task 34: the clip archive written by the host job camera-pull (read-only; docker.service waits for /srv/library)
     read_only: true
     tmpfs:

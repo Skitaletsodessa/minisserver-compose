@@ -150,7 +150,7 @@ class Pull(unittest.TestCase):
         fs2 = self.files()
         r = P.run(ENV, NOW, cam_factory=FakeCam(fs2, fail_names=[fs2[0]["FileName"]]), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
         self.assertEqual(r["errors"], 1)
-        self.assertNotIn("last_list_ok", P.load_state())                                  # a failed clip keeps the cursor where it was
+        self.assertEqual(P.load_state()["fails"], {"0|" + fs2[0]["FileName"]: 1})            # a failed clip is remembered and retried (3 times, then given up)
 
     def test_the_pull_yields_to_a_live_view(self):
         arch = fresh()
@@ -206,7 +206,8 @@ class Pull(unittest.TestCase):
         P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK)
         import json as _j
         st = _j.load(open(os.path.join(arch, "status.json")))
-        self.assertEqual((st["backlog"], st["stopped"]), (4, ""))
+        self.assertEqual((st["fresh_backlog"], st["backlog"], st["stopped"]), (3, 0, ""))
+        self.assertEqual(st["fresh_ok"], NOW.strftime(FMT))
         self.assertEqual(st["listing_complete_until"], NOW.strftime(FMT))
         self.assertEqual(oct(os.stat(os.path.join(arch, "status.json")).st_mode & 0o777), "0o644")
 
@@ -351,6 +352,136 @@ class Health(unittest.TestCase):
         cam3 = HealthCam(drift=-1.0, storage=storage())
         H.run(ENV, datetime(2026, 11, 21, 12, 0), cam_factory=cam3, notify=Recorder())
         self.assertEqual(cam3.set_calls, 0)       # drift within the limit
+
+
+def clip_files(*specs):
+    """specs = (ch, begin, end, kb)"""
+    return [entry(ch, b, e, kb, "M", i + 1) for i, (ch, b, e, kb) in enumerate(specs)]
+
+
+def setup_dirs():
+    fresh()
+    return os.path.join(TMP, "archive"), os.path.join(TMP, "meta")
+
+
+def forget_cursor():
+    """The card holds older clips that were not listed yet (the situation after the 2026-11-11 cursor reset): the first run must not have declared the card done."""
+    st = P.load_state()
+    st.pop("last_list_ok", None)
+    st["backfill"] = None
+    P.save_state(st)
+
+
+class Task34c(unittest.TestCase):
+    def run_(self, files, now, arch, meta, **kw):
+        kw.setdefault("cap", GB)
+        return P.run(ENV, now, cam_factory=FakeCam(files, fail_names=kw.pop("fail", ())), remux=fake_remux, archive=arch, disk=BIG_DISK, meta=meta, **kw)
+
+    def test_fresh_clips_come_before_the_backlog(self):
+        arch, meta = setup_dirs()
+        a = ("2026-11-12", "09:00:00", "09:00:30")
+        self.run_(clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 100)), NOW, arch, meta)       # the newest archived clip
+        forget_cursor()
+        files = clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 100),
+                           (1, "2026-11-10 08:00:00", "2026-11-10 08:00:30", 100),            # the backlog: older than the newest archived clip
+                           (2, "2026-11-12 11:00:00", "2026-11-12 11:00:30", 100))            # fresh
+        cam = FakeCam(files)
+        keep = P.MAX_RUN_SECONDS
+
+        def stop_after_first(begin, end, name, target):
+            FakeCam.download_file(cam, begin, end, name, target)
+            P.MAX_RUN_SECONDS = -1                                                           # the time budget ends after one clip
+        cam.download_file = stop_after_first
+        try:
+            r = P.run(ENV, NOW + timedelta(hours=1), cam_factory=cam, remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, meta=meta)
+        finally:
+            P.MAX_RUN_SECONDS = keep
+        self.assertEqual(len(cam.downloads), 1)
+        self.assertIn("11.00.00", cam.downloads[0])                                           # the fresh one, not the 2026-11-10 clip
+        r = self.run_(files, NOW + timedelta(hours=1, minutes=15), arch, meta)
+        self.assertEqual((r["fresh_pulled"], r["pulled"]), (0, 1), r)                         # nothing fresh left: the rest of the budget goes to the backlog
+        self.assertEqual(r["stopped"], "")
+        self.assertIn("last_list_ok", P.load_state())                                         # the whole card was handled
+
+    def test_night_clips_are_staged_on_the_nvme_and_move_in_the_morning(self):
+        arch, meta = setup_dirs()
+        night = datetime(2026, 11, 12, 23, 0, 0)
+        files = clip_files((0, "2026-11-12 22:30:00", "2026-11-12 22:30:30", 100), (1, "2026-11-12 22:40:00", "2026-11-12 22:40:20", 100))
+        r = self.run_(files, night, arch, meta)
+        self.assertEqual((r["pulled"], r["night"]), (2, True), r)
+        self.assertFalse(os.path.exists(arch))                                                # the library disk was not touched at all
+        rows = P.db_open(meta).execute("SELECT path FROM clips").fetchall()
+        self.assertTrue(all(p[0].startswith(os.path.join(meta, "clips")) and os.path.exists(p[0]) for p in rows))
+        import json as _j
+        self.assertEqual(_j.load(open(os.path.join(meta, "status.json")))["staged"], 2)
+        r = self.run_(files, datetime(2026, 11, 13, 8, 15, 0), arch, meta)                    # morning: the move
+        self.assertEqual(r.get("moved"), 2, r)
+        rows = P.db_open(meta).execute("SELECT path FROM clips").fetchall()
+        self.assertTrue(all(p[0].startswith(arch) and os.path.exists(p[0]) for p in rows))
+        self.assertEqual([f for dp, dn, fn in os.walk(os.path.join(meta, "clips")) for f in fn], [])      # nothing left in staging
+        import json as _j
+        self.assertEqual(_j.load(open(os.path.join(meta, "status.json")))["staged"], 0)
+
+    def test_the_staging_cap_stops_backfill_but_not_fresh_clips(self):
+        arch, meta = setup_dirs()
+        self.run_(clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 100)), NOW, arch, meta)
+        forget_cursor()
+        files = clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 100),
+                           (1, "2026-11-10 08:00:00", "2026-11-10 08:00:30", 100),
+                           (2, "2026-11-12 22:00:00", "2026-11-12 22:00:30", 100))
+        keep = P.STAGING_CAP_BYTES
+        P.STAGING_CAP_BYTES = 1
+        try:
+            r = self.run_(files, datetime(2026, 11, 12, 23, 0, 0), arch, meta)
+        finally:
+            P.STAGING_CAP_BYTES = keep
+        self.assertEqual((r["fresh_pulled"], r["pulled"], r["stopped"]), (1, 1, "staging full"), r)        # the fresh clip was staged, the backlog waits for the morning
+
+    def test_staging_never_takes_the_last_20_percent_of_the_disk(self):
+        arch, meta = setup_dirs()
+        files = clip_files((0, "2026-11-12 22:00:00", "2026-11-12 22:00:30", 100))
+        tight = lambda: (100 * GB, 90 * GB, 10 * GB)                                           # 10 % free
+        r = self.run_(files, datetime(2026, 11, 12, 23, 0, 0), arch, meta, stage_disk=tight)
+        self.assertEqual(r["pulled"], 1, r)
+        rows = P.db_open(meta).execute("SELECT path FROM clips").fetchall()
+        self.assertTrue(rows[0][0].startswith(arch), rows)                                     # a FRESH clip falls back to the library disk instead of filling /
+
+    def test_a_backfill_clip_older_than_what_the_cap_would_delete_is_not_pulled(self):
+        arch, meta = setup_dirs()
+
+        def one_mb(raw, out, listed):
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with open(out, "wb") as fh:
+                fh.write(b"\0" * 1_000_000)
+            return float(listed), 12.0
+        P.run(ENV, NOW, cam_factory=FakeCam(clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 1000))), remux=one_mb, archive=arch, cap=1_500_000, disk=BIG_DISK, meta=meta)
+        forget_cursor()
+        files = clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 1000), (1, "2026-11-10 08:00:00", "2026-11-10 08:00:30", 1000))
+        r = P.run(ENV, NOW + timedelta(hours=1), cam_factory=FakeCam(files), remux=one_mb, archive=arch, cap=1_500_000, disk=BIG_DISK, meta=meta)
+        self.assertEqual((r["pulled"], r["stopped"], r["deleted"]), (0, "backfill full", 0), r)
+        self.assertEqual(len(P.db_open(meta).execute("SELECT id FROM clips").fetchall()), 1)      # the newer clip was not sacrificed for an older one
+
+    def test_a_clip_that_keeps_failing_is_given_up_after_three_runs(self):
+        arch, meta = setup_dirs()
+        files = clip_files((0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 100), (1, "2026-11-12 09:10:00", "2026-11-12 09:10:20", 100))
+        bad = [files[0]["FileName"]]
+        for i in range(3):
+            r = self.run_(files, NOW + timedelta(minutes=15 * i), arch, meta, fail=bad)
+            self.assertEqual(r["errors"], 1, r)
+        r = self.run_(files, NOW + timedelta(minutes=45), arch, meta, fail=bad)
+        self.assertEqual((r["errors"], r.get("gave_up")), (0, 1), r)
+
+    def test_the_stale_alert_is_about_fresh_clips_and_silent_while_the_camera_is_down(self):
+        rec = Recorder()
+        st = {"last_fresh_ok": (NOW - timedelta(hours=3)).strftime(FMT)}
+        P.alerts(st, NOW, rec)
+        self.assertIn(("camera-pull-stale", "B"), rec.alerts)
+        rec = Recorder()
+        P.alerts(dict(st, unreachable=True), NOW, rec)
+        self.assertEqual([a for a in rec.alerts if a[0] == "camera-pull-stale"], [])
+        rec = Recorder()
+        P.alerts({"last_fresh_ok": (NOW - timedelta(minutes=40)).strftime(FMT)}, NOW, rec)
+        self.assertEqual([a for a in rec.alerts if a[0] == "camera-pull-stale"], [])
 
 
 if __name__ == "__main__":

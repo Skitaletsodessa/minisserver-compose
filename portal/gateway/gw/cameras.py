@@ -56,10 +56,12 @@ class LiveStream:
 
 
 class Cameras:
-    def __init__(self, go2rtc_url, archive_dir, channels, clock, opener=None, live_ttl=1800 + 60):
+    def __init__(self, go2rtc_url, archive_dir, channels, clock, opener=None, live_ttl=1800 + 60, meta_dir=None):
         self.live_ttl = live_ttl
         self.base = (go2rtc_url or "").rstrip("/")
         self.archive = archive_dir
+        self.meta = meta_dir or archive_dir                 # index.sqlite, status.json and the night staging area `clips/` (NVMe; the library disk stays idle at night)
+        self.stage_clips = os.path.join(meta_dir, "clips") if meta_dir else None
         self.channels = list(channels)
         self.clock = clock
         self.opener = opener or urllib.request.build_opener()
@@ -164,7 +166,7 @@ class Cameras:
 
     # ── archive ───────────────────────────────────────────────────────────────
     def _db(self):
-        path = os.path.join(self.archive, "index.sqlite")
+        path = os.path.join(self.meta, "index.sqlite")
         if not os.path.exists(path):
             return None
         db = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
@@ -255,19 +257,15 @@ class Cameras:
         from datetime import datetime, timedelta
         now = now or datetime.fromtimestamp(self.clock())
         try:
-            with open(os.path.join(self.archive, "status.json")) as fh:
+            with open(os.path.join(self.meta, "status.json")) as fh:
                 st = json.load(fh)
         except (OSError, ValueError):
             return None
-        slot = None
-        for h in range(8, 21, 2):
-            cand = now.replace(hour=h, minute=0, second=0, microsecond=0)
-            if cand > now:
-                slot = cand
-                break
-        if slot is None:
-            slot = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
-        return {"backlog": int(st.get("backlog") or 0), "loading": bool(st.get("backlog")) or st.get("stopped") == "time budget", "last_success": st.get("last_success"),
+        slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=15 * (now.minute // 15 + 1))      # the timer fires every 15 minutes, around the clock
+        fresh = int(st.get("fresh_backlog") or 0)
+        fresh_ok = st.get("fresh_ok")
+        return {"backlog": int(st.get("backlog") or 0), "fresh_backlog": fresh, "loading": bool(st.get("backlog")) or bool(fresh) or st.get("stopped") == "time budget",
+                "last_success": st.get("last_success"), "fresh_ok": fresh_ok, "fresh_ok_hhmm": fresh_ok[11:16] if fresh_ok else None, "staged": int(st.get("staged") or 0),
                 "listing_complete_until": st.get("listing_complete_until"), "next_pull": slot.strftime("%H:%M")}
 
     def clip_file(self, clip_id):
@@ -281,9 +279,13 @@ class Cameras:
             db.close()
         if not row:
             raise GwError(404, "not_found", "no such clip")
-        root = os.path.realpath(self.archive)
-        # the index stores the host path (/srv/library/camera/...): the same tree is mounted at self.archive in the container
-        rel = row["path"].split("/camera/", 1)[-1] if "/camera/" in row["path"] else os.path.basename(row["path"])
+        if self.stage_clips and "/camera-staging/clips/" in row["path"]:        # staged overnight on the NVMe, not yet moved to the library
+            root = os.path.realpath(self.stage_clips)
+            rel = row["path"].split("/camera-staging/clips/", 1)[1]
+        else:
+            root = os.path.realpath(self.archive)
+            # the index stores the host path (/srv/library/camera/...): the same tree is mounted at self.archive in the container
+            rel = row["path"].split("/camera/", 1)[-1] if "/camera/" in row["path"] else os.path.basename(row["path"])
         real = os.path.realpath(os.path.join(root, rel))
         if not real.startswith(root + os.sep) or not real.endswith(".mp4") or not os.path.isfile(real):
             raise GwError(404, "not_found", "no such clip")

@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -269,11 +270,12 @@ class Cam(BaseCase):
         try:
             st = e.req("GET", "/v1/cameras", who="ivan").json()["archive"]["status"]
             self.assertEqual((st["backlog"], st["loading"]), (12, True))
-            self.assertRegex(st["next_pull"], r"^(0[89]|1[0-9]|20|08):00$")
+            self.assertRegex(st["next_pull"], r"^\d\d:(00|15|30|45)$")
             from datetime import datetime
-            self.assertEqual(cams.status(datetime(2026, 11, 12, 9, 30))["next_pull"], "10:00")
-            self.assertEqual(cams.status(datetime(2026, 11, 12, 20, 30))["next_pull"], "08:00")            # after the last run of the day: tomorrow morning
-            self.assertEqual(cams.status(datetime(2026, 11, 12, 6, 0))["next_pull"], "08:00")
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 9, 30))["next_pull"], "09:45")
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 20, 50))["next_pull"], "21:00")            # every 15 minutes, around the clock
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 23, 50))["next_pull"], "00:00")
+            self.assertEqual(cams.status(datetime(2026, 11, 12, 6, 0))["next_pull"], "06:15")
             json.dump({"backlog": 0, "stopped": ""}, open(os.path.join(e.archive_root, "status.json"), "w"))
             self.assertFalse(e.req("GET", "/v1/cameras", who="ivan").json()["archive"]["status"]["loading"])
         finally:
@@ -375,6 +377,31 @@ class Page(BaseCase):
             db.execute("DELETE FROM clips WHERE id IN ('0|s1','1|s2','2|s3','2|far')")
             db.commit()
             db.close()
+
+    def test_clips_staged_on_the_nvme_are_listed_and_served_and_the_status_says_when_it_was_updated(self):
+        import json as _json
+        from gw.cameras import Cameras
+        from gw.auth import GwError
+        meta, lib = tempfile.mkdtemp(prefix="gw-meta-"), tempfile.mkdtemp(prefix="gw-lib-")
+        os.makedirs(os.path.join(meta, "clips", "2026-11-12", "ch0"))
+        with open(os.path.join(meta, "clips", "2026-11-12", "ch0", "230000-230030.mp4"), "wb") as f:
+            f.write(b"x" * 500)
+        db = sqlite3.connect(os.path.join(meta, "index.sqlite"))
+        db.execute("""CREATE TABLE clips (id TEXT PRIMARY KEY, ch INTEGER, kind TEXT, begin TEXT, end TEXT, cam_kb INTEGER,
+                      size INTEGER, path TEXT, dur REAL, fps REAL, pulled_at TEXT)""")
+        for i, (cid, p) in enumerate((("0|a", "/var/lib/camera-staging/clips/2026-11-12/ch0/230000-230030.mp4"), ("0|evil", "/var/lib/camera-staging/clips/../../../etc/passwd"))):
+            db.execute("INSERT INTO clips VALUES (?,?,?,?,?,?,?,?,?,?,?)", (cid, 0, "M", "2026-11-12 23:00:0%d" % i, "2026-11-12 23:00:30", 1, 500, p, 30.0, 12.0, "x"))
+        db.commit()
+        db.close()
+        _json.dump({"backlog": 0, "fresh_backlog": 0, "fresh_ok": "2026-11-12 23:15:04", "staged": 2, "stopped": ""}, open(os.path.join(meta, "status.json"), "w"))
+        cams = Cameras("http://127.0.0.1:1", lib, [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "x"}], time.time, meta_dir=meta)
+        real, row = cams.clip_file(1)
+        self.assertTrue(real.startswith(os.path.realpath(meta) + os.sep) and real.endswith("230000-230030.mp4"))
+        with self.assertRaises(GwError):
+            cams.clip_file(2)                                                          # a path that leaves the staging area is refused
+        self.assertEqual(len(cams.clips("2026-11-12")), 2)
+        st = cams.status()
+        self.assertEqual((st["fresh_ok_hhmm"], st["staged"], st["loading"]), ("23:15", 2, False))
 
     def test_the_page_has_the_two_tabs_the_player_first_and_waits_for_all_lenses(self):
         js = self.e.client.get("/static/cameras.js").text

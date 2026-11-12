@@ -1,9 +1,9 @@
 [Unit]
-Description=Pull front-yard camera clips every 2 h between 08:00 and 20:00 (night clips arrive with the 08:00 run; nothing in quiet hours 21:00-08:00)
+Description=Pull front-yard camera clips every 15 minutes, around the clock (Task 34c: fresh clips first; night clips are staged on the NVMe)
 
 [Timer]
-OnCalendar=*-*-* 08,10,12,14,16,18,20:00:00
-RandomizedDelaySec=300
+OnCalendar=*:0/15
+RandomizedDelaySec=30
 Persistent=false
 
 [Install]

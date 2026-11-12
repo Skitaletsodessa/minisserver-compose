@@ -32,7 +32,7 @@ WATCHERS = [
     ("listener-watch.service", 900),
     ("gateway-watch.service", 900),
     ("policy-drift-watch.service", 900),
-    ("camera-pull.service", 14 * 3600),       # Task 34: runs 08-20 every 2 h; the longest legitimate gap is the night (20:00 -> 08:00)
+    ("camera-pull.service", 3600),            # Task 34c: runs every 15 minutes around the clock
     ("camera-health.service", 3 * 3600),
 ]
 PI_REPORT_KEY = "/home/skit/.ssh/piserver_report"

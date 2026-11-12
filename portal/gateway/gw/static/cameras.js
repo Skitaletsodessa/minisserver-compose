@@ -243,6 +243,7 @@
     clear(box);
     archive.box = box;
     box.appendChild(el("h2", "", T("cam_archive_all")));
+    if (status && status.fresh_ok_hhmm) { box.appendChild(el("p", "meta cam-updated", T("cam_updated", { t: status.fresh_ok_hhmm }))); }
     if (status && status.loading) { box.appendChild(el("p", "note", T("cam_loading_now", { t: status.next_pull }))); }
     // the player first: it is always at the top of the tab
     var player = el("section", "cam-player");
