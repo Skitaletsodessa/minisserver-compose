@@ -1,0 +1,18 @@
+// Task 35 C (Ivan 2026-11-13): everything updates automatically. All Debian origins (not only security), plus the Docker and Tailscale repositories.
+// Reboots are NOT done by apt: minis-reboot-if-needed.timer reboots on Wed/Sat 04:30 only if /var/run/reboot-required exists and the Pi answers DNS.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename},label=Debian";
+        "origin=Debian,codename=${distro_codename}-updates,label=Debian";
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+        "origin=Docker";
+        "origin=Tailscale";
+};
+Unattended-Upgrade::Package-Blacklist { };
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::InstallOnShutdown "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";   // keep the previous kernel: it is the rollback
+Unattended-Upgrade::Remove-New-Unused-Dependencies "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::SyslogEnable "true";

@@ -34,6 +34,8 @@ WATCHERS = [
     ("policy-drift-watch.service", 900),
     ("camera-pull.service", 3600),            # Task 34c: runs every 15 minutes around the clock
     ("camera-health.service", 3 * 3600),
+    ("minis-container-update.service", 8 * 24 * 3600),      # Task 35 C2: weekly, Sunday 11:00
+    ("minis-reboot-if-needed.service", 5 * 24 * 3600),       # Task 35 C1: runs on Wed and Sat (every 30 min from 04:30)
 ]
 PI_REPORT_KEY = "/home/skit/.ssh/piserver_report"
 HEARTBEAT_LIST_MAX = 6          # the active list is capped; the rest is summarised as "+N more"

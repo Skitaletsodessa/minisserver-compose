@@ -1,0 +1,2 @@
+// Task 35 C1: never auto-remove kernels: the previous kernel is the rollback.
+APT::NeverAutoRemove { "^linux-image-.*"; "^linux-modules-.*"; "^linux-headers-.*"; };

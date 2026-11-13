@@ -1,0 +1,13 @@
+[Unit]
+Description=minisserver restarts on Wednesday and Saturday 04:30 (the Pi on Tuesday and Friday); retries every 30 min until 07:45
+[Timer]
+OnCalendar=Wed,Sat 04:30:00
+OnCalendar=Wed,Sat 05:00:00
+OnCalendar=Wed,Sat 05:30:00
+OnCalendar=Wed,Sat 06:00:00
+OnCalendar=Wed,Sat 06:30:00
+OnCalendar=Wed,Sat 07:00:00
+OnCalendar=Wed,Sat 07:30:00
+Persistent=false
+[Install]
+WantedBy=timers.target

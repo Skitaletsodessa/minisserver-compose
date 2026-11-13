@@ -1,0 +1,10 @@
+[Unit]
+Description=Checks after every start of the machine (Task 35 C3)
+After=docker.service tailscaled.service network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/auto-update/post-update-run.sh boot 240
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly container update run with health checks and rollback (Task 35 C2)
+After=docker.service network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=skit
+Nice=10
+TimeoutStartSec=3h
+ExecStart=/usr/bin/python3 /srv/compose/_system/auto-update/container-update.py

@@ -60,6 +60,34 @@ print("  %-5s plugs unavailable: %s" % ("OK" if not off else "WARN", off or "non
 PY
 (cd /srv/compose/portal/schedules/applier && timeout 200 python3 portal_apply.py 2>&1 | tail -1 | sed 's/^/  applier: /')
 
+echo "== camera pull, backups, the Pi (Task 35 C3)"
+python3 - <<'PY'
+import json, subprocess, time
+from datetime import datetime
+def age_h(ts):
+    return (time.time() - ts) / 3600.0
+try:
+    st = json.load(open("/var/lib/camera-staging/status.json"))
+    t = datetime.strptime(st["fresh_ok"], "%Y-%m-%d %H:%M:%S").timestamp()
+    a = age_h(t)
+    print("  %-5s camera pull: last fresh run %.0f min ago (backlog %s, errors %s)" % ("OK" if a < 1 else ("WARN" if a < 3 else "FAIL"), a * 60, st.get("backlog"), st.get("errors")))
+except Exception as e:
+    print("  WARN  camera pull status unreadable: %s" % e)
+for unit, label in (("restic-backup.service", "restic local"), ("restic-backup-r2.service", "restic R2")):
+    out = subprocess.run(["systemctl", "show", unit, "-p", "Result", "-p", "ExecMainExitTimestamp"], capture_output=True, text=True).stdout
+    kv = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+    try:
+        ts = datetime.strptime(kv["ExecMainExitTimestamp"].split(" ", 1)[1].rsplit(" ", 1)[0], "%Y-%m-%d %H:%M:%S").timestamp()
+        a = age_h(ts)
+        good = kv.get("Result") == "success"
+        print("  %-5s %s: last run %.1f h ago, result %s" % ("OK" if good and a < 36 else "FAIL", label, a, kv.get("Result")))
+    except Exception:
+        print("  WARN  %s: no run time readable (%s)" % (label, kv.get("Result")))
+PY
+if ping -c1 -W2 192.168.31.5 >/dev/null 2>&1; then ok "the Pi (192.168.31.5) answers ping"; else fail "the Pi does not answer ping"; fi
+pa=$(ssh -T -q -i /home/skit/.ssh/piserver_report -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 skit@192.168.31.5 age 2>/dev/null | grep -o 'origin_watch_age_s=[0-9]*' | cut -d= -f2)
+if [ -z "$pa" ]; then warn "the Pi report (age) could not be read over ssh"; elif [ "$pa" -lt 300 ]; then ok "the Pi's watchdog on this server ran ${pa}s ago"; else warn "the Pi's watchdog last ran ${pa}s ago"; fi
+
 echo "== alerts that are active right now (tier A first)"
 python3 - <<'PY'
 import glob, json, time

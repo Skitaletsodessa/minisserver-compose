@@ -1,0 +1,7 @@
+[Unit]
+Description=Containers update on Sunday 11:00 (outside the vacuum plan windows)
+[Timer]
+OnCalendar=Sun 11:00:00
+Persistent=false
+[Install]
+WantedBy=timers.target

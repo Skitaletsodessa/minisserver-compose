@@ -1,0 +1,6 @@
+[Unit]
+Description=Checks after an update (%i): post-update-check, summary line, tier-B message on FAIL (Task 35 C3)
+[Service]
+Type=oneshot
+User=skit
+ExecStart=/srv/compose/_system/auto-update/post-update-run.sh %i 60
