@@ -261,16 +261,7 @@ minisserver.tail6bf4d5.ts.net:17443 {
 				events 60
 				window 5m
 			}
-			zone camera_clip_per_ip {
-				match {
-					path /v1/cameras/archive/clips/*/video
-				}
-				key    {vars.client_ip}
-				# Task 34e: was 60 per 10 min, 300 for one viewer, 1200 now (two people stepping back fast need ~800); stepping back through events (3 lenses each) hit it after ~17 events and every clip then failed for ~7 min (13:38 on 2026-11-13).
-				# Not an exfiltration guard (60 x 5 MB per 10 min was already far above what the archive holds per day); Funnel bandwidth is the real ceiling.
-				events 1200
-				window 10m
-			}
+			# camera_clip_per_ip removed (Task 34e, Ivan 2026-11-13): clip files are authenticated static files; the limit protected nothing (Funnel bandwidth is the ceiling) and cut off two viewers.
 			zone events_per_ip {
 				match {
 					path /v1/events
