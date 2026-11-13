@@ -1,0 +1,13 @@
+[Unit]
+Description=piserver restarts on Tuesday and Friday 04:30 (the server on Wednesday and Saturday); retries every 30 min until 07:45
+[Timer]
+OnCalendar=Tue,Fri 04:30:00
+OnCalendar=Tue,Fri 05:00:00
+OnCalendar=Tue,Fri 05:30:00
+OnCalendar=Tue,Fri 06:00:00
+OnCalendar=Tue,Fri 06:30:00
+OnCalendar=Tue,Fri 07:00:00
+OnCalendar=Tue,Fri 07:30:00
+Persistent=false
+[Install]
+WantedBy=timers.target

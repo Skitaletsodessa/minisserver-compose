@@ -1,0 +1,30 @@
+#!/bin/bash
+# Task 35 C3 (Pi): read-only checks after an update or a restart. OK / WARN / FAIL lines like the server's post-update-check; the exit status is the FAIL count.
+fails=0
+ok()   { printf "  OK    %s\n" "$*"; }
+warn() { printf "  WARN  %s\n" "$*"; }
+fail() { printf "  FAIL  %s\n" "$*"; fails=$((fails + 1)); }
+echo "== system"
+echo "  uptime: $(uptime -p) | kernel: $(uname -r)"
+[ -e /var/run/reboot-required ] && warn "reboot is still required" || ok "no reboot pending"
+n=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+if [ "$n" = 0 ]; then ok "no failed units"; else fail "$n failed units:"; systemctl --failed --no-legend | cut -c1-110; fi
+t=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
+[ "$t" = "0x0" ] && ok "throttled=0x0" || warn "throttled=$t (power or heat)"
+e=$(journalctl -k -b --no-pager 2>/dev/null | grep -ciE "mmc[0-9]*.*(error|timeout)|I/O error|EXT4-fs error")
+[ "$e" = 0 ] && ok "0 SD card errors in the kernel log" || fail "$e SD/filesystem error lines in the kernel log"
+u=$(df --output=pcent / | tail -1 | tr -d " %")
+[ "$u" -lt 85 ] && ok "root filesystem ${u}% used" || warn "root filesystem ${u}% used"
+echo "== AdGuard replica"
+docker ps --format "{{.Names}} {{.Status}}" | grep -q "^adguardhome Up" && ok "adguardhome container is up" || fail "adguardhome container is not up"
+r=$(dig +short +time=3 +tries=1 @192.168.31.5 example.com | head -1)
+[ -n "$r" ] && ok "the replica answers: $r" || fail "the replica gives no answer on 192.168.31.5"
+b=$(dig +short +time=3 +tries=1 @192.168.31.5 doubleclick.net | head -1)
+[ "$b" = "0.0.0.0" ] && ok "a blocked name is sinkholed" || warn "blocked name answered: $b"
+r=$(dig +short +time=3 +tries=1 @192.168.31.2 example.com | head -1)
+[ -n "$r" ] && ok "the AdGuard on the server answers: $r" || warn "the AdGuard on the server gives no answer"
+echo "== tailnet"
+tailscale status >/dev/null 2>&1 && ok "tailscale is up" || fail "tailscale is not up"
+echo
+[ "$fails" = 0 ] && echo "RESULT: no FAIL" || echo "RESULT: $fails FAIL"
+exit "$fails"

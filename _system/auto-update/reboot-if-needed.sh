@@ -17,6 +17,23 @@ REQ=${REQ_FILE:-/var/run/reboot-required}
 mkdir -p "$STATE_DIR"
 KEY="reboot-postponed-$NAME"
 
+# A newer kernel than the running one needs a restart even where apt leaves no reboot-required file (Raspberry Pi OS). Compared by the upstream number (6.12.116 > 6.12.115).
+list_kernels() {
+  if [ -n "${KERNELS_CMD:-}" ]; then eval "$KERNELS_CMD"; else dpkg-query -W -f='${Package}\n' 'linux-image-[0-9]*' 2>/dev/null; fi
+}
+kernel_pending() {
+  local run newest
+  run=${UNAME_R:-$(uname -r)}; run=${run%%+*}
+  newest=$(list_kernels | grep -v unsigned | sed 's/^linux-image-//; s/+.*//' | sort -V | tail -1)
+  [ -n "$newest" ] && [ "$newest" != "$run" ] && [ "$(printf '%s\n%s\n' "$run" "$newest" | sort -V | tail -1)" = "$newest" ] && echo "$newest"
+}
+if [ ! -e "$REQ" ]; then
+  kp=$(kernel_pending)
+  if [ -n "$kp" ]; then
+    echo "*** newer kernel installed ($kp) ***" > "$REQ"
+    echo "linux-image-$kp (running ${UNAME_R:-$(uname -r)})" > "$REQ.pkgs"
+  fi
+fi
 if [ ! -e "$REQ" ]; then
   echo "$NAME: no reboot required"
   $NOTIFY clear "$KEY" "$NAME: no reboot pending any more." >/dev/null 2>&1

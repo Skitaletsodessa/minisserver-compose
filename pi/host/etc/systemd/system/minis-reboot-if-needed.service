@@ -1,0 +1,5 @@
+[Unit]
+Description=Restart this machine if updates need it, the other AdGuard answers and the time is right (Task 35 C1)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/reboot-if-needed.sh

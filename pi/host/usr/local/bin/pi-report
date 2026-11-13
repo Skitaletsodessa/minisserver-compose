@@ -18,3 +18,5 @@ echo "upgradable=$n security=$sec"
 apt-get -s upgrade 2>/dev/null | grep '^Inst ' | awk '{print $2}' | head -20 | tr '\n' ' '; echo
 # Task 24: has the Pi-side watchdog (adguard-watch-origin, every minute) run lately? Age of its counter file in seconds.
 age
+# Task 35 C3: the last lines of the update summary (what was installed, kernel change, the check result)
+tail -n 3 /var/log/minis-update-summary.log 2>/dev/null | sed 's/^/update_summary: /'

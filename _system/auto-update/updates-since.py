@@ -20,7 +20,7 @@ def apt_updates(since, hist):
         for line in block.splitlines():
             if line.startswith(("Upgrade: ", "Install: ")):
                 for name, old, new in re.findall(r"([\w.+-]+):\w+ \(([^,)]*)(?:, ([^)]*))?\)", line):
-                    out.append("%s %s" % (name, (old + ">" + new) if new else old))
+                    out.append("%s %s" % (name, (old + ">" + new) if new and new != "automatic" else old))
     return out
 
 

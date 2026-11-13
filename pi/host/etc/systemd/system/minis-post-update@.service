@@ -1,0 +1,5 @@
+[Unit]
+Description=Checks after an update (%i) on piserver (Task 35 C3)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/post-update-run.sh %i 60

@@ -1,0 +1,9 @@
+[Unit]
+Description=Checks after every start of piserver (Task 35 C3)
+After=docker.service tailscaled.service network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/post-update-run.sh boot 180
+[Install]
+WantedBy=multi-user.target

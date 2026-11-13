@@ -36,6 +36,14 @@ echo "$out" | grep -q "DRY RUN - would reboot now (packages: linux-image-6.12.11
 grep -q '"reason_pkgs": "linux-image-6.12.116"' "$T/state/pending-reboot.json" && ok "the pending-reboot record names the package" || bad "no pending record"
 [ ! -s "$T/notify.log" ] && ok "no message when everything is fine" || bad "unexpected message: $(cat "$T/notify.log")"
 
+# 2b. no reboot-required file, but a newer kernel is installed (Raspberry Pi OS): treated as needing a restart; the same kernel is not
+: > "$T/notify.log"; rm -f "$T/reboot-required" "$T/reboot-required.pkgs" "$T/state/pending-reboot.json"
+out=$(env "${env_common[@]}" UNAME_R=6.18.50+rpt-rpi-v7 KERNELS_CMD="printf 'linux-image-6.18.50+rpt-rpi-v7\nlinux-image-6.18.60+rpt-rpi-v7\nlinux-image-6.18.60+rpt-rpi-v7-unsigned\n'" bash "$HERE/reboot-if-needed.sh")
+echo "$out" | grep -q "DRY RUN - would reboot now (packages: linux-image-6.18.60" && ok "a newer installed kernel needs a restart" || bad "kernel pending: $out"
+rm -f "$T/reboot-required" "$T/reboot-required.pkgs"
+out=$(env "${env_common[@]}" UNAME_R=6.12.115+deb13.1-amd64 KERNELS_CMD="printf 'linux-image-6.12.94+deb13-amd64\nlinux-image-6.12.115+deb13.1-amd64\n'" bash "$HERE/reboot-if-needed.sh")
+echo "$out" | grep -q "no reboot required" && ok "the running kernel is the newest: no restart" || bad "kernel same: $out"
+echo "*** System restart required ***" > "$T/reboot-required"; printf 'linux-image-6.12.116\n' > "$T/reboot-required.pkgs"
 # 3. reboot required, the peer's AdGuard does not answer: postponed + ONE tier-B alert, no reboot
 : > "$T/notify.log"; rm -f "$T/state/pending-reboot.json"
 out=$(env "${env_common[@]}" FAKE_DIG=dead bash "$HERE/reboot-if-needed.sh")

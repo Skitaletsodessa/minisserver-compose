@@ -30,11 +30,21 @@ fi
 [ -f /etc/sudoers.d/skit-nopasswd ] || { echo 'skit ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/skit-nopasswd
   chmod 440 /etc/sudoers.d/skit-nopasswd; visudo -cf /etc/sudoers.d/skit-nopasswd && did sudoers; }
 
-say "apt: no automatic anything"
-put etc/apt/apt.conf.d/20auto-upgrades 644
-for t in apt-daily.timer apt-daily-upgrade.timer; do
-  if systemctl is-enabled "$t" >/dev/null 2>&1; then systemctl disable --now "$t" >/dev/null 2>&1; did "disabled $t"; fi
+say "apt: automatic updates (Task 35 C1, Ivan 2026-11-13; replaces the old 'nothing automatic' rule) + restart slot Tue/Fri 04:30 + checks after updates"
+UNITS_CHANGED=0
+for f in etc/apt/apt.conf.d/20auto-upgrades etc/apt/apt.conf.d/52minis-unattended-upgrades etc/apt/apt.conf.d/53minis-keep-kernels etc/default/minis-auto-reboot; do put "$f" 644 || true; done
+for f in etc/systemd/system/apt-daily.timer.d/minis.conf etc/systemd/system/apt-daily-upgrade.timer.d/minis.conf etc/systemd/system/apt-daily-upgrade.service.d/minis.conf \
+         etc/systemd/system/minis-reboot-if-needed.service etc/systemd/system/minis-reboot-if-needed.timer "etc/systemd/system/minis-post-update@.service" etc/systemd/system/minis-post-update-boot.service; do
+  put "$f" 644 && UNITS_CHANGED=1
 done
+for f in reboot-if-needed.sh post-update-run.sh after-apt-run.sh pi-post-update-check; do put "usr/local/sbin/$f" 755 || true; done
+put usr/local/sbin/updates-since.py 755 || true
+if [ "$UNITS_CHANGED" = 1 ]; then systemctl daemon-reload; systemctl restart apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1; fi
+for t in apt-daily.timer apt-daily-upgrade.timer minis-reboot-if-needed.timer; do
+  systemctl is-enabled "$t" >/dev/null 2>&1 && systemctl is-active "$t" >/dev/null 2>&1 || { systemctl enable --now "$t" >/dev/null 2>&1; did "enabled $t"; }
+done
+systemctl is-enabled minis-post-update-boot.service >/dev/null 2>&1 || { systemctl enable minis-post-update-boot.service >/dev/null 2>&1; did "enabled minis-post-update-boot.service"; }
+install -d -m 755 /var/lib/minis-auto-reboot
 
 say "packages: upgrade, remove what a DNS appliance does not need, add what it does"
 export DEBIAN_FRONTEND=noninteractive
@@ -45,7 +55,7 @@ for p in avahi-daemon triggerhappy bluez cups modemmanager rpi-connect rpi-conne
   if dpkg -s "$p" 2>/dev/null | grep -q '^Status: install ok installed'; then apt-get -y -qq purge "$p" >/dev/null 2>&1; did "purged $p"; fi
 done
 apt-get -y -qq autoremove --purge >/dev/null
-for p in nftables fake-hwclock python3-yaml curl bind9-dnsutils; do
+for p in nftables fake-hwclock python3-yaml curl bind9-dnsutils unattended-upgrades; do
   dpkg -s "$p" 2>/dev/null | grep -q '^Status: install ok installed' || { apt-get -y -qq install "$p" >/dev/null 2>&1; did "installed $p"; }
 done
 

@@ -1,0 +1,1 @@
+../../../../../_system/auto-update/post-update-run.sh

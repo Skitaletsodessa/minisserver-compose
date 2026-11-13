@@ -1,0 +1,9 @@
+NAME=piserver
+PEER_DNS=192.168.31.2
+NOTIFY="python3 /usr/local/lib/watchnotify.py"
+WATCH_ENV_FILE=/etc/piserver/telegram.env
+WATCH_STATE_DIR=/var/lib/minis-auto-reboot/alerts
+AU_DIR=/usr/local/sbin
+CHECK=/usr/local/sbin/pi-post-update-check
+SUMMARY=/var/log/minis-update-summary.log
+NOGIT=1

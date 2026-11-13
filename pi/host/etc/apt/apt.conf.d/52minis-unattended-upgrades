@@ -1,0 +1,16 @@
+// Task 35 C1: all Raspbian / Raspberry Pi Foundation updates (not only security) plus the Docker and Tailscale repositories. No automatic reboot here (the timer does it), the previous kernel stays.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Raspbian,codename=${distro_codename}";
+        "origin=Raspberry Pi Foundation,codename=${distro_codename}";
+        "origin=Docker";
+        "origin=Tailscale";
+};
+Unattended-Upgrade::Package-Blacklist { };
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::InstallOnShutdown "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::SyslogEnable "true";
