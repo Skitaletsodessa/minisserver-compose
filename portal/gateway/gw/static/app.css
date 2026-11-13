@@ -232,3 +232,19 @@ body.cam-has-big { overflow: hidden; }
 ul.cam-clips { max-height: 42vh; overflow-y: auto; }
 button.cam-clip-btn[aria-current="true"] { outline: 3px solid var(--accent); outline-offset: -3px; font-weight: 600; }
 .cam-pane[hidden], .cam-archive[hidden] { display: none; }
+
+/* Task 35 B: true full screen (Fullscreen API) and the landscape layout. The big view is the same in both: the figure fills the screen, the video keeps its 16:9. */
+.cam-tile:fullscreen, .cam-tile:-webkit-full-screen { width: 100%; height: 100%; background: #000; color: #fff; display: flex; flex-direction: column; justify-content: center; }
+.cam-tile:fullscreen .cam-video, .cam-tile:-webkit-full-screen .cam-video { max-height: calc(100vh - 110px); }
+@media (orientation: landscape) and (max-height: 560px) {
+  .cam-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cam-more { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; }
+  .cam-more .meta { margin: 0; }
+  .cam-syncgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cam-video { max-height: calc(100vh - 160px); }
+  .cam-tile.cam-big .cam-video, .cam-tile:fullscreen .cam-video, .cam-tile:-webkit-full-screen .cam-video { height: 100vh; max-height: none; width: auto; max-width: 100%; margin: 0 auto; aspect-ratio: 16 / 9; }
+  .cam-tile.cam-big { justify-content: flex-start; position: fixed; }
+  .cam-tile.cam-big .cam-cap, .cam-tile:fullscreen .cam-cap, .cam-tile:-webkit-full-screen .cam-cap { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .55); }
+  .cam-tile.cam-big .cam-status, .cam-tile:fullscreen .cam-status, .cam-tile:-webkit-full-screen .cam-status { position: absolute; left: 0; right: 0; bottom: 56px; background: rgba(0, 0, 0, .55); }
+  .cam-player { scroll-margin-top: 8px; }
+}

@@ -51,6 +51,27 @@
   function camName(id) { for (var i = 0; i < cams.length; i++) { if (cams[i].id === id) { return cams[i].name; } } return id; }
   function liveUrl(id, hd) { return "/v1/cameras/" + id + "/live?codec=h264" + (hd ? "&quality=hd" : "") + "&t=" + Date.now(); }
   function noop() {}
+  // Task 35 B: REAL full screen. In a browser the Fullscreen API; in the app WebChromeClient.onShowCustomView answers it (before: only a CSS overlay). Where it is not available the CSS overlay still works.
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+  function enterFs(node) {
+    var f = node.requestFullscreen || node.webkitRequestFullscreen;
+    if (!f) { return false; }
+    try { var p = f.call(node); if (p && p.catch) { p.catch(noop); } return true; } catch (e) { return false; }
+  }
+  function leaveFs() {
+    var f = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!f || !fsElement()) { return; }
+    try { var p = f.call(document); if (p && p.catch) { p.catch(noop); } } catch (e) { /* nothing to leave */ }
+  }
+  var fsExit = [];                                                      // callbacks that fold the CSS state back when the system leaves full screen (back gesture)
+  function onFsChange() {
+    if (fsElement()) { return; }
+    var list = fsExit.slice();
+    fsExit = [];
+    list.forEach(function (fn) { fn(); });
+  }
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("webkitfullscreenchange", onFsChange);
   function duration(s) {
     s = Math.max(1, Math.round(s));
     if (s < 60) { return T("cam_dur_s", { s: s }); }
@@ -138,8 +159,15 @@
     var cap = el("figcaption", "cam-cap");
     cap.appendChild(el("span", "cam-name", c.name));
     var expand = btn(T("cam_full"), function () { toggleBig(t); }, "cam-expand");
-    var hdBtn = btn(T("cam_hd"), function () { t.tries = 0; t.hdFailed = false; startTile(t, !t.hd, false); }, "cam-hdbtn");
-    hdBtn.hidden = true;
+    var hdBtn = btn(T("cam_hd"), function () {
+      if (!hdOk) {                                                      // the public door never carries the main stream (ADR 0009): say so, do not hide the button
+        setState(t, T("cam_hd_unavailable"), false);
+        clearTimeout(t.hdMsgTimer);
+        t.hdMsgTimer = setTimeout(function () { if (!t.video.paused && !t.hdFailed) { setState(t, "", false); } }, 9000);
+        return;
+      }
+      t.tries = 0; t.hdFailed = false; startTile(t, !t.hd, false);
+    }, "cam-hdbtn");
     var again = btn(T("cam_continue"), function () { t.tries = 0; startTile(t, t.hd, false); }, "cam-continue");
     again.hidden = true;
     cap.appendChild(expand); cap.appendChild(hdBtn);
@@ -178,7 +206,7 @@
     t.fig.classList.toggle("cam-big", t.big);
     document.body.classList.toggle("cam-has-big", t.big);
     t.expand.textContent = t.big ? T("cam_close_big") : T("cam_full");
-    t.hdBtn.hidden = !(t.big && hdOk);
+    if (t.big) { t.inFs = enterFs(t.fig); if (t.inFs) { fsExit.push(function () { if (t.big) { toggleBig(t); } }); } } else { leaveFs(); t.inFs = false; }
     if (!t.big) { t.hdFailed = false; }
     if (!t.big && t.hd) { t.tries = 0; startTile(t, false, false); }     // leaving the big view returns to the light stream
   }
@@ -377,6 +405,16 @@
     fig.classList.toggle("cam-big", on);
     document.body.classList.toggle("cam-has-big", on);
     v.controls = on;
+    if (on) {
+      if (enterFs(fig)) {
+        fsExit.push(function () {
+          if (fig.classList.contains("cam-big")) {
+            fig.classList.remove("cam-big"); document.body.classList.remove("cam-has-big"); v.controls = false;
+            var b = fig.querySelector(".cam-expand"); if (b) { b.textContent = T("cam_full"); }
+          }
+        });
+      }
+    } else { leaveFs(); }
   }
   function showEvent(ev, scroll) {
     archive.current = ev;
