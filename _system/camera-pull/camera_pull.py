@@ -77,6 +77,9 @@ def db_open(archive):
     db.execute("""CREATE TABLE IF NOT EXISTS clips (id TEXT PRIMARY KEY, ch INTEGER, kind TEXT, begin TEXT, end TEXT, cam_kb INTEGER,
                   size INTEGER, path TEXT, dur REAL, fps REAL, pulled_at TEXT)""")
     db.execute("CREATE INDEX IF NOT EXISTS clips_begin ON clips(begin)")
+    if "corrupt" not in [r[1] for r in db.execute("PRAGMA table_info(clips)")]:
+        db.execute("ALTER TABLE clips ADD COLUMN corrupt TEXT")                 # Task 35b-3: NULL = not checked yet, '' = decodes cleanly, anything else = the decoder's first complaint
+        db.commit()
     return db
 
 
@@ -106,6 +109,43 @@ def real_remux(raw, out, listed_seconds):
         raise RuntimeError("remuxed file has no duration")
     os.replace(part, out)
     return dur, fps
+
+
+def real_check(path):
+    """Full decode of one clip (about 1 s for a 1440p clip): '' when it decodes cleanly, else the decoder's first complaint (e.g. 'CABAC_MAX_BIN'). Damaged-on-the-card clips
+    play on a desktop (error concealment) but may stop a phone's hardware decoder."""
+    r = subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-nostdin", "-i", path, "-f", "null", "-"], capture_output=True, text=True, timeout=300)
+    err = (r.stderr or "").strip()
+    if not err and r.returncode != 0:
+        err = "ffmpeg rc %d" % r.returncode
+    return re.sub(r"^\[[^\]]*\]\s*", "", err.splitlines()[0])[:120] if err else ""         # without the decoder's '[hevc @ 0x...]' prefix (a pointer, different every time)
+
+
+SWEEP_BUDGET_S = int(os.environ.get("CAMERA_SWEEP_BUDGET_S", "150"))        # by day, per run: decode-check clips that have no verdict yet (newest first)
+
+
+def sweep_unchecked(db, check=None, budget_s=SWEEP_BUDGET_S, now=None, meta_night=True):
+    """Daytime only (the night belongs to staging and a quiet machine): give every clip without a verdict one, newest first, within `budget_s` seconds. Returns (checked, flagged)."""
+    check = check or real_check
+    now = now or datetime.now()
+    if meta_night and is_night(now):
+        return 0, 0
+    t0, n, bad = time.time(), 0, 0
+    for cid, path in list(db.execute("SELECT id, path FROM clips WHERE corrupt IS NULL ORDER BY begin DESC")):
+        if time.time() - t0 > budget_s:
+            break
+        if not os.path.exists(path):
+            continue
+        try:
+            verdict = check(path)
+        except Exception as e:  # noqa: BLE001 - a failing check leaves the clip unchecked, it must not stop the run
+            print(f"check failed {cid}: {type(e).__name__}")
+            continue
+        db.execute("UPDATE clips SET corrupt=? WHERE id=?", (verdict, cid))
+        db.commit()
+        n += 1
+        bad += 1 if verdict else 0
+    return n, bad
 
 
 GO2RTC_API = os.environ.get("CAMERA_GO2RTC_API", "http://127.0.0.1:18984/api/streams")
@@ -260,12 +300,13 @@ def move_staged(db, archive, stage_root, cap, disk, now, res):
             os.rmdir(dp)
 
 
-def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=None, disk=None, busy=None, sleep=time.sleep, meta=None, stage_disk=None):
+def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=None, disk=None, busy=None, sleep=time.sleep, meta=None, stage_disk=None, check=None):
     """One run (Task 34c). meta = the directory of index.sqlite, status.json, the staging area `clips/` and the temporary download (NVMe in production; None = the archive itself,
     no night staging). Order: (day) move staged clips -> FRESH (clips younger than FRESH_WINDOW = 3 h, NEWEST first) -> BACKFILL (the rest of the card,
     oldest first, only when no fresh clip is pending and time is left). Night: every clip goes to the staging area while it has room, so the library disk stays idle."""
     now = now or datetime.now()
     cap = CAP_BYTES if cap is None else cap
+    check = check or real_check
     cam_factory = cam_factory or camlib.DVRIPCam
     staging = meta is not None
     meta = meta or archive
@@ -344,8 +385,16 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
                 listed = (datetime.strptime(c["end"], FMT) - datetime.strptime(c["begin"], FMT)).total_seconds()
                 dur, fps = remux(raw, out, listed)
                 size = os.path.getsize(out)
-                db.execute("INSERT OR REPLACE INTO clips VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                           (c["id"], c["ch"], c["kind"], c["begin"], c["end"], c["kb"], size, out, dur, fps, now.strftime(FMT)))
+                verdict = None                                                  # Task 35b-3: decode check at pull time (by day every clip; at night only fresh ones, the sweep does the rest)
+                if not (night and backfill):
+                    try:
+                        verdict = check(out)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"check failed {c['id']}: {type(e).__name__}")
+                if verdict:
+                    res["corrupt"] = res.get("corrupt", 0) + 1
+                db.execute("INSERT OR REPLACE INTO clips (id, ch, kind, begin, end, cam_kb, size, path, dur, fps, pulled_at, corrupt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (c["id"], c["ch"], c["kind"], c["begin"], c["end"], c["kb"], size, out, dur, fps, now.strftime(FMT), verdict))
                 db.commit()
                 have.add(c["id"])
                 fails.pop(c["id"], None)
@@ -396,6 +445,9 @@ def run(env, now=None, cam_factory=None, remux=real_remux, archive=ARCHIVE, cap=
             else:
                 res["backlog"] = len(left)
     st["backfill"] = bf
+    n_chk, n_bad = sweep_unchecked(db, check, now=now, meta_night=staging)
+    if n_chk:
+        res["swept"], res["swept_corrupt"] = n_chk, n_bad
     shutil.rmtree(os.path.join(meta, ".tmp"), ignore_errors=True)
     roots = [stage_root] + ([archive] if (res["deleted"] or res.get("moved") or res.get("staged_dropped")) else [])     # the library disk is only walked when something changed there
     for root in roots:

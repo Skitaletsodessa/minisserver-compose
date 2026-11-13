@@ -12,10 +12,13 @@ Weekly run (Sunday 11:00, minis-container-update.timer). For every entry of stac
   3. health: container running (and healthy where it has a HEALTHCHECK) plus the entry's own command, twice, 10 s apart; the restart counter must not move
   4. any failure: the compose file is restored byte for byte, the service recreated from the previous image (still present: nothing is pruned here), health checked again,
      ONE tier-B message; success: the compose change is committed and pushed (rule 6/9).
-Every outcome is one line of container-updates.jsonl (read by post-update-run.sh for the summary line). The whole run takes a lock, refuses to run in quiet hours (21:00-08:00)
-and while a vacuum plan is running unless --force. `--dry-run` only prints the plan. Never run with -x (no secrets are read here, but the habit matters).
+Every outcome is one line of container-updates.jsonl (read by post-update-run.sh for the summary line). The whole run takes a lock and refuses to run in quiet hours (21:00-08:00)
+unless --force. `--dry-run` only prints the plan. Never run with -x (no secrets are read here, but the habit matters).
+Task 35b: an entry with "guard": true (Home Assistant, the gateway) is recreated only when ha_guard.py says the house is idle (no vacuum plan running, no schedule edge within
+10 min, no plug on outside its window / timed run); otherwise the run goes on with the other entries, retries the blocked ones every 15 min until 14:00, then postpones them a week
+with ONE tier-B message. An entry with "gate": "<shell command with {image}>" (our own images) must pass its test suites on the NEW image before it is deployed; red = old image stays.
 
-usage: container-update.py [--dry-run] [--only NAME] [--force] [--conf FILE] [--log FILE]"""
+usage: container-update.py [--dry-run] [--only NAME] [--force] [--conf FILE] [--log FILE] [--retry-until HH:MM] [--retry-every SECONDS]"""
 import argparse
 import fcntl
 import json
@@ -29,6 +32,8 @@ import urllib.request
 from datetime import datetime
 
 DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, DIR)
+import ha_guard  # noqa: E402
 NOTIFY = os.environ.get("NOTIFY", "python3 /srv/compose/_system/lib/watchnotify.py").split()
 
 # ── pure helpers (unit-tested) ────────────────────────────────────────────────────────────────────────────────────
@@ -267,6 +272,20 @@ def candidate_for(entry, current_ref, cfg):
     return None, "unknown policy " + policy
 
 
+def guard_blockers(entry, args):
+    """Reasons this entry must wait right now ([] = go). Only entries flagged "guard" are checked; --guard-cmd (tests) replaces the live check: rc != 0 blocks, stdout is the reason."""
+    if not entry.get("guard"):
+        return []
+    if getattr(args, "guard_cmd", None):
+        rc, out = sh(args.guard_cmd, shell=True, timeout=60)
+        return [] if rc == 0 else [out or "guard command failed"]
+    return ha_guard.check()
+
+
+def blocked(entry, why):
+    return {"service": entry["name"], "result": "blocked", "reason": why}
+
+
 def update_own(entry, args, logpath):
     """Our own image (gateway, schedules, relay) on a base pinned by digest: take the new digest of the base tag, rebuild, smoke-test the NEW image before anything is touched,
     deploy with the health check, and on any failure put the previous image and the previous Dockerfile back."""
@@ -288,6 +307,9 @@ def update_own(entry, args, logpath):
     why = "base %s: %s -> %s" % (base_tag, old_dig[7:19], new_dig[7:19])
     if args.dry_run:
         return {"service": name, "result": "would-update", "reason": why}
+    b = guard_blockers(entry, args)
+    if b:
+        return blocked(entry, "; ".join(b))
     rc, prev_id = sh(["docker", "inspect", "--format", "{{.Image}}", entry["containers"][0]])
     if rc != 0:
         return {"service": name, "result": "skipped", "reason": "the running container was not found"}
@@ -301,6 +323,18 @@ def update_own(entry, args, logpath):
         sh(["docker", "tag", prev_tag, entry["image"]])
         alert("container-update-" + name, "rebuild of %s on the new base (%s) FAILED before deployment (build or smoke test); nothing was changed, the old image still runs. %s" % (name, why, out[-160:]))
         return {"service": name, "result": "failed", "reason": why + " (build/smoke failed, not deployed)"}
+    if entry.get("gate"):                                                      # the test suites run on the NEW image; red = the old image stays
+        grc, gout = sh(entry["gate"].format(image=entry["image"]), shell=True, timeout=3000)
+        if grc != 0:
+            open(df, "w").write(text)
+            sh(["docker", "tag", prev_tag, entry["image"]])
+            alert("container-update-" + name, "rebuild of %s on the new base (%s): the TEST SUITE IS RED on the new image; nothing was deployed, the old image still runs. %s" % (name, why, gout[-200:]))
+            return {"service": name, "result": "failed", "reason": why + " (test suite red, not deployed)"}
+    b = guard_blockers(entry, args)                                            # late check: the build and the tests took minutes
+    if b:
+        open(df, "w").write(text)
+        sh(["docker", "tag", prev_tag, entry["image"]])
+        return blocked(entry, "; ".join(b))
     rc, out = compose(d, "up", "-d", "--no-deps", "--force-recreate", entry["service"])
     if rc == 0 and wait_healthy(entry):
         git_publish(df, "auto-update: %s %s" % (name, why))
@@ -318,6 +352,10 @@ def update_own(entry, args, logpath):
 def update_entry(entry, args, logpath):
     if entry["policy"] == "build":
         return update_own(entry, args, logpath)
+    if not args.dry_run:                                                       # early check: no point in pulling and testing while the house is busy
+        b = guard_blockers(entry, args)
+        if b:
+            return blocked(entry, "; ".join(b))
     d = entry["dir"]
     compose_path = os.path.join(d, "compose.yaml")
     text = open(compose_path).read()
@@ -333,11 +371,14 @@ def update_entry(entry, args, logpath):
         return {"service": entry["name"], "result": "current" if why == "current" else "skipped", "reason": why}
     if args.dry_run:
         return {"service": entry["name"], "result": "would-update", "reason": why, "to": new_ref}
-    return apply_update(entry, text, compose_path, current_ref, new_ref, why, logpath)
+    return apply_update(entry, text, compose_path, current_ref, new_ref, why, logpath, args)
 
 
-def apply_update(entry, old_text, compose_path, current_ref, new_ref, why, logpath):
+def apply_update(entry, old_text, compose_path, current_ref, new_ref, why, logpath, args=None):
     name = entry["name"]
+    b = guard_blockers(entry, args) if args is not None else []
+    if b:
+        return blocked(entry, "; ".join(b))
     # all members move to the same tag (e.g. Immich server and machine learning)
     new_text = old_text
     for mem in entry["members"]:
@@ -412,7 +453,7 @@ def update_ha(entry, args, logpath, text, current_ref):
     if rc != 0:
         alert("container-update-" + name, "Home Assistant %s was NOT installed: the isolated restore test failed with the candidate image (%s). %s" % (best[1], why, out[-200:]))
         return {"service": name, "result": "skipped", "reason": "restore test failed for " + best[1]}
-    return apply_update(entry, text, os.path.join(entry["dir"], "compose.yaml"), current_ref, new_ref, why, logpath)
+    return apply_update(entry, text, os.path.join(entry["dir"], "compose.yaml"), current_ref, new_ref, why, logpath, args)
 
 
 def main():
@@ -421,6 +462,10 @@ def main():
     ap.add_argument("--only")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--no-post", action="store_true", help="do not run post-update-run.sh afterwards (tests)")
+    ap.add_argument("--retry-until", default="14:00", help="HH:MM: blocked (guarded) entries are retried until then, then postponed a week")
+    ap.add_argument("--retry-every", type=int, default=900, help="seconds between retries of a blocked entry")
+    ap.add_argument("--retry-for", type=int, help="tests: retry for this many seconds instead of until --retry-until")
+    ap.add_argument("--guard-cmd", help="tests: shell command replacing the live guard (rc != 0 = blocked, stdout = reason)")
     ap.add_argument("--conf", default=os.path.join(DIR, "stacks.json"))
     ap.add_argument("--log", default=os.path.join(DIR, "container-updates.jsonl"))
     args = ap.parse_args()
@@ -434,20 +479,50 @@ def main():
     except BlockingIOError:
         print("another container update run holds the lock")
         return 0
-    entries = json.load(open(args.conf))["entries"]
+    entries = [e for e in json.load(open(args.conf))["entries"] if not args.only or e["name"] == args.only]
     results = []
-    for e in entries:
-        if args.only and e["name"] != args.only:
-            continue
+
+    def run_one(e):
         try:
             r = update_entry(e, args, args.log)
         except Exception as ex:  # noqa: BLE001 - one entry must never stop the others
             r = {"service": e["name"], "result": "skipped", "reason": "error %s: %s" % (type(ex).__name__, str(ex)[:150])}
-        results.append(r)
+        if args.dry_run and e.get("guard") and r["result"] == "would-update":
+            gb = guard_blockers(e, args)
+            r["reason"] += " | guard now: " + ("GO" if not gb else "WAIT " + "; ".join(gb))
         print("%-18s %-12s %s" % (r["service"], r["result"], r.get("reason", "")), flush=True)
         if not args.dry_run and r["result"] in ("updated", "rolled-back", "failed"):
             log_line(args.log, r)
-    changed = [r for r in results if r["result"] in ("updated", "rolled-back", "failed")]
+        return r
+
+    deferred = []
+    for e in entries:
+        r = run_one(e)
+        if r["result"] == "blocked":
+            deferred.append(e)
+        else:
+            results.append(r)
+    if deferred:                                                               # retry the busy-house entries until the deadline, then postpone a week
+        if args.retry_for is not None:
+            deadline = time.time() + args.retry_for
+        else:
+            hh, mm = args.retry_until.split(":")
+            deadline = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).timestamp()
+        while deferred and time.time() + args.retry_every <= deadline:
+            time.sleep(args.retry_every)
+            still = []
+            for e in deferred:
+                r = run_one(e)
+                (still if r["result"] == "blocked" else results).append(e if r["result"] == "blocked" else r)
+            deferred = still
+        for e in deferred:
+            reason = (guard_blockers(e, args) or ["still blocked"])
+            r = {"service": e["name"], "result": "postponed", "reason": "house not idle until the deadline (%s); postponed a week" % "; ".join(reason)}
+            alert("container-update-" + e["name"], "the update of %s was POSTPONED a week: the house was busy until %s (%s). Nothing was changed." % (e["name"], args.retry_until, "; ".join(reason)))
+            print("%-18s %-12s %s" % (r["service"], r["result"], r["reason"]), flush=True)
+            log_line(args.log, r)
+            results.append(r)
+    changed = [r for r in results if r["result"] in ("updated", "rolled-back", "failed", "postponed")]
     if changed and not args.dry_run and not args.no_post:
         subprocess.run([os.path.join(DIR, "post-update-run.sh"), "containers"], capture_output=True, text=True)
     return 0

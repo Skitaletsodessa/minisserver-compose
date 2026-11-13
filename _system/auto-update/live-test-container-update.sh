@@ -139,6 +139,28 @@ cmp -s "$W/own/Dockerfile" "$W/df.good" && [ "$(docker inspect -f '{{.Image}}' a
 D4=$(mkbase "echo d > /ok" | tail -1)
 out=$(run2); echo "$out" | grep -q "rolled-back" && ok "build: a failing health check is rolled back" || bad "health rollback: $out"
 cmp -s "$W/own/Dockerfile" "$W/df.good" && [ "$(docker inspect -f '{{.State.Health.Status}}' au-test-own)" = "healthy" ] && ok "build: previous Dockerfile and a healthy service again" || bad "health rollback state: $(docker inspect -f '{{.State.Health.Status}}' au-test-own)"
+# ── Task 35b: gate (test suites on the NEW image) and guard (busy house: retry, then postpone a week) ──
+D5=$(mkbase "echo e > /ok && echo e > /health" | tail -1)
+own_conf() {   # extra JSON keys -> conf4.json
+  cat > "$W/conf4.json" <<EOF
+{"entries":[{"name":"au-own","dir":"$W/own","policy":"build","base_tag":"$REG/test/base:1","service":"own","image":"au-test-own:local","smoke":"docker run --rm --entrypoint sh {image} -c 'cat /ok'","containers":["au-test-own"],"timeout":60,$1}]}
+EOF
+}
+run4() { python3 "$HERE/container-update.py" --conf "$W/conf4.json" --log "$W/log4.jsonl" --force --no-post "$@"; }
+cp "$W/own/Dockerfile" "$W/df.good"; cur=$(docker inspect -f '{{.Image}}' au-test-own)
+own_conf '"gate":"echo SUITE-RED-on-{image}; false"'
+out=$(run4); echo "$out" | grep -q " failed .*test suite red" && ok "gate: a red test suite on the new image is not deployed" || bad "red gate: $out"
+cmp -s "$W/own/Dockerfile" "$W/df.good" && [ "$(docker inspect -f '{{.Image}}' au-test-own)" = "$cur" ] && [ "$(echo "$out" | grep -c '^ALERT:')" = 1 ] && ok "gate: Dockerfile restored, old container untouched, one alert" || bad "red gate state"
+touch "$W/block"
+own_conf '"guard":true,"gate":"echo suite-ok {image}"'
+out=$(run4 --guard-cmd "[ ! -f $W/block ] || { echo house-busy; false; }" --retry-for 7 --retry-every 3)
+echo "$out" | grep -q " blocked .*house-busy" && echo "$out" | grep -q " postponed " && [ "$(echo "$out" | grep -c '^ALERT:.*POSTPONED')" = 1 ] && ok "guard: a busy house is retried, then postponed a week with ONE alert" || bad "guard postpone: $out"
+cmp -s "$W/own/Dockerfile" "$W/df.good" && [ "$(docker inspect -f '{{.Image}}' au-test-own)" = "$cur" ] && ok "guard: nothing was changed while blocked (Dockerfile and container)" || bad "guard changed something"
+grep -q '"result": "postponed"' "$W/log4.jsonl" && ok "guard: the postponement is in the log" || bad "guard log"
+(sleep 4; rm -f "$W/block") &
+out=$(run4 --guard-cmd "[ ! -f $W/block ] || { echo house-busy; false; }" --retry-for 40 --retry-every 3)
+echo "$out" | grep -q " blocked " && echo "$out" | grep -q " updated " && ok "guard: blocked at first, deployed on the retry once the house is idle (gate green)" || bad "guard retry: $out"
+grep -q "$D5" "$W/own/Dockerfile" && [ "$(docker inspect -f '{{.State.Health.Status}}' au-test-own)" = "healthy" ] && ok "guard: the new image runs and is healthy" || bad "guard final state"
 [ -n "${KEEP:-}" ] || { (cd "$W/own" && docker compose down >/dev/null 2>&1); docker rmi -f au-test-own:local $REG/test/base:1 >/dev/null 2>&1; }
 
 echo "$pass passed, $failn failed"

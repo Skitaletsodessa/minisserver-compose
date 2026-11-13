@@ -13,6 +13,10 @@ Replaces the old rule 5 ("no automatic updates that restart services"). Notify-o
 
 Not automated on purpose (policy `manual`, Diun announces): AdGuard origin + replica (must move the same day), Immich Postgres (pinned with its extension versions), qBittorrent (linuxserver tag scheme), the Caddy image (custom build).
 
+## Guard and gates (Task 35b)
+- **Guard** (`"guard": true` in `stacks.json`: Home Assistant, the gateway): `ha_guard.py` (`python3 ha_guard.py` = GO / WAIT + reasons) must say GO right before the recreate: no vacuum plan script running, no schedule edge (plug window, plan start, timed-run end) within 10 min, no plug ON outside its window / no timed run (plants ON inside their window do not block), HA states unreadable = WAIT. A blocked entry does not stop the others; it is retried every 15 min until 14:00, then **postponed a week with ONE tier-B message** (`postponed` in `container-updates.jsonl`). Dry run shows `guard now: GO/WAIT ...`.
+- **Gate** (`"gate": "<script {image}>"`, our own images): `gates/gate-gateway.sh` (all gateway tests, ~2.5 min), `gate-schedules.sh` (~45 s) run INSIDE the freshly built image; `gate-relay.sh` runs the in-process attack suite with the new image and the black-box suite against two throw-away containers of the new image (random secrets, state in tmpfs, ports 18092/18093; production is never touched). Red = the old image stays + one tier-B message.
+
 ## Look at it
 - `tail /srv/compose/_system/auto-update/summary.log`, `container-updates.jsonl` (one JSON line per container outcome), `journalctl -u minis-container-update -u minis-reboot-if-needed -u minis-post-update-boot`.
 - Plan without changing anything: `python3 container-update.py --dry-run [--only NAME]`.
@@ -26,8 +30,8 @@ Not automated on purpose (policy `manual`, Diun announces): AdGuard origin + rep
 
 ## Tests
 - `bash test-auto-update.sh` (restart guard + post-update run, fakes, no reboot, no Telegram, no git): 17 checks.
-- `python3 test_container_update.py` (version choice, refs, compose rewrite, quiet hours): 13 tests.
-- `bash live-test-container-update.sh` (needs docker; a scratch registry + toy images, never a real service): 25 checks: good update, dry-run, rollback of a bad update, floating tag, own-image rebuild incl. failing smoke test and failing health check. Re-run after ANY change to `container-update.py`.
+- `python3 test_container_update.py` (version choice, refs, compose rewrite, quiet hours): 13 tests; `python3 test_ha_guard.py` (the guard on synthetic snapshots): 14 tests.
+- `bash live-test-container-update.sh` (needs docker; a scratch registry + toy images, never a real service): 32 checks: good update, dry-run, rollback of a bad update, floating tag, own-image rebuild incl. failing smoke test and failing health check, red test gate, busy-house guard (retry, then postpone, then deploy). Re-run after ANY change to `container-update.py`.
 
 ## Traps found while building this
 - The containerd image store removes an image the moment it loses its last tag: a rollback needs a tag (`minis-prev`) set BEFORE the build/pull.

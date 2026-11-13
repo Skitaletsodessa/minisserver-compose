@@ -20,6 +20,7 @@ NOW = datetime(2026, 11, 12, 12, 0, 0)
 ENV = {"CAM_HOST": "x", "CAM_USER": "u", "CAM_PASS": "p"}
 REAL_LIVE_BUSY = P.live_busy
 P.live_busy = lambda url=None: False                   # tests never look at the real go2rtc (the yield test passes its own)
+P.real_check = lambda path: ""                            # tests never run ffmpeg (the corrupt-clip tests pass their own check)
 
 
 def fname(ch, begin, end, kind="M", n=0):
@@ -105,6 +106,84 @@ class Planning(unittest.TestCase):
     def test_single_clip_bigger_than_cap(self):
         dele, fits = P.plan_deletions([("a", "2026-11-11 10:00:00", 5)], 200, cap=100, free=10 ** 6, total=10 ** 6, floor_pct=15, retention_days=30, now=NOW)
         self.assertFalse(fits)
+
+
+class Corrupt(unittest.TestCase):
+    """Task 35b-3: a decode check at pull time flags clips damaged on the card; clips without a verdict are swept by day."""
+
+    def files(self):
+        return [entry(0, "2026-11-12 09:00:00", "2026-11-12 09:00:30", 2000, "M", 1),
+                entry(0, "2026-11-12 09:10:00", "2026-11-12 09:10:30", 2000, "M", 2)]
+
+    def verdicts(self, meta):
+        import sqlite3
+        db = sqlite3.connect(os.path.join(meta, "index.sqlite"))
+        out = {r[0]: r[1] for r in db.execute("SELECT substr(begin, 12, 5), corrupt FROM clips")}
+        db.close()
+        return out
+
+    def test_a_bad_clip_is_flagged_at_pull_time_and_a_good_one_is_not(self):
+        arch = fresh()
+        chk = lambda path: "CABAC_MAX_BIN" if "090000" in path else ""      # noqa: E731
+        r = P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, check=chk)
+        self.assertEqual(r["pulled"], 2, r)
+        self.assertEqual(r["corrupt"], 1)
+        self.assertEqual(self.verdicts(arch), {"09:00": "CABAC_MAX_BIN", "09:10": ""})
+
+    def test_a_failing_check_leaves_the_clip_unchecked_and_the_run_going(self):
+        arch = fresh()
+
+        def boom(path):
+            raise RuntimeError("ffmpeg missing")
+        r = P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, check=boom)
+        self.assertEqual(r["pulled"], 2, r)
+        self.assertEqual(self.verdicts(arch), {"09:00": None, "09:10": None})
+
+    def test_the_sweep_gives_unchecked_clips_a_verdict_by_day_newest_first_within_its_budget(self):
+        arch = fresh()
+        P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, check=lambda p: (_ for _ in ()).throw(RuntimeError("x")))
+        db = P.db_open(arch)
+        seen = []
+
+        def chk(path):
+            seen.append(path)
+            return "bad" if "091000" in path else ""
+        n, bad = P.sweep_unchecked(db, chk, budget_s=60, now=NOW, meta_night=True)
+        self.assertEqual((n, bad), (2, 1))
+        self.assertIn("091000", seen[0])                                      # newest first
+        db.close()
+        self.assertEqual(self.verdicts(arch), {"09:00": "", "09:10": "bad"})
+        db = P.db_open(arch)
+        self.assertEqual(P.sweep_unchecked(db, chk, budget_s=60, now=NOW), (0, 0))        # nothing left without a verdict
+        db.close()
+
+    def test_the_sweep_does_not_run_at_night(self):
+        arch = fresh()
+        P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, check=lambda p: (_ for _ in ()).throw(RuntimeError("x")))
+        db = P.db_open(arch)
+        self.assertEqual(P.sweep_unchecked(db, lambda p: "", budget_s=60, now=datetime(2026, 11, 12, 23, 0, 0)), (0, 0))
+        db.close()
+
+    def test_the_sweep_budget_stops_it(self):
+        arch = fresh()
+        P.run(ENV, NOW, cam_factory=FakeCam(self.files()), remux=fake_remux, archive=arch, cap=GB, disk=BIG_DISK, check=lambda p: (_ for _ in ()).throw(RuntimeError("x")))
+        db = P.db_open(arch)
+        self.assertEqual(P.sweep_unchecked(db, lambda p: "", budget_s=-1, now=NOW), (0, 0))
+        db.close()
+
+    def test_an_index_from_before_the_flag_is_migrated_and_keeps_its_rows(self):
+        import sqlite3
+        arch = fresh()
+        os.makedirs(arch)
+        db = sqlite3.connect(os.path.join(arch, "index.sqlite"))
+        db.execute("""CREATE TABLE clips (id TEXT PRIMARY KEY, ch INTEGER, kind TEXT, begin TEXT, end TEXT, cam_kb INTEGER, size INTEGER, path TEXT, dur REAL, fps REAL, pulled_at TEXT)""")
+        db.execute("INSERT INTO clips VALUES ('a',0,'M','2026-11-12 09:00:00','2026-11-12 09:00:30',1,1,'/x',30,12,'t')")
+        db.commit()
+        db.close()
+        db = P.db_open(arch)
+        self.assertEqual(db.execute("SELECT id, corrupt FROM clips").fetchall(), [("a", None)])
+        db.close()
+        P.db_open(arch).close()                                              # opening twice does not fail on the existing column
 
 
 class Pull(unittest.TestCase):

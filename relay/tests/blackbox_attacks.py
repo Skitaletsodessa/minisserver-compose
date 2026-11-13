@@ -27,8 +27,13 @@ def env(path, key):
             return l.split("=", 1)[1].strip()
 
 
-PROD = ("127.0.0.1", 18090, env(f"{ROOT}/.env", "RELAY_SECRET"))
-TEST = ("127.0.0.1", 18091, env(f"{ROOT}/.env.test", "RELAY_SECRET"))
+# Task 35b: the same suite can be pointed at throw-away instances (gates/gate-relay.sh, BB_* variables) so that a rebuilt image is attacked BEFORE it replaces production.
+# Without the variables it attacks the production instance and the test instance exactly as before.
+E = os.environ.get
+PROD = ("127.0.0.1", int(E("BB_PROD_PORT", "18090")), env(E("BB_PROD_ENV", f"{ROOT}/.env"), "RELAY_SECRET"))
+TEST = ("127.0.0.1", int(E("BB_TEST_PORT", "18091")), env(E("BB_TEST_ENV", f"{ROOT}/.env.test"), "RELAY_SECRET"))
+PROD_C = E("BB_PROD_CONTAINER", "relay")
+TEST_C = E("BB_TEST_CONTAINER", "relay-test")
 results = []
 
 
@@ -112,12 +117,12 @@ for name, url in (("uppercase host is normalised, not refused", "https://WWW.SRE
                   ("trailing dot is normalised, not refused", "https://www.sreality.cz./?noredirect=1")):
     got = call(PROD, url)
     results.append((got[0] in (200, 302) and got[2] == "target", name, f"-> {got[0]} origin={got[2]}"))
-c = http.client.HTTPConnection("127.0.0.1", 18090, timeout=10)
+c = http.client.HTTPConnection("127.0.0.1", PROD[1], timeout=10)
 c.request("POST", "/fetch", body=b"x")
 r = c.getresponse()
 results.append((r.status == 405, "POST is refused", f"-> {r.status}"))
 c.close()
-c = http.client.HTTPConnection("127.0.0.1", 18090, timeout=10)
+c = http.client.HTTPConnection("127.0.0.1", PROD[1], timeout=10)
 c.request("GET", "/etc/passwd")
 r = c.getresponse()
 results.append((r.status == 404, "unknown path", f"-> {r.status}"))
@@ -150,14 +155,14 @@ def ctl(container, cmd):
     return subprocess.run(["docker", "exec", container, "python", "/app/relayctl.py", cmd], capture_output=True, text=True).stdout.strip()
 
 
-ctl("relay", "off")
+ctl(PROD_C, "off")
 killed = call(PROD, "https://www.sreality.cz/?noredirect=1")
-ctl("relay", "on")
+ctl(PROD_C, "on")
 back = call(TEST, "https://example.com/?after-on=1")
 results.append((killed[0] == 503 and killed[1] == "killed", "kill switch (relay-off): 503 killed, nothing fetched", f"-> {killed[0]} {killed[1]}"))
-ctl("relay-test", "off")
+ctl(TEST_C, "off")
 k2 = call(TEST, "https://example.com/")
-ctl("relay-test", "on")
+ctl(TEST_C, "on")
 k3 = call(TEST, "https://example.com/?x=2")
 results.append((k2[0] == 503 and k3[0] in (200, 429), "kill switch off then on again restores service", f"off -> {k2[0]}, on -> {k3[0]}"))
 seen503 = None
@@ -169,7 +174,7 @@ for i in range(80):
 results.append((seen503 is not None, "daily cap reached: 503 daily_cap", f"after {seen503} more requests"))
 
 # ---------------- hostile inbound connections -------------------------------------------------------------------
-s = socket.create_connection(("127.0.0.1", 18090), timeout=25)
+s = socket.create_connection(("127.0.0.1", PROD[1]), timeout=25)
 s.sendall(b"GET /fetch?url=x HTTP/1.1\r\nHost: a\r\n")
 t0 = time.time()
 closed = False
@@ -184,12 +189,12 @@ except OSError:
     closed = True
 results.append((closed and time.time() - t0 < 20, "slow-loris (headers never finished): connection dropped", f"after {time.time()-t0:.0f}s"))
 s.close()
-c = http.client.HTTPConnection("127.0.0.1", 18090, timeout=10)
+c = http.client.HTTPConnection("127.0.0.1", PROD[1], timeout=10)
 c.request("GET", "/fetch?url=x", headers={"X-Big": "B" * 70000})
 r = c.getresponse()
 results.append((r.status in (400, 431), "huge request header (70 KB)", f"-> {r.status}"))
 c.close()
-c = http.client.HTTPConnection("127.0.0.1", 18090, timeout=10)
+c = http.client.HTTPConnection("127.0.0.1", PROD[1], timeout=10)
 c.request("GET", "/fetch?url=" + "a" * 20000)
 r = c.getresponse()
 results.append((r.status in (400, 414, 431), "huge request line (20 KB): refused before any work", f"-> {r.status}"))
@@ -208,9 +213,9 @@ for label, ip, port in (("router 192.168.31.1:80", "192.168.31.1", 80), ("router
                         ("Pi 192.168.31.5:22", "192.168.31.5", 22), ("tailnet DNS 100.100.100.100:53", "100.100.100.100", 53),
                         ("tailnet peer 100.83.121.55:22", "100.83.121.55", 22), ("docker host gateway 172.30.0.1:22", "172.30.0.1", 22),
                         ("other docker stack 172.24.0.2:8080", "172.24.0.2", 8080), ("metadata 169.254.169.254:80", "169.254.169.254", 80)):
-    out = subprocess.run(["docker", "exec", "relay", "python", "-c", probe, ip, str(port)], capture_output=True, text=True).stdout.strip()
+    out = subprocess.run(["docker", "exec", PROD_C, "python", "-c", probe, ip, str(port)], capture_output=True, text=True).stdout.strip()
     results.append((out.startswith("blocked"), f"inside the container -> {label}", out))
-out = subprocess.run(["docker", "exec", "relay", "python", "-c", probe, "1.1.1.1", "443"], capture_output=True, text=True).stdout.strip()
+out = subprocess.run(["docker", "exec", PROD_C, "python", "-c", probe, "1.1.1.1", "443"], capture_output=True, text=True).stdout.strip()
 results.append((out == "CONNECTED", "control: inside the container -> 1.1.1.1:443 (public) still works", out))
 
 fails = [r for r in results if r and not r[0]]
