@@ -173,6 +173,12 @@ class Cameras:
         db.row_factory = sqlite3.Row
         return db
 
+    @staticmethod
+    def _ccol(db):
+        """`corrupt` when the index has the column (camera-pull adds it, Task 35b), else a constant NULL: an old index keeps working."""
+        has = any(r[1] == "corrupt" for r in db.execute("PRAGMA table_info(clips)"))
+        return "corrupt" if has else "NULL AS corrupt"
+
     def days(self):
         db = self._db()
         if db is None:
@@ -195,7 +201,7 @@ class Cameras:
         if db is None:
             return []
         try:
-            q, a = "SELECT rowid AS id, ch, kind, begin, end, size, dur FROM clips WHERE substr(begin,1,10)=?", [day]
+            q, a = "SELECT rowid AS id, ch, kind, begin, end, size, dur, %s FROM clips WHERE substr(begin,1,10)=?" % self._ccol(db), [day]
             if c:
                 q += " AND ch=?"
                 a.append(c["channel"])
@@ -204,7 +210,7 @@ class Cameras:
             db.close()
         names = {x["channel"]: x["id"] for x in self.channels}
         return [{"id": r["id"], "camera": names.get(r["ch"], "cam%d" % r["ch"]), "kind": r["kind"], "begin": r["begin"], "end": r["end"],
-                 "size": r["size"], "duration_s": round(r["dur"] or 0, 1)} for r in rows]
+                 "size": r["size"], "duration_s": round(r["dur"] or 0, 1), "damaged": bool(r["corrupt"])} for r in rows]
 
     def at(self, moment, slack_s=AT_SLACK_S):
         """The synchronised view: for each lens the clip that covers `moment` ('YYYY-MM-DD HH:MM:SS') or None, with the offset into the clip.
@@ -214,22 +220,23 @@ class Cameras:
         t = datetime.strptime(moment, "%Y-%m-%d %H:%M:%S")
         db = self._db()
         out = []
+        cc = self._ccol(db) if db is not None else "NULL AS corrupt"
         for c in self.channels:
             clip = None
             if db is not None:
-                r = db.execute("SELECT rowid AS id, kind, begin, end, size, dur FROM clips WHERE ch=? AND begin<=? AND end>=? ORDER BY begin DESC LIMIT 1", (c["channel"], moment, moment)).fetchone()
+                r = db.execute("SELECT rowid AS id, kind, begin, end, size, dur, %s FROM clips WHERE ch=? AND begin<=? AND end>=? ORDER BY begin DESC LIMIT 1" % cc, (c["channel"], moment, moment)).fetchone()
                 if r:
                     off = max(0.0, (t - datetime.strptime(r["begin"], "%Y-%m-%d %H:%M:%S")).total_seconds())
                     off = min(off, max(0.0, (r["dur"] or 0) - 0.5))
                     clip = {"id": r["id"], "camera": c["id"], "kind": r["kind"], "begin": r["begin"], "end": r["end"], "size": r["size"],
-                            "duration_s": round(r["dur"] or 0, 1), "offset_s": round(off, 1), "delay_s": 0.0}
+                            "duration_s": round(r["dur"] or 0, 1), "offset_s": round(off, 1), "delay_s": 0.0, "damaged": bool(r["corrupt"])}
                 else:
-                    r = db.execute("SELECT rowid AS id, kind, begin, end, size, dur FROM clips WHERE ch=? AND begin>? AND begin<=datetime(?, ?) ORDER BY begin LIMIT 1",
+                    r = db.execute("SELECT rowid AS id, kind, begin, end, size, dur, %s FROM clips WHERE ch=? AND begin>? AND begin<=datetime(?, ?) ORDER BY begin LIMIT 1" % cc,
                                    (c["channel"], moment, moment, "+%d seconds" % slack_s)).fetchone()
                     if r:
                         late = (datetime.strptime(r["begin"], "%Y-%m-%d %H:%M:%S") - t).total_seconds()
                         clip = {"id": r["id"], "camera": c["id"], "kind": r["kind"], "begin": r["begin"], "end": r["end"], "size": r["size"],
-                                "duration_s": round(r["dur"] or 0, 1), "offset_s": 0.0, "delay_s": round(late, 1)}
+                                "duration_s": round(r["dur"] or 0, 1), "offset_s": 0.0, "delay_s": round(late, 1), "damaged": bool(r["corrupt"])}
             out.append({"camera": c["id"], "clip": clip})
         if db is not None:
             db.close()

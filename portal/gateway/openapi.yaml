@@ -556,7 +556,7 @@ paths:
       operationId: listCameras
       summary: "Task 34. The three lenses and a summary of the clip archive. Household parents only (admin or household WITH the parent flag); anyone else 403, module not configured 404"
       responses:
-        "200": {description: cameras, content: {application/json: {schema: {type: object, required: [cameras, live, archive], properties: {cameras: {type: array, items: {type: object, required: [id, name, channel], properties: {id: {type: string}, name: {type: string}, channel: {type: integer}}}}, live: {type: boolean, description: "go2rtc answers"}, hd_available: {type: boolean, description: "the full-quality picture may be asked for (false through the public door)"}, archive: {type: object, required: [clips, bytes, newest_clip], properties: {clips: {type: integer}, bytes: {type: integer}, newest_clip: {type: [string, "null"]}, status: {type: [object, "null"], description: "the pull job status: backlog (clips still to load from the camera), loading, last_success, listing_complete_until, next_pull (HH:MM of the next scheduled load)", properties: {backlog: {type: integer}, fresh_backlog: {type: integer, description: "recent clips still to load (newest first)"}, until_label: {type: [string, "null"], description: "start of the newest archived clip: HH:MM today, else DD.MM HH:MM"}, fresh_ok_hhmm: {type: [string, "null"]}, loading: {type: boolean}, last_success: {type: [string, "null"]}, listing_complete_until: {type: [string, "null"]}, next_pull: {type: string}}}}}}}}}}
+        "200": {description: cameras, content: {application/json: {schema: {type: object, required: [cameras, live, archive], properties: {cameras: {type: array, items: {type: object, required: [id, name, channel], properties: {id: {type: string}, name: {type: string}, channel: {type: integer}}}}, live: {type: boolean, description: "go2rtc answers"}, hd_available: {type: boolean, description: "the HD picture may be asked for (through the public door only the 720p transcode, and false there when GW_CAMERA_HD_DOOR=0)"}, archive: {type: object, required: [clips, bytes, newest_clip], properties: {clips: {type: integer}, bytes: {type: integer}, newest_clip: {type: [string, "null"]}, status: {type: [object, "null"], description: "the pull job status: backlog (clips still to load from the camera), loading, last_success, listing_complete_until, next_pull (HH:MM of the next scheduled load)", properties: {backlog: {type: integer}, fresh_backlog: {type: integer, description: "recent clips still to load (newest first)"}, until_label: {type: [string, "null"], description: "start of the newest archived clip: HH:MM today, else DD.MM HH:MM"}, fresh_ok_hhmm: {type: [string, "null"]}, loading: {type: boolean}, last_success: {type: [string, "null"]}, listing_complete_until: {type: [string, "null"]}, next_pull: {type: string}}}}}}}}}}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
@@ -577,12 +577,13 @@ paths:
     get:
       operationId: cameraLive
       summary: "Live view of one lens as a fragmented MP4 stream for a <video> tag (session cookie; the browser sends it). codec h264 (default, transcoded by go2rtc, plays everywhere) or h265 (the camera's own, needs hardware HEVC). At most 4 streams at once and 20 minutes per stream. Audited when it opens"
-      parameters: [{$ref: "#/components/parameters/Id"}, {name: codec, in: query, required: false, schema: {type: string, enum: [h264, h265], default: h264}}, {name: quality, in: query, required: false, schema: {type: string, enum: [sub, hd], default: sub}, description: "sub = 640x360 (the only quality through the public door); hd = the camera main stream (720p H.264), TAILNET ONLY: 403 hd_tailnet_only through the door"}]
+      parameters: [{$ref: "#/components/parameters/Id"}, {name: codec, in: query, required: false, schema: {type: string, enum: [h264, h265], default: h264}}, {name: quality, in: query, required: false, schema: {type: string, enum: [sub, hd], default: sub}, description: "sub = 640x360; hd = the camera main stream: at home the camera own stream or its 720p H.264 transcode, THROUGH THE PUBLIC DOOR the 1280x720 H.264 transcode only (codec=h264; the original never leaves the house: 403 hd_tailnet_only for codec=h265 or when GW_CAMERA_HD_DOOR=0). ONE hd view at a time: 409 hd_busy for a second person (the same person replaces his own view). Ends after 30 minutes"}]
       responses:
         "200": {description: video, content: {video/mp4: {schema: {type: string, format: binary}}}}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/Error"}
@@ -602,7 +603,7 @@ paths:
       summary: "The clips of one day (optionally one lens), oldest first"
       parameters: [{name: day, in: query, required: true, schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}}, {name: camera, in: query, required: false, schema: {type: string}}]
       responses:
-        "200": {description: clips, content: {application/json: {schema: {type: object, required: [clips], properties: {clips: {type: array, items: {type: object, required: [id, camera, kind, begin, end, size, duration_s], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}}}}}}}}}
+        "200": {description: clips, content: {application/json: {schema: {type: object, required: [clips], properties: {clips: {type: array, items: {type: object, required: [id, camera, kind, begin, end, size, duration_s], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}, damaged: {type: boolean, description: "the decode check of camera-pull found the clip damaged on the camera card"}}}}}}}}}
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
@@ -614,7 +615,7 @@ paths:
       summary: "The synchronised view: for ONE moment, the clip of each lens that covers it, or starts within 15 s after it (or null), with the offset into the clip / the delay, plus the pull status"
       parameters: [{name: time, in: query, required: true, schema: {type: string}, description: "YYYY-MM-DD HH:MM:SS (a T instead of the space is accepted)"}]
       responses:
-        "200": {description: lenses, content: {application/json: {schema: {type: object, required: [time, lenses], properties: {time: {type: string}, lenses: {type: array, items: {type: object, required: [camera, clip], properties: {camera: {type: string}, clip: {type: [object, "null"], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}, offset_s: {type: number}, delay_s: {type: number, description: "a lens whose clip starts up to 15 s AFTER the moment: the seconds it starts later (offset_s is then 0)"}}}}}}, status: {type: [object, "null"]}}}}}}
+        "200": {description: lenses, content: {application/json: {schema: {type: object, required: [time, lenses], properties: {time: {type: string}, lenses: {type: array, items: {type: object, required: [camera, clip], properties: {camera: {type: string}, clip: {type: [object, "null"], properties: {id: {type: integer}, camera: {type: string}, kind: {type: string}, begin: {type: string}, end: {type: string}, size: {type: integer}, duration_s: {type: number}, damaged: {type: boolean}, offset_s: {type: number}, delay_s: {type: number, description: "a lens whose clip starts up to 15 s AFTER the moment: the seconds it starts later (offset_s is then 0)"}}}}}}, status: {type: [object, "null"]}}}}}}
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}

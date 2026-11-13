@@ -162,15 +162,37 @@ class Gate(BaseCase):
             door.DOOR_LIMITS.update(keep)
             e.o["app"].door_hits.clear()
 
-    def test_the_full_quality_picture_is_tailnet_only(self):
+    def test_through_the_door_only_the_720p_transcode_goes_out_never_the_original(self):
+        """Task 35b-4 (ADR 0009 amendment C): quality=hd through the door = codec h264 only (go2rtc's 1280x720 transcode); codec=h265 (the camera's own 2560x1440 stream) stays at home."""
+        from gw import config
         e = self.e
         e.o["app"].door_hits.clear()
         app = self.app_cookie()
+        e.g2.requests.clear()
         r = self.call("GET", "/v1/cameras/cam0/live?quality=hd", headers={**DOOR, **app})
-        self.assertEqual((r.status_code, r.json()["error"]["code"]), (403, "hd_tailnet_only"))
-        self.assertEqual(self.call("GET", "/v1/cameras/cam0/live?quality=hd&codec=h265", headers={"Authorization": "Bearer " + e.tokens["webadmin"]}).status_code, 200)
-        self.assertEqual(self.call("GET", "/v1/cameras/cam0/live?codec=h265", headers={**DOOR, **app}).status_code, 200)               # the sub stream is what the door carries
-        self.assertFalse(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["hd_available"])                                # the page hides the button through the door
+        self.assertEqual(r.status_code, 200)
+        srcs = [q for q in e.g2.requests if "/api/stream.mp4" in q]
+        self.assertTrue(any("src=cam_ch0_hd_h264" in q for q in srcs), srcs)                         # the transcode ...
+        self.assertFalse(any("src=cam_ch0_hd&" in q or q.endswith("src=cam_ch0_hd") for q in srcs[-1:]))   # ... and what the client reads is not the plain main stream
+        r = self.call("GET", "/v1/cameras/cam0/live?quality=hd&codec=h265", headers={**DOOR, **app})
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (403, "hd_tailnet_only"))        # the original never leaves the house
+        self.assertEqual(self.call("GET", "/v1/cameras/cam0/live?quality=hd&codec=h265", headers={"Authorization": "Bearer " + e.tokens["webadmin"]}).status_code, 200)   # at home it does
+        self.assertEqual(self.call("GET", "/v1/cameras/cam0/live?codec=h265", headers={**DOOR, **app}).status_code, 200)               # the sub stream is unchanged
+        self.assertTrue(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["hd_available"])
+        e.o["app"].door_hits.clear()
+
+    def test_the_kill_switch_closes_hd_at_the_door_again(self):
+        from gw import config
+        e = self.e
+        e.o["app"].door_hits.clear()
+        app = self.app_cookie()
+        config.CAMERA_HD_DOOR = False
+        try:
+            r = self.call("GET", "/v1/cameras/cam0/live?quality=hd", headers={**DOOR, **app})
+            self.assertEqual((r.status_code, r.json()["error"]["code"]), (403, "hd_tailnet_only"))
+            self.assertFalse(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["hd_available"])
+        finally:
+            config.CAMERA_HD_DOOR = True
         e.o["app"].door_hits.clear()
 
     def test_the_first_camera_call_from_outside_is_recorded_once_and_reported_in_health(self):

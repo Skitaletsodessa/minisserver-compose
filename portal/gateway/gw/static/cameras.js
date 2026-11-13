@@ -49,6 +49,7 @@
   function dm(iso) { return iso.slice(8, 10) + "." + iso.slice(5, 7); }
   function ms(iso) { return Date.parse(iso.replace(" ", "T") + "Z"); }
   function camName(id) { for (var i = 0; i < cams.length; i++) { if (cams[i].id === id) { return cams[i].name; } } return id; }
+  var HD_MAX_MS = 30 * 60 * 1000;                                       // the server ends an HD view after 30 minutes (config.CAMERA_LIVE_MAX_S)
   function liveUrl(id, hd) { return "/v1/cameras/" + id + "/live?codec=h264" + (hd ? "&quality=hd" : "") + "&t=" + Date.now(); }
   function noop() {}
   // Task 35 B: REAL full screen. In a browser the Fullscreen API; in the app WebChromeClient.onShowCustomView answers it (before: only a CSS overlay). Where it is not available the CSS overlay still works.
@@ -122,6 +123,7 @@
   function startTile(t, hd, hold) {
     stopTile(t);
     t.hd = !!hd;
+    if (t.hd) { t.hdAt = Date.now(); }
     t.holding = !!hold;
     t.again.hidden = true;
     setState(t, t.tries > 0 ? T("cam_retry_n", { n: t.tries + 1 }) : T("cam_wait_one"), false);
@@ -178,16 +180,12 @@
       t.ready = true;
       if (t.holding && !live.released) { setState(t, T("cam_ready_wait"), false); checkLive(); } else { video.play().catch(noop); }
     });
-    video.addEventListener("playing", function () { setState(t, t.hdFailed ? T("cam_hd_failed") : "", false); t.tries = 0; });
+    video.addEventListener("playing", function () { setState(t, t.hdFailed ? T(t.hdMsg || "cam_hd_failed") : "", false); t.tries = 0; });
     video.addEventListener("click", function () { toggleBig(t); });
     video.addEventListener("error", function () {
       if (!video.getAttribute("src")) { return; }                       // we removed the source ourselves
       t.ready = false;
-      if (t.hd) {                                                       // the main stream gave up (the camera does not always deliver it): fall back to the light stream, say so
-        t.hd = false; t.tries = 0; t.hdFailed = true;
-        startTile(t, false, false);
-        return;
-      }
+      if (t.hd) { hdBack(t); return; }                                  // the main stream gave up (the camera does not always deliver it): fall back to the light stream, say so
       if (t.tries < MAX_TRIES - 1 && !document.hidden) {                // quiet automatic retries: a cold camera source needs a moment
         t.tries += 1;
         setState(t, T("cam_retry_n", { n: t.tries + 1 }), false);
@@ -198,8 +196,17 @@
       setState(t, T("cam_no_link"), true);
       t.again.hidden = false;
     });
-    video.addEventListener("ended", function () { setState(t, T("cam_stopped"), false); t.again.hidden = false; });
+    video.addEventListener("ended", function () {
+      if (t.hd) { hdBack(t); return; }                                  // the 30 minutes of HD are over: back to the light stream
+      setState(t, T("cam_stopped"), false); t.again.hidden = false;
+    });
     return t;
+  }
+  // HD ended or failed: the light stream again; after the full 30 minutes (the server's limit) the message says why, otherwise "not available"
+  function hdBack(t) {
+    var full = Date.now() - (t.hdAt || 0) >= HD_MAX_MS - 60000;
+    t.hd = false; t.tries = 0; t.hdFailed = true; t.hdMsg = full ? "cam_hd_timeout" : "cam_hd_failed";
+    startTile(t, false, false);
   }
   function toggleBig(t) {
     t.big = !t.big;
@@ -432,11 +439,15 @@
       if (gen !== archive.gen) { return; }
       var grid = document.getElementById("cam-syncgrid");
       if (!r.ok) { syncNote(errText(r.json)); return; }
-      var any = false;
+      var any = false, dmg = 0;
       r.json.lenses.forEach(function (l) {
         var cell = el("figure", "cam-tile cam-lens");
         cell.dataset.camera = l.camera;
-        if (l.clip) {
+        if (l.clip && l.clip.damaged) {                                        // Task 35b-3: damaged on the camera card (decode check): a note instead of a player that may fail
+          dmg += 1;
+          cell.appendChild(el("p", "note err", T("cam_clip_damaged")));
+          cell.appendChild(el("figcaption", "cam-cap", camName(l.camera)));
+        } else if (l.clip) {
           any = true;
           var v = document.createElement("video");
           v.className = "cam-video"; v.muted = true; v.preload = "auto"; v.setAttribute("playsinline", "");
@@ -470,7 +481,7 @@
       archive.ctl.rng.value = "0";
       archive.ctl.rng.disabled = !any;
       archive.ctl.pp.disabled = !any;
-      if (!any) { syncNote(T("cam_not_loaded")); return; }
+      if (!any) { syncNote(dmg ? T("cam_clip_damaged") : T("cam_not_loaded")); return; }
       archive.timers.push(setTimeout(function () { releaseSync(gen, true); }, SYNC_WAIT_MS));     // the time-out: show what is ready instead of waiting for ever
       checkSync(gen);
     });

@@ -42,6 +42,7 @@ class App:
         self.releases = releases
         self.cameras = cameras
         self.live_open = 0                                # live streams running now (Task 34)
+        self.hd = None                                    # Task 35b-4: the ONE running HD view {person, since, token, resp}; a second person gets 409 hd_busy
         self.door_hits = defaultdict(deque)               # (person+device, rate class) -> times of door requests (camera module limits)
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
         self.parental, self.filters, self.devices = parental, filters, devices
@@ -1037,8 +1038,27 @@ class App:
         loop = asyncio.get_running_loop()
         h = await loop.run_in_executor(None, self.cameras.health)
         st = await loop.run_in_executor(None, self.cameras.status)
-        return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"], "hd_available": not request.scope.get("portal_door"),
+        return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"], "hd_available": config.CAMERA_HD_DOOR or not request.scope.get("portal_door"),
                              "archive": {"clips": h["archive_clips"], "bytes": h["archive_bytes"], "newest_clip": h["newest_clip"], "status": st}})
+
+    def _hd_acquire(self, person):
+        """ONE HD view at a time (the camera's Wi-Fi carries one main stream; Task 35b-4). The same person replaces his own earlier view (a reload, a second tab);
+        another person gets 409 hd_busy; a lease older than a stream can live is taken over (a bug elsewhere must not lock HD for ever)."""
+        h = self.hd
+        if h and h["person"] != person and self.clock() - h["since"] < config.CAMERA_LIVE_MAX_S + 90:
+            raise GwError(409, "hd_busy", "somebody else is watching the HD picture", {"since": int(h["since"])}, {"Retry-After": "30"})
+        if h and h.get("resp") is not None:
+            try:
+                h["resp"].close()
+            except Exception:  # noqa: BLE001
+                pass
+        token = object()
+        self.hd = {"person": person, "since": self.clock(), "token": token, "resp": None}
+        return token
+
+    def _hd_release(self, token):
+        if token is not None and self.hd and self.hd["token"] is token:
+            self.hd = None
 
     async def cam_snapshot(self, request):
         p = self._cam(request)
@@ -1055,18 +1075,23 @@ class App:
         codec = request.query_params.get("codec", "h264")
         quality = request.query_params.get("quality", "sub")
         self.cameras.get(cid)
-        if quality == "hd" and request.scope.get("portal_door"):
+        door = bool(request.scope.get("portal_door"))
+        if quality == "hd" and door and (not config.CAMERA_HD_DOOR or codec != "h264"):       # ADR 0009 amendment C: only the 720p transcode goes out, never the camera's own main stream
             raise GwError(403, "hd_tailnet_only", "the full-quality picture is available at home or over Tailscale only")
         if self.live_open >= config.CAMERA_LIVE_MAX_STREAMS:
             raise GwError(429, "too_many_streams", "too many live views at once", {"max": config.CAMERA_LIVE_MAX_STREAMS}, {"Retry-After": "30"})
+        token = self._hd_acquire(p["person_id"]) if quality == "hd" else None
         loop = asyncio.get_running_loop()
         self.live_open += 1
         try:
             resp = await loop.run_in_executor(None, self.cameras.open_live, cid, codec, quality)
         except BaseException:
             self.live_open -= 1
+            self._hd_release(token)
             raise
-        self._caudit(p, "camera_live", cid, {"codec": codec, "quality": quality})
+        if token is not None and self.hd and self.hd["token"] is token:
+            self.hd["resp"] = resp
+        self._caudit(p, "camera_live", cid, {"codec": codec, "quality": quality, "door": door})
         deadline = self.clock() + config.CAMERA_LIVE_MAX_S
 
         async def gen():
@@ -1078,6 +1103,7 @@ class App:
                     yield chunk
             finally:
                 self.live_open -= 1
+                self._hd_release(token)
                 resp.close()                          # synchronous on purpose: an await here is cancelled together with the generator and the stream would leak
         return StreamingResponse(gen(), media_type="video/mp4", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 

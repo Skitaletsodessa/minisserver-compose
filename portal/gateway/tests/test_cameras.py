@@ -229,6 +229,50 @@ class Cam(BaseCase):
         self.assertFalse([q for q in e.g2.requests if "_h264" in q])
         self.assertEqual(e.o["app"].live_open, 0)
 
+    def test_one_hd_viewer_at_a_time(self):
+        """Task 35b-4: the camera's Wi-Fi carries ONE main stream. Another person gets 409 hd_busy (sub streams are not affected); the same person replaces his own view; the lease
+        is released when the stream ends or fails to open, and a lease older than a stream can live is taken over."""
+        from gw.auth import GwError
+        e = self.e
+        app = e.o["app"]
+        self.assertIsNone(app.hd)
+        tok = app._hd_acquire("somebody-else")
+        try:
+            r = e.req("GET", "/v1/cameras/cam0/live?quality=hd", who="ivan")
+            self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "hd_busy"))
+            self.assertEqual(e.req("GET", "/v1/cameras/cam0/live", who="ivan").status_code, 200)            # the light stream is not limited
+        finally:
+            app._hd_release(tok)
+        self.assertIsNone(app.hd)
+        self.assertEqual(e.req("GET", "/v1/cameras/cam0/live?quality=hd", who="ivan").status_code, 200)
+        self.assertIsNone(app.hd)                                                                          # the finished stream released the lease
+        closed = []
+
+        class R:
+            def close(self):
+                closed.append(1)
+        t1 = app._hd_acquire("p1")
+        app.hd["resp"] = R()
+        t2 = app._hd_acquire("p1")                                                                          # the same person: his earlier view is closed and replaced
+        self.assertEqual(closed, [1])
+        self.assertIsNot(t1, t2)
+        app._hd_release(t1)                                                                                 # a stale token releases nothing
+        self.assertIsNotNone(app.hd)
+        with self.assertRaises(GwError) as cm:
+            app._hd_acquire("p2")
+        self.assertEqual((cm.exception.status, cm.exception.code), (409, "hd_busy"))
+        app.hd["since"] -= 10 * 3600                                                                        # a lease older than any stream can live: taken over
+        t3 = app._hd_acquire("p2")
+        self.assertEqual(app.hd["person"], "p2")
+        app._hd_release(t3)
+        self.assertIsNone(app.hd)
+        e.g2.down = True
+        try:
+            self.assertEqual(e.req("GET", "/v1/cameras/cam0/live?quality=hd", who="ivan").status_code, 503)
+            self.assertIsNone(app.hd)                                                                       # a failed open does not hold the lease
+        finally:
+            e.g2.down = False
+
     def test_live_quality_hd_uses_the_main_stream_sources(self):
         e = self.e
         e.g2.requests.clear()
@@ -296,6 +340,31 @@ class Cam(BaseCase):
         self.assertEqual([c["camera"] for c in only1], ["cam1"])
         self.assertEqual(e.req("GET", "/v1/cameras/archive/clips?day=yesterday", who="ivan").status_code, 400)
         self.assertEqual(e.req("GET", "/v1/cameras/archive/clips?day=2026-11-12&camera=nope", who="ivan").status_code, 404)
+
+    def test_damaged_clips_are_flagged_from_the_index_column_and_an_old_index_still_works(self):
+        e = self.e
+        clips = e.req("GET", "/v1/cameras/archive/clips?day=2026-11-12", who="ivan").json()["clips"]
+        self.assertTrue(all(c["damaged"] is False for c in clips))                        # an index without the column: nothing is damaged, nothing breaks
+        path = os.path.join(e.archive_root, "index.sqlite")
+        db = sqlite3.connect(path)
+        db.execute("ALTER TABLE clips ADD COLUMN corrupt TEXT")
+        db.execute("UPDATE clips SET corrupt='CABAC_MAX_BIN' WHERE id='0|a'")
+        db.execute("UPDATE clips SET corrupt='' WHERE id='1|b'")
+        db.commit()
+        db.close()
+        try:
+            clips = e.req("GET", "/v1/cameras/archive/clips?day=2026-11-12", who="ivan").json()["clips"]
+            self.assertEqual({c["begin"][11:]: c["damaged"] for c in clips}, {"09:00:00": True, "09:10:00": False, "10:00:00": False, "11:00:00": False})
+            lens = {x["camera"]: x["clip"] for x in e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 09:00:10", who="ivan").json()["lenses"]}
+            self.assertTrue(lens["cam0"]["damaged"])
+            lens = {x["camera"]: x["clip"] for x in e.req("GET", "/v1/cameras/archive/at?time=2026-11-12 09:10:05", who="ivan").json()["lenses"]}
+            self.assertFalse(lens["cam1"]["damaged"])
+            self.assertNotIn("CABAC", e.req("GET", "/v1/cameras/archive/clips?day=2026-11-12", who="ivan").text)     # the decoder's text stays on the server
+        finally:
+            db = sqlite3.connect(path)
+            db.execute("ALTER TABLE clips DROP COLUMN corrupt")
+            db.commit()
+            db.close()
 
     def test_clip_playback_ranges_and_safety(self):
         e = self.e

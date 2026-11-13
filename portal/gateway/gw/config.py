@@ -36,6 +36,7 @@ CAMERAS = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Вход"},
            {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Левая"},
            {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Правая"}]
 CAMERA_LIVE_MAX_STREAMS = 4         # live streams at once (the camera accepts 10 connections in total; go2rtc shares one per lens)
+CAMERA_HD_DOOR = os.environ.get("GW_CAMERA_HD_DOOR", "1") != "0"     # Task 35b-4: the 720p picture (never the original) may go through the public door; "0" = the old rule, tailnet only
 CAMERA_LIVE_MAX_S = 30 * 60         # a forgotten tab must not hold a camera session for ever; the page offers "continue"
 
 # limits (ADR 0007)
