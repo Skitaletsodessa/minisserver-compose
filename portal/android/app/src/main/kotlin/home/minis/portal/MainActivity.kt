@@ -3,7 +3,9 @@ package home.minis.portal
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +17,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.autofill.AutofillManager
 import android.webkit.ConsoleMessage
@@ -70,6 +73,8 @@ class MainActivity : FragmentActivity() {
     private lateinit var loadingView: FrameLayout
     private lateinit var errorView: LinearLayout
     private lateinit var webView: WebView
+    private var customView: View? = null                          // the page's full-screen element (Task 35 B)
+    private var customCallback: WebChromeClient.CustomViewCallback? = null
 
     private lateinit var nameEdit: EditText
     private lateinit var passwordEdit: EditText
@@ -103,6 +108,7 @@ class MainActivity : FragmentActivity() {
         UpdateJob.schedule(this)                      // the periodic background check (about every 6 hours); a no-op when it is already scheduled
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (customView != null) { hideCustomView(); return }                 // Back leaves full screen first
                 if (state == State.WEB && webView.canGoBack()) webView.goBack() else finish()
             }
         })
@@ -143,7 +149,32 @@ class MainActivity : FragmentActivity() {
     }
 
     // ── screens ────────────────────────────────────────────────────────────────────────────────────────────────────
+    // ── real full screen for the camera page (Task 35 B) ─────────────────────────────────────────────────────────────
+    private fun showCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
+        if (customView != null) { callback.onCustomViewHidden(); return }
+        customView = view
+        customCallback = callback
+        view.setBackgroundColor(Color.BLACK)
+        root.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        window.insetsController?.let {
+            it.hide(WindowInsets.Type.systemBars())
+            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR              // while the video is full screen the phone's rotation decides, even with the system rotation lock on
+    }
+
+    private fun hideCustomView() {
+        val v = customView ?: return
+        customView = null
+        root.removeView(v)
+        customCallback?.onCustomViewHidden()
+        customCallback = null
+        window.insetsController?.show(WindowInsets.Type.systemBars())
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
     private fun show(v: View) {
+        hideCustomView()                                                           // a lock/sign-out/error screen never sits behind a full-screen video
         for (c in listOf<View>(signInView, lockView, loadingView, errorView, webView, forceView)) c.visibility = if (c === v) View.VISIBLE else View.GONE
     }
 
@@ -560,6 +591,10 @@ class MainActivity : FragmentActivity() {
                 if (m.message().startsWith("portal-release:")) launchUpdateCheck(auto = true)
                 return true
             }
+
+            // the page's element.requestFullscreen() (the camera page's «На весь экран») arrives here; without these two the WebView refuses it
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) = showCustomView(view, callback)
+            override fun onHideCustomView() = hideCustomView()
         }
         w.setDownloadListener { _, _, _, _, _ -> /* downloads are not part of this app */ }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)

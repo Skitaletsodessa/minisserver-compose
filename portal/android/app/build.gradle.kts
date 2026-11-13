@@ -20,8 +20,8 @@ android {
         applicationId = "home.minis.portal"
         minSdk = 33              // Android 13: every family phone is Android 13+ (Ivan, 2026-10-22); the platform then has Ed25519 (the update manifest signature) without an extra library
         targetSdk = 36           // Android 16
-        versionCode = (project.findProperty("vc") as String? ?: "6").toInt()          // must go up with every build and never down: an update installs only over a lower versionCode with the same signing key
-        versionName = (project.findProperty("vn") as String? ?: "1.1.2")
+        versionCode = (project.findProperty("vc") as String? ?: "7").toInt()          // must go up with every build and never down: an update installs only over a lower versionCode with the same signing key
+        versionName = (project.findProperty("vn") as String? ?: "1.1.3")
         // Task 30c: the update manifest is verified with one of these public keys (raw Ed25519, hex): k1 = the server key (made on the host by tools/release_keygen.py), k2 = a spare whose private half is in Ivan's dev-keys
         buildConfigField("String", "MANIFEST_PUBKEYS", "\"ce618a1f6d5a0f2f2efc562798f1ba0f53f8e1b6cd885aaa7062bf44ae492bd0,9244e426f36b5d024cee84a25e04dfdcf73b2a745094a50e1f9b89cce230eadc\"")
         buildConfigField("String", "PINNED_CERT_SHA256", "\"2d17dd84230ef69f61740d569be5c6c4ccd918ac7a2d6da89adf5d4cacca4dfc\"")
