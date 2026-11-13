@@ -257,8 +257,8 @@ minisserver.tail6bf4d5.ts.net:17443 {
 					path /v1/cameras/*/live
 				}
 				key    {vars.client_ip}
-				# Task 34e: was 8 per 5 min; one open of the live tab is 3 lenses plus up to 3 quiet retries each, so a single viewing could exceed it (12 hits on 2026-11-11 17:55)
-				events 40
+				# Task 34e: was 8 per 5 min, 40 for one viewer, 60 now (the whole house shares one WAN IP, so two people share the bucket); one open of the live tab is 3 lenses plus up to 3 quiet retries each, so a single viewing could exceed it (12 hits on 2026-11-11 17:55)
+				events 60
 				window 5m
 			}
 			zone camera_clip_per_ip {
@@ -266,9 +266,9 @@ minisserver.tail6bf4d5.ts.net:17443 {
 					path /v1/cameras/archive/clips/*/video
 				}
 				key    {vars.client_ip}
-				# Task 34e: was 60 per 10 min; stepping back through events (3 lenses each) hit it after ~17 events and every clip then failed for ~7 min (13:38 on 2026-11-13).
+				# Task 34e: was 60 per 10 min, 300 for one viewer, 1200 now (two people stepping back fast need ~800); stepping back through events (3 lenses each) hit it after ~17 events and every clip then failed for ~7 min (13:38 on 2026-11-13).
 				# Not an exfiltration guard (60 x 5 MB per 10 min was already far above what the archive holds per day); Funnel bandwidth is the real ceiling.
-				events 300
+				events 1200
 				window 10m
 			}
 			zone events_per_ip {
