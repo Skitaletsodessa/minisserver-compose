@@ -1042,7 +1042,7 @@ class App:
         loop = asyncio.get_running_loop()
         h = await loop.run_in_executor(None, self.cameras.health)
         st = await loop.run_in_executor(None, self.cameras.status)
-        ptz = bool(self.cameras.ptz_dir) and not request.scope.get("portal_door")        # the route button: tailnet only (the public door denies the route endpoints)
+        ptz = bool(self.cameras.ptz_dir)                     # the route button: also through the door (ADR 0009 amendment D; parents only, audited, 6 starts per 10 min per device)
         return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"], "hd_available": config.CAMERA_HD_DOOR or not request.scope.get("portal_door"),
                              "ptz": {"available": ptz, "tours": config.CAMERA_PTZ_TOURS if ptz else []},
                              "archive": {"clips": h["archive_clips"], "bytes": h["archive_bytes"], "newest_clip": h["newest_clip"], "status": st}})

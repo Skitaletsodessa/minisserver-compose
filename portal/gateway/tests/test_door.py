@@ -26,7 +26,9 @@ def setUpModule():
     root = os.path.join(tempfile.mkdtemp(prefix="gw-door-"), "camera")
     make_archive(root)
     cams = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "A"}, {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "B"}]
-    e = BaseCase.ENV = Env(camera_opts={"go2rtc_url": g.url, "archive_dir": root, "channels": cams})
+    ptz = os.path.join(os.path.dirname(root), "ptz")
+    os.makedirs(ptz, exist_ok=True)
+    e = BaseCase.ENV = Env(camera_opts={"go2rtc_url": g.url, "archive_dir": root, "channels": cams, "ptz_dir": ptz})
     e.g2 = g
     a = {"person_id": "test", "phone_id": None, "ip": "t"}
     e.people.create(a, "Webadmin", "admin", True, web_login=True)                    # one person with BOTH a web login and a phone (device token)
@@ -181,14 +183,19 @@ class Gate(BaseCase):
         self.assertTrue(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["hd_available"])
         e.o["app"].door_hits.clear()
 
-    def test_the_camera_route_is_tailnet_only(self):
-        """2026-11-17: the saved-route button does not exist through the public door (404 for the endpoints, ptz.available false) until Ivan opens it."""
+    def test_the_camera_route_through_the_door(self):
+        """2026-11-17 (Ivan opened it): the saved-route button works through the public door for an app session only; a web session or no credential is refused; 6 starts per 10 min per device."""
         e = self.e
         e.o["app"].door_hits.clear()
-        app = self.app_cookie()
-        self.assertEqual(self.call("POST", "/v1/cameras/ptz/tour", headers={**DOOR, **app}, json={"tour": 1}).status_code, 404)
-        self.assertEqual(self.call("GET", "/v1/cameras/ptz", headers={**DOOR, **app}).status_code, 404)
-        self.assertFalse(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["ptz"]["available"])
+        app, web = self.app_cookie(), self.web_cookie()
+        self.assertEqual(self.call("GET", "/v1/cameras/ptz", headers={**DOOR}).status_code, 401)
+        self.assertIn(self.call("POST", "/v1/cameras/ptz/tour", headers={**DOOR, **web}, json={"tour": 1}).status_code, (401, 403, 404))
+        self.assertEqual(self.call("GET", "/v1/cameras/ptz", headers={**DOOR, **app}).status_code, 200)
+        self.assertTrue(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["ptz"]["available"])
+        r = self.call("POST", "/v1/cameras/ptz/tour", headers={**DOOR, **app}, json={"tour": 1})
+        self.assertFalse(self.door_404(r), r.status_code)                                                                              # past the door: the route's own rules decide (403 csrf here)
+        self.assertEqual(door.DOOR_LIMITS["camera_ptz"], (6, 600))                                                                    # the per-device ceiling is the table's
+        self.assertEqual(door.decide("POST", "/v1/cameras/ptz/tour")[:3], ("allow", "app", "camera_ptz"))
         e.o["app"].door_hits.clear()
 
     def test_the_kill_switch_closes_hd_at_the_door_again(self):
