@@ -31,6 +31,7 @@ TOKEN_FILE = os.environ.get("GATEWAY_WATCH_TOKEN", "/home/skit/.config/gateway-w
 STATE_FILE = os.environ.get("GATEWAY_WATCH_STATE", "/var/lib/watch-alerts/gateway-watch.json")
 DOWN_AFTER = 3
 DEGRADED_AFTER = 3
+LIVE_REFUSED_BURST = 15
 LOGIN_BURST = 10          # failed sign-ins in the last hour that raise the message
 LOGIN_CALM = 3            # below this the message is cleared
 DOOR_URL = os.environ.get("GATEWAY_WATCH_DOOR", "https://minisserver.tail6bf4d5.ts.net")
@@ -192,6 +193,14 @@ def evaluate(N, state, public, full, token_ok, addrs, door=None):
                 if did not in co:
                     N.clear("gateway-camera-outside-" + did, "")
             state["co_alerted"] = sorted(co)
+
+    # 2026-11-17: live camera opens that were refused or failed (too_many_streams, camera_unavailable). Many in an hour = the picture is dying for someone: one message (tier B), cleared when it calms down.
+    lr = full.get("camera_live_refused_1h")
+    if isinstance(lr, int):
+        if lr >= LIVE_REFUSED_BURST:
+            N.alert("gateway-camera-live-refused", "Камеры: за последний час %d отказов открыть живое видео (лимит потоков или камера не отвечает). Страница показывает кадры вместо видео; посмотрите журнал шлюза (`docker logs portal-gateway | grep refused`) и связь с камерой." % lr, tier="B")
+        else:
+            N.clear("gateway-camera-live-refused", "")
 
     # Task 30: the portal now has a PUBLIC door (Funnel :443, ADR 0009): a burst of failed sign-ins is worth one message (tier B, no repeat) and is cleared when it calms down.
     fl = full.get("failed_logins_1h")

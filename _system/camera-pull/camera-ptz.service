@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the camera's saved PTZ route once when the gateway asks (request file in /var/lib/camera-ptz)
+After=network-online.target
+[Service]
+Type=oneshot
+User=skit
+Nice=5
+TimeoutStartSec=330
+ExecStart=/usr/bin/python3 /srv/compose/_system/camera-pull/camera_ptz.py run-request

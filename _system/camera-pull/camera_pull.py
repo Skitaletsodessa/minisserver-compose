@@ -114,7 +114,7 @@ def real_remux(raw, out, listed_seconds):
 def real_check(path):
     """Full decode of one clip (about 1 s for a 1440p clip): '' when it decodes cleanly, else the decoder's first complaint (e.g. 'CABAC_MAX_BIN'). Damaged-on-the-card clips
     play on a desktop (error concealment) but may stop a phone's hardware decoder."""
-    r = subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-nostdin", "-i", path, "-f", "null", "-"], capture_output=True, text=True, timeout=300)
+    r = subprocess.run(["nice", "-n", "19", "ffmpeg", "-v", "error", "-nostdin", "-threads", "2", "-i", path, "-f", "null", "-"], capture_output=True, text=True, timeout=300)
     err = (r.stderr or "").strip()
     if not err and r.returncode != 0:
         err = "ffmpeg rc %d" % r.returncode

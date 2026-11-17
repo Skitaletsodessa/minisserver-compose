@@ -27,6 +27,7 @@ class FakeGo2rtc:
         self.requests = []
         self.down = False
         self.fail_stream = 0                       # the next N stream requests answer 500 (go2rtc's cold start of a transcoded source)
+        self.delay = 0.0                           # seconds a stream request takes before it answers (a cold DVRIP source, an HD transcode)
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -58,6 +59,8 @@ class FakeGo2rtc:
                     self.end_headers()
                     self.wfile.write(b"streams: exec/rtsp\n")
                 elif u.path == "/api/stream.mp4":
+                    if outer.delay:
+                        time.sleep(outer.delay)
                     self.send_response(200)
                     self.send_header("Content-Type", "video/mp4")
                     self.end_headers()
@@ -102,7 +105,10 @@ def setUpModule():
     make_archive(root)
     cams = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Двор — поворотная"}, {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Двор — камера 2"},
             {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Двор — камера 3"}]
-    e = BaseCase.ENV = Env(camera_opts={"go2rtc_url": g.url, "archive_dir": root, "channels": cams})
+    ptz = os.path.join(os.path.dirname(root), "ptz")
+    os.makedirs(ptz, exist_ok=True)
+    e = BaseCase.ENV = Env(camera_opts={"go2rtc_url": g.url, "archive_dir": root, "channels": cams, "ptz_dir": ptz})
+    e.ptz_dir = ptz
     e.g2, e.archive_root = g, root
     a = {"person_id": "test", "phone_id": None, "ip": "test"}
     for name, role, parent in (("Bob", "household", False), ("Gus", "admin", False)):
@@ -196,12 +202,122 @@ class Cam(BaseCase):
         self.assertNotIn("_h264", e.g2.requests[-1])
         self.assertEqual(e.req("GET", "/v1/cameras/cam0/live?codec=vp9", who="ivan").status_code, 422)
         self.assertEqual(len(self.audit("camera_live")) - live_rows, 2)                  # every live view is audited (the 422 one is not a view)
-        e.o["app"].live_open = 4
+        from gw import config
+        e.o["app"].live_open = config.CAMERA_LIVE_MAX_STREAMS
         self.assertEqual(e.req("GET", "/v1/cameras/cam0/live", who="ivan").status_code, 429)
+        self.assertGreaterEqual(len(e.o["app"].live_refused), 1)                         # a refusal is counted (health) and logged
         e.o["app"].live_open = 0
         e.g2.down = True
         self.assertEqual(e.req("GET", "/v1/cameras/cam0/live", who="ivan").status_code, 503)
         self.assertEqual(e.o["app"].live_open, 0)                                        # a failed open does not leak a slot
+
+    def test_clients_that_leave_while_the_camera_opens_do_not_hold_a_slot(self):
+        """2026-11-17: slots were held for the whole open, also for clients that had already gone (HD opens take 5-10 s): after a few quick presses of «Чётче» every lens got 429
+        and the page said «нет связи». Now the slot is freed the moment the client is gone, and the stream opened for it is closed."""
+        import httpx
+        e = self.e
+        app = e.o["app"]
+        e.g2.delay = 2.5
+        try:
+            for i in range(10):                                                            # ten quick opens, each abandoned after 0.3 s (more than the limit)
+                try:
+                    with httpx.Client(base_url=e.base, timeout=httpx.Timeout(5, read=0.3)) as c:
+                        with c.stream("GET", "/v1/cameras/cam%d/live?codec=h265" % (i % 3), headers={"Authorization": "Bearer " + e.tokens["ivan"], "X-Test": str(i)}):
+                            pass
+                except httpx.ReadTimeout:
+                    pass
+            deadline = time.time() + 3
+            while time.time() < deadline and app.live_open:
+                time.sleep(0.1)
+            self.assertEqual(app.live_open, 0)                                             # all the slots are back, long before the 2.5 s opens finish
+            self.assertEqual(app.live_keys, {})
+            time.sleep(2.8)                                                                # the abandoned opens finish in the background; wait so that they do not bleed into the next test
+            e.g2.delay = 0
+            for cid in ("cam0", "cam1", "cam2"):                                           # and a real viewer is served at once
+                self.assertEqual(e.req("GET", "/v1/cameras/%s/live" % cid, who="ivan").status_code, 200)
+        finally:
+            e.g2.delay = 0
+
+    def test_a_new_open_of_the_same_lens_by_the_same_viewer_replaces_the_old_one(self):
+        import threading
+        e = self.e
+        app = e.o["app"]
+        out = {}
+        e.g2.delay = 1.5
+        try:
+            a = threading.Thread(target=lambda: out.__setitem__("a", e.req("GET", "/v1/cameras/cam0/live", who="ivan", validate=False).status_code))
+            a.start()
+            time.sleep(0.5)                                                                # A is still opening
+            out["b"] = e.req("GET", "/v1/cameras/cam0/live", who="ivan", validate=False).status_code
+            a.join(10)
+            self.assertEqual(out["b"], 200)
+            self.assertEqual(out["a"], 499)                                                # the older open of the same viewer and lens gave way
+            self.assertEqual(e.req("GET", "/v1/cameras/cam0/live", who="dasha").status_code, 200)       # another person is never replaced
+        finally:
+            e.g2.delay = 0
+        deadline = time.time() + 3
+        while time.time() < deadline and app.live_open:
+            time.sleep(0.1)
+        self.assertEqual(app.live_open, 0)
+
+    def test_health_counts_refused_live_opens(self):
+        e = self.e
+        h = e.req("GET", "/v1/health", who="ivan").json()
+        self.assertIn("camera_live_refused_1h", h)
+
+    def test_opening_the_camera_page_warms_the_three_light_sources_once_in_a_while(self):
+        e = self.e
+        cams = e.o["app"].cameras
+        cams.warm_on, cams._warm_at = True, 0.0
+        e.g2.requests.clear()
+        try:
+            e.req("GET", "/v1/cameras", who="ivan")
+            time.sleep(0.5)
+            warmed = sorted(urllib.parse.parse_qs(urllib.parse.urlparse(q).query)["src"][0] for q in e.g2.requests if "/api/stream.mp4" in q)
+            warmed = [w for w in warmed if not w.endswith("_h264")]
+            self.assertEqual(warmed, ["cam_ch0", "cam_ch1", "cam_ch2"])                    # plain light sources only, no HD, no transcode
+            e.g2.requests.clear()
+            e.req("GET", "/v1/cameras", who="ivan")
+            time.sleep(0.3)
+            self.assertFalse([q for q in e.g2.requests if "/api/stream.mp4" in q])         # at most once per 90 s
+        finally:
+            cams.warm_on = False
+
+    def test_the_saved_route_is_started_once_by_a_request_file_for_the_host_job(self):
+        """2026-11-17: «Пройти маршрут 1 один раз». The gateway only writes request.json (it holds no camera login); the host job runs it and writes status.json."""
+        import json
+        e = self.e
+        rq, st = os.path.join(e.ptz_dir, "request.json"), os.path.join(e.ptz_dir, "status.json")
+        for f in (rq, st):
+            if os.path.exists(f):
+                os.remove(f)
+        lst = e.req("GET", "/v1/cameras", who="ivan").json()
+        self.assertEqual((lst["ptz"]["available"], [t["id"] for t in lst["ptz"]["tours"]]), (True, [1]))
+        self.assertEqual(e.req("GET", "/v1/cameras/ptz", who="ivan").json()["state"], "idle")
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="ola", json={"tour": 1}).status_code, 403)          # read-only watcher
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="ivan", json={"tour": 9}).status_code, 422)          # only the offered route
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="ivan", json={"tour": "1"}).status_code, 422)
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="ivan", json={"tour": True}).status_code, 422)
+        self.assertFalse(os.path.exists(rq))                                                                         # nothing was asked of the camera
+        rows = len(self.audit("camera_ptz"))
+        r = e.req("POST", "/v1/cameras/ptz/tour", who="ivan", json={"tour": 1})
+        self.assertEqual((r.status_code, r.json()["state"]), (202, "queued"))
+        req = json.load(open(rq))
+        self.assertEqual((req["tour"], req["by"]), (1, req["by"]))
+        self.assertTrue(req["id"] and req["at"])
+        self.assertEqual(json.load(open(st))["state"], "queued")                                                       # the page polls this at once
+        self.assertEqual(len(self.audit("camera_ptz")) - rows, 1)                                                      # audited
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="dasha", json={"tour": 1}).status_code, 409)         # one route at a time
+        with open(st, "w") as f:                                                                                       # the host job reports
+            json.dump({"state": "running", "tour": 1, "ends_at": "2999-01-01 00:00:00", "seconds": 45}, f)
+        self.assertEqual(e.req("GET", "/v1/cameras/ptz", who="dasha").json()["state"], "running")
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="dasha", json={"tour": 1}).status_code, 409)
+        with open(st, "w") as f:
+            json.dump({"state": "done", "tour": 1, "ended": "2026-11-17 15:00:45"}, f)
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="dasha", json={"tour": 1}).status_code, 202)        # free again
+        with open(st, "w") as f:                                                                                       # a run whose end is long past does not block for ever
+            json.dump({"state": "running", "tour": 1, "ends_at": "2020-01-01 00:00:00"}, f)
+        self.assertEqual(e.req("POST", "/v1/cameras/ptz/tour", who="ivan", json={"tour": 1}).status_code, 202)
 
     def test_live_retries_a_cold_start_once(self):
         e = self.e

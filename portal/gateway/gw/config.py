@@ -35,7 +35,10 @@ CAMERA_META = os.environ.get("GW_CAMERA_META") or None     # Task 34c: index, st
 CAMERAS = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Вход"},
            {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Левая"},
            {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Правая"}]
-CAMERA_LIVE_MAX_STREAMS = 4         # live streams at once (the camera accepts 10 connections in total; go2rtc shares one per lens)
+CAMERA_LIVE_MAX_STREAMS = 8         # live streams at once, opening ones included (the camera accepts 10 connections in total; go2rtc shares one per lens and source). Was 4: ghost opens filled it (2026-11-17)
+CAMERA_WARM = os.environ.get("GW_CAMERA_WARM", "1") != "0"      # opening the camera page warms the three light sources for 40 s (cold DVRIP start 10-27 s -> a few seconds)
+CAMERA_PTZ_DIR = os.environ.get("GW_CAMERA_PTZ", "")             # request/status files of the host job camera_ptz.py (mounted at /ptz); empty = no route button
+CAMERA_PTZ_TOURS = [{"id": 1, "name": "Маршрут 1"}]               # the camera's saved routes the page may start (Ivan: route 1)
 CAMERA_HD_DOOR = os.environ.get("GW_CAMERA_HD_DOOR", "1") != "0"     # Task 35b-4: the 720p picture (never the original) may go through the public door; "0" = the old rule, tailnet only
 CAMERA_LIVE_MAX_S = 30 * 60         # a forgotten tab must not hold a camera session for ever; the page offers "continue"
 

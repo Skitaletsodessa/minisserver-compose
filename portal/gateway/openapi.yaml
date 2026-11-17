@@ -556,7 +556,7 @@ paths:
       operationId: listCameras
       summary: "Task 34. The three lenses and a summary of the clip archive. Household parents only (admin or household WITH the parent flag); anyone else 403, module not configured 404"
       responses:
-        "200": {description: cameras, content: {application/json: {schema: {type: object, required: [cameras, live, archive], properties: {cameras: {type: array, items: {type: object, required: [id, name, channel], properties: {id: {type: string}, name: {type: string}, channel: {type: integer}}}}, live: {type: boolean, description: "go2rtc answers"}, hd_available: {type: boolean, description: "the HD picture may be asked for (through the public door only the 720p transcode, and false there when GW_CAMERA_HD_DOOR=0)"}, archive: {type: object, required: [clips, bytes, newest_clip], properties: {clips: {type: integer}, bytes: {type: integer}, newest_clip: {type: [string, "null"]}, status: {type: [object, "null"], description: "the pull job status: backlog (clips still to load from the camera), loading, last_success, listing_complete_until, next_pull (HH:MM of the next scheduled load)", properties: {backlog: {type: integer}, fresh_backlog: {type: integer, description: "recent clips still to load (newest first)"}, until_label: {type: [string, "null"], description: "start of the newest archived clip: HH:MM today, else DD.MM HH:MM"}, fresh_ok_hhmm: {type: [string, "null"]}, loading: {type: boolean}, last_success: {type: [string, "null"]}, listing_complete_until: {type: [string, "null"]}, next_pull: {type: string}}}}}}}}}}
+        "200": {description: cameras, content: {application/json: {schema: {type: object, required: [cameras, live, archive], properties: {cameras: {type: array, items: {type: object, required: [id, name, channel], properties: {id: {type: string}, name: {type: string}, channel: {type: integer}}}}, live: {type: boolean, description: "go2rtc answers"}, ptz: {type: object, properties: {available: {type: boolean}, tours: {type: array, items: {type: object}}}, description: "the saved-route button (tailnet only)"}, hd_available: {type: boolean, description: "the HD picture may be asked for (through the public door only the 720p transcode, and false there when GW_CAMERA_HD_DOOR=0)"}, archive: {type: object, required: [clips, bytes, newest_clip], properties: {clips: {type: integer}, bytes: {type: integer}, newest_clip: {type: [string, "null"]}, status: {type: [object, "null"], description: "the pull job status: backlog (clips still to load from the camera), loading, last_success, listing_complete_until, next_pull (HH:MM of the next scheduled load)", properties: {backlog: {type: integer}, fresh_backlog: {type: integer, description: "recent clips still to load (newest first)"}, until_label: {type: [string, "null"], description: "start of the newest archived clip: HH:MM today, else DD.MM HH:MM"}, fresh_ok_hhmm: {type: [string, "null"]}, loading: {type: boolean}, last_success: {type: [string, "null"]}, listing_complete_until: {type: [string, "null"]}, next_pull: {type: string}}}}}}}}}}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
@@ -587,6 +587,27 @@ paths:
         "429": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/Error"}
+  /v1/cameras/ptz:
+    get:
+      operationId: cameraPtzStatus
+      summary: "The camera's saved PTZ routes the page may start and the state of the last run (idle, queued, running, done, failed). Tailnet only (404 through the public door)"
+      responses:
+        "200": {description: status, content: {application/json: {schema: {type: object, required: [tours, state], properties: {tours: {type: array, items: {type: object, required: [id, name], properties: {id: {type: integer}, name: {type: string}}}}, state: {type: string}, tour: {type: integer}, by: {type: string}, started: {type: string}, ends_at: {type: string}, ended: {type: string}, message: {type: string}, seconds: {type: integer}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/cameras/ptz/tour:
+    post:
+      operationId: cameraPtzTour
+      summary: "Run a saved PTZ route ONCE (the host job starts it, waits one cycle, stops it). Parents only, audited, Idempotency-Key required. 409 ptz_busy while one runs. Tailnet only"
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [tour], properties: {tour: {type: integer}}}}}}
+      responses:
+        "202": {description: queued, content: {application/json: {schema: {type: object, required: [state], properties: {state: {type: string}, tour: {type: integer}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
   /v1/cameras/archive/days:
     get:
       operationId: cameraArchiveDays
@@ -1129,6 +1150,7 @@ components:
         audit_chain: {type: object, properties: {ok: {type: boolean}, rows: {type: integer}}}
         release: {type: [object, "null"], description: "Task 30c: the update channel for the host watcher: published version_code, stopped, pending count, whether the manifest signature and the APK hash verify, whether the signing key is present"}
         failed_logins_1h: {type: object, description: "failed sign-in attempts of the last hour and from how many addresses (for the host-side watcher; the public door makes guessing visible)", properties: {count: {type: integer}, addresses: {type: integer}}}
+        camera_live_refused_1h: {type: integer, description: "live camera opens refused or failed in the last hour (too_many_streams, camera_unavailable ...)"}
         camera_outside_new: {type: array, description: "Task 34: devices whose first camera call from OUTSIDE the house (through the public door) happened in the last 48 h (one tier-B message each from the host watcher)", items: {type: object, properties: {id: {type: string}, person: {type: string}, device: {type: [string, "null"]}, first_at: {type: string}}}}
         new_devices: {type: array, description: "devices created in the last 48 h (for the host-side watcher's one Telegram message per device)", items: {type: object, properties: {id: {type: string}, person: {type: string}, device: {type: string}, model: {type: [string, "null"]}, created_at: {type: string}}}}
     Session:

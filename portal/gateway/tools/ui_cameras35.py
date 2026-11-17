@@ -50,7 +50,7 @@ def run(p, base, cookie, label, w, h, cols, door, screens):
     if door:
         page.locator(".cam-tile[data-camera] .cam-hdbtn").first.click()
         note = page.locator(".cam-tile[data-camera] .cam-status").first
-        page.wait_for_function("() => /недоступна/.test(document.querySelector('.cam-tile[data-camera] .cam-status').textContent)", timeout=4000)
+        page.wait_for_function("() => /выключена/.test(document.querySelector('.cam-tile[data-camera] .cam-status').textContent)", timeout=4000)
         check(tag + "without the main stream the button explains why (and the picture keeps playing)",
               "домашней сети" in note.inner_text() and page.evaluate("() => !document.querySelector('.cam-tile[data-camera] video').paused"), note.inner_text()[:60])
     # ── layout of the live grid ──

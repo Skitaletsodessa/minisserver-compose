@@ -181,6 +181,16 @@ class Gate(BaseCase):
         self.assertTrue(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["hd_available"])
         e.o["app"].door_hits.clear()
 
+    def test_the_camera_route_is_tailnet_only(self):
+        """2026-11-17: the saved-route button does not exist through the public door (404 for the endpoints, ptz.available false) until Ivan opens it."""
+        e = self.e
+        e.o["app"].door_hits.clear()
+        app = self.app_cookie()
+        self.assertEqual(self.call("POST", "/v1/cameras/ptz/tour", headers={**DOOR, **app}, json={"tour": 1}).status_code, 404)
+        self.assertEqual(self.call("GET", "/v1/cameras/ptz", headers={**DOOR, **app}).status_code, 404)
+        self.assertFalse(self.call("GET", "/v1/cameras", headers={**DOOR, **app}).json()["ptz"]["available"])
+        e.o["app"].door_hits.clear()
+
     def test_the_kill_switch_closes_hd_at_the_door_again(self):
         from gw import config
         e = self.e

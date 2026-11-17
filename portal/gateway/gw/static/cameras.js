@@ -15,7 +15,7 @@
   var root = document.getElementById("cam-root");
   var noteEl = document.getElementById("cam-note");
   if (!root) { return; }
-  var cams = [], tiles = {}, hdOk = false, status = null, pageGen = 0, pane = "live";
+  var cams = [], tiles = {}, ptzTours = [], hdOk = false, status = null, pageGen = 0, pane = "live";
   var live = { released: true, timer: null, note: null };
   var archive = { days: [], day: "", on: {}, clips: [], events: [], current: null, box: null, lenses: [], timers: [], gen: 0, dragging: false, span: 0, playing: false };
   var panes = {}, tabs = {};
@@ -50,7 +50,8 @@
   function ms(iso) { return Date.parse(iso.replace(" ", "T") + "Z"); }
   function camName(id) { for (var i = 0; i < cams.length; i++) { if (cams[i].id === id) { return cams[i].name; } } return id; }
   var HD_MAX_MS = 30 * 60 * 1000;                                       // the server ends an HD view after 30 minutes (config.CAMERA_LIVE_MAX_S)
-  function liveUrl(id, hd) { return "/v1/cameras/" + id + "/live?codec=h264" + (hd ? "&quality=hd" : "") + "&t=" + Date.now(); }
+  // codec: h264 is go2rtc's transcode (plays everywhere); after a failed open the second try asks for the camera's own h265 (no transcode: the cheapest path, plays where the phone decodes HEVC). HD is always h264 (the door never carries the original).
+  function liveUrl(id, hd, codec) { return "/v1/cameras/" + id + "/live?codec=" + (hd ? "h264" : (codec || "h264")) + (hd ? "&quality=hd" : "") + "&t=" + Date.now(); }
   function noop() {}
   // Task 35 B: REAL full screen. In a browser the Fullscreen API; in the app WebChromeClient.onShowCustomView answers it (before: only a CSS overlay). Where it is not available the CSS overlay still works.
   function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
@@ -96,10 +97,50 @@
   function stopTile(t) {
     t.gen = (t.gen || 0) + 1;
     if (t.timer) { clearTimeout(t.timer); t.timer = null; }
+    leaveSnap(t, false);
     t.ready = false;
     t.video.pause();
     t.video.removeAttribute("src");
     t.video.load();
+  }
+  // ── the failover: frames instead of video, video again as soon as it can be had ──
+  var SNAP_MS = 2500, LIVE_RETRY_MS = [20000, 30000, 60000];
+  function snapUrl(id) { return "/v1/cameras/" + id + "/snapshot?t=" + Date.now(); }
+  function snapTick(t) {
+    if (document.hidden || pane !== "live" || !t.snapOn) { return; }
+    t.snap.src = snapUrl(t.cam.id);
+  }
+  function enterSnap(t) {
+    if (t.snapOn) { return; }
+    t.codec = "h264";
+    t.ready = false;
+    t.video.pause();
+    t.video.removeAttribute("src");
+    t.video.load();
+    t.snapOn = true;
+    t.snapFails = 0;
+    t.video.hidden = true;
+    t.snap.hidden = false;
+    setState(t, T("cam_snap_mode"), false);
+    t.again.hidden = false;
+    snapTick(t);
+    t.snapTimer = setInterval(function () { snapTick(t); }, SNAP_MS);
+    var wait = LIVE_RETRY_MS[Math.min(t.snapRounds || 0, LIVE_RETRY_MS.length - 1)];
+    t.snapRounds = (t.snapRounds || 0) + 1;
+    var tryLive = function () {
+      if (!t.snapOn) { return; }
+      if (!document.hidden && pane === "live") { t.tries = 0; startTile(t, false, false); } else { t.liveTimer = setTimeout(tryLive, 5000); }
+    };
+    t.liveTimer = setTimeout(tryLive, wait);
+  }
+  function leaveSnap(t, keepNote) {
+    if (t.snapTimer) { clearInterval(t.snapTimer); t.snapTimer = null; }
+    if (t.liveTimer) { clearTimeout(t.liveTimer); t.liveTimer = null; }
+    if (!t.snapOn) { return; }
+    t.snapOn = false;
+    if (t.snap) { t.snap.hidden = true; t.snap.removeAttribute("src"); }
+    t.video.hidden = false;
+    if (!keepNote) { t.again.hidden = true; }
   }
   function liveNote(text) { if (live.note) { live.note.textContent = text || ""; live.note.hidden = !text; } }
   function readyCount() { return cams.filter(function (c) { return tiles[c.id].ready; }).length; }
@@ -127,7 +168,7 @@
     t.holding = !!hold;
     t.again.hidden = true;
     setState(t, t.tries > 0 ? T("cam_retry_n", { n: t.tries + 1 }) : T("cam_wait_one"), false);
-    t.video.src = liveUrl(t.cam.id, t.hd);
+    t.video.src = liveUrl(t.cam.id, t.hd, t.codec);
     t.video.load();
     t.hdBtn.textContent = t.hd ? T("cam_hd_off") : T("cam_hd");
   }
@@ -157,6 +198,8 @@
     var video = document.createElement("video");
     video.className = "cam-video";
     video.muted = true; video.preload = "auto"; video.setAttribute("playsinline", "");
+    var snap = document.createElement("img");
+    snap.className = "cam-video cam-snap"; snap.hidden = true; snap.alt = "";
     var st = el("p", "cam-status meta", T("cam_wait_one"));
     var cap = el("figcaption", "cam-cap");
     cap.appendChild(el("span", "cam-name", c.name));
@@ -168,19 +211,26 @@
         t.hdMsgTimer = setTimeout(function () { if (!t.video.paused && !t.hdFailed) { setState(t, "", false); } }, 9000);
         return;
       }
+      if (!t.hd) {
+        cams.forEach(function (c2) { var o = tiles[c2.id]; if (o !== t && o.hd) { o.hd = false; o.tries = 0; o.hdFailed = false; startTile(o, false, false); } });
+      }
       t.tries = 0; t.hdFailed = false; startTile(t, !t.hd, false);
     }, "cam-hdbtn");
     var again = btn(T("cam_continue"), function () { t.tries = 0; startTile(t, t.hd, false); }, "cam-continue");
     again.hidden = true;
     cap.appendChild(expand); cap.appendChild(hdBtn);
-    fig.appendChild(video); fig.appendChild(st); fig.appendChild(again); fig.appendChild(cap);
-    t.fig = fig; t.video = video; t.status = st; t.hdBtn = hdBtn; t.again = again; t.expand = expand;
+    fig.appendChild(video); fig.appendChild(snap); fig.appendChild(st); fig.appendChild(again); fig.appendChild(cap);
+    t.fig = fig; t.snap = snap;
+    snap.addEventListener("error", function () { t.snapFails = (t.snapFails || 0) + 1; if (t.snapOn && t.snapFails >= 3) { setState(t, T("cam_snap_dead"), true); } });
+    snap.addEventListener("load", function () { t.snapFails = 0; if (t.snapOn) { setState(t, T("cam_snap_mode"), false); } });
+    snap.addEventListener("click", function () { toggleBig(t); });
+    t.video = video; t.status = st; t.hdBtn = hdBtn; t.again = again; t.expand = expand;
     video.addEventListener("canplay", function () {
       if (!video.getAttribute("src") || t.ready) { return; }
       t.ready = true;
       if (t.holding && !live.released) { setState(t, T("cam_ready_wait"), false); checkLive(); } else { video.play().catch(noop); }
     });
-    video.addEventListener("playing", function () { setState(t, t.hdFailed ? T(t.hdMsg || "cam_hd_failed") : "", false); t.tries = 0; });
+    video.addEventListener("playing", function () { setState(t, t.hdFailed ? T(t.hdMsg || "cam_hd_failed") : "", false); t.tries = 0; t.snapRounds = 0; });
     video.addEventListener("click", function () { toggleBig(t); });
     video.addEventListener("error", function () {
       if (!video.getAttribute("src")) { return; }                       // we removed the source ourselves
@@ -188,13 +238,13 @@
       if (t.hd) { hdBack(t); return; }                                  // the main stream gave up (the camera does not always deliver it): fall back to the light stream, say so
       if (t.tries < MAX_TRIES - 1 && !document.hidden) {                // quiet automatic retries: a cold camera source needs a moment
         t.tries += 1;
+        t.codec = "h265";                                               // the second try: the camera's own stream, no transcode in between
         setState(t, T("cam_retry_n", { n: t.tries + 1 }), false);
         var g = t.gen;
         t.timer = setTimeout(function () { if (g === t.gen && !document.hidden && pane === "live") { startTile(t, t.hd, !live.released); } }, RETRY_MS);
         return;
       }
-      setState(t, T("cam_no_link"), true);
-      t.again.hidden = false;
+      enterSnap(t);                                                     // the failover: frames now, video again as soon as it can be had
     });
     video.addEventListener("ended", function () {
       if (t.hd) { hdBack(t); return; }                                  // the 30 minutes of HD are over: back to the light stream
@@ -217,6 +267,49 @@
     if (!t.big) { t.hdFailed = false; }
     if (!t.big && t.hd) { t.tries = 0; startTile(t, false, false); }     // leaving the big view returns to the light stream
   }
+  // ── the camera's saved route, run once (tailnet only; the server decides whether the button exists) ──
+  function csrf() { var m = document.querySelector('meta[name="csrf"]'); return m ? m.content : ""; }
+  function postJson(path, body) {
+    var key = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+    return fetch(path, { method: "POST", credentials: "same-origin", body: JSON.stringify(body),
+                         headers: { "Accept": "application/json", "Content-Type": "application/json", "X-CSRF-Token": csrf(), "Idempotency-Key": key } }).then(function (r) {
+      if (r.status === 401) { location.href = "/login"; return new Promise(function () {}); }
+      return r.json().then(function (j) { return { ok: r.ok, status: r.status, json: j }; }, function () { return { ok: r.ok, status: r.status, json: null }; });
+    }, function () { return { ok: false, status: 0, json: { error: { code: "network" } } }; });
+  }
+  function buildRoute(tours) {
+    var wrap = el("div", "cam-route");
+    wrap.appendChild(el("h3", "cam-route-h", T("cam_route")));
+    wrap.appendChild(el("p", "meta", T("cam_route_note")));
+    var status = el("p", "meta cam-route-status", "");
+    status.hidden = true;
+    var timer = null;
+    function show(text, err) { status.textContent = text; status.hidden = !text; status.className = "cam-route-status " + (err ? "note err" : "meta"); }
+    function poll() {
+      clearTimeout(timer);
+      getJson("/v1/cameras/ptz").then(function (r) {
+        if (!r.ok) { show(errText(r.json), true); return; }
+        var s = r.json;
+        if (s.state === "queued") { show(T("cam_route_queued"), false); timer = setTimeout(poll, 2000); }
+        else if (s.state === "running") {
+          var left = s.ends_at ? Math.max(0, Math.round((new Date(s.ends_at.replace(" ", "T")).getTime() - Date.now()) / 1000)) : (s.seconds || 0);
+          show(T("cam_route_running", { s: left }), false); timer = setTimeout(poll, 3000);
+        } else if (s.state === "done") { show(T("cam_route_done"), false); btnRun.disabled = false; }
+        else if (s.state === "failed") { show(T("cam_route_failed", { m: s.message || "" }), true); btnRun.disabled = false; }
+        else { show("", false); btnRun.disabled = false; }
+      });
+    }
+    var btnRun = btn(T("cam_route_run"), function () {
+      btnRun.disabled = true;
+      postJson("/v1/cameras/ptz/tour", { tour: tours[0].id }).then(function (r) {
+        if (r.ok || r.status === 409) { poll(); } else { show(errText(r.json), true); btnRun.disabled = false; }
+      });
+    }, "cam-route-btn");
+    wrap.appendChild(btnRun);
+    wrap.appendChild(status);
+    poll();
+    return wrap;
+  }
   function renderLive(box) {
     live.note = el("p", "note", "");
     live.note.hidden = true;
@@ -231,6 +324,7 @@
     more.appendChild(btn(T("cam_archive"), function () { showPane("archive"); window.scrollTo(0, 0); }, "cam-to-archive"));
     grid.appendChild(more);
     box.appendChild(grid);
+    if (ptzTours.length) { box.appendChild(buildRoute(ptzTours)); }
   }
 
   // ── archive: events = clips of all lenses that start within a few seconds of each other ──
@@ -521,6 +615,7 @@
     if (!r.ok) { note(errText(r.json)); return; }
     cams = r.json.cameras;
     hdOk = !!r.json.hd_available;
+    ptzTours = (r.json.ptz && r.json.ptz.available && r.json.ptz.tours) || [];
     status = r.json.archive ? r.json.archive.status : null;
     if (!r.json.live) { note(T("cam_no_link")); }
     cams.forEach(function (c) { archive.on[c.id] = true; });

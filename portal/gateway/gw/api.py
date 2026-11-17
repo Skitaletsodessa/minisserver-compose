@@ -42,6 +42,8 @@ class App:
         self.releases = releases
         self.cameras = cameras
         self.live_open = 0                                # live streams running now (Task 34)
+        self.live_keys = {}                               # (viewer, lens, quality) -> the open/running stream of that viewer: a new open replaces the old one (2026-11-17)
+        self.live_refused = []                            # timestamps of refused/failed live opens (health.camera_live_refused_1h)
         self.hd = None                                    # Task 35b-4: the ONE running HD view {person, since, token, resp}; a second person gets 409 hd_busy
         self.door_hits = defaultdict(deque)               # (person+device, rate class) -> times of door requests (camera module limits)
         self.db, self.people, self.core, self.hub, self.sched, self.ha, self.clock = db, people, core, hub, sched, ha, clock
@@ -158,6 +160,7 @@ class App:
                              "filter_reverts": self.filters.recent_reverts() if self.filters else [],
                              "new_devices": self.people.recent_new_phones(),
                              "camera_outside_new": self.camera_outside_new(),
+                             "camera_live_refused_1h": len([t for t in self.live_refused if self.clock() - t < 3600]),
                              "failed_logins_1h": self.people.failed_login_stats(),
                              "release": self.releases.health() if self.releases else None})
 
@@ -1010,8 +1013,8 @@ class App:
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     # ── cameras (Task 34): the module owns no data and no login, see cameras.py. Household parents only (D5): Ivan and Dasha; children have no accounts. ──
-    def _cam(self, request):
-        p = self.authenticate(request, csrf=False)
+    def _cam(self, request, csrf=False):
+        p = self.authenticate(request, csrf=csrf)
         if not self.cameras or not self.cameras.enabled:
             raise GwError(404, "not_available", "the camera module is not configured")
         if p["role"] not in ("admin", "household") or not p.get("parent"):
@@ -1035,10 +1038,13 @@ class App:
 
     async def cam_list(self, request):
         p = self._cam(request)
+        self.cameras.warm()                                  # the page is opening: warm the three light sources now (Task: failover 2026-11-17)
         loop = asyncio.get_running_loop()
         h = await loop.run_in_executor(None, self.cameras.health)
         st = await loop.run_in_executor(None, self.cameras.status)
+        ptz = bool(self.cameras.ptz_dir) and not request.scope.get("portal_door")        # the route button: tailnet only (the public door denies the route endpoints)
         return JSONResponse({"cameras": self.cameras.public_list(), "live": h["live"], "hd_available": config.CAMERA_HD_DOOR or not request.scope.get("portal_door"),
+                             "ptz": {"available": ptz, "tours": config.CAMERA_PTZ_TOURS if ptz else []},
                              "archive": {"clips": h["archive_clips"], "bytes": h["archive_bytes"], "newest_clip": h["newest_clip"], "status": st}})
 
     def _hd_acquire(self, person):
@@ -1060,6 +1066,26 @@ class App:
         if token is not None and self.hd and self.hd["token"] is token:
             self.hd = None
 
+    async def cam_ptz_status(self, request):
+        self._cam(request)
+        if not self.cameras.ptz_dir:
+            raise GwError(404, "not_available", "the camera route is not configured")
+        return JSONResponse({"tours": config.CAMERA_PTZ_TOURS, **self.cameras.ptz_status()})
+
+    async def cam_ptz_tour(self, request):
+        p = self._cam(request, csrf=True)
+        body = await self.body(request)
+        tour = body.get("tour") if isinstance(body, dict) else None
+        if not isinstance(tour, int) or isinstance(tour, bool):
+            raise GwError(422, "invalid_tour", "tour must be a number")
+
+        async def go():
+            res = await asyncio.get_running_loop().run_in_executor(None, self.cameras.ptz_start, tour, p["person_id"], config.CAMERA_PTZ_TOURS)
+            self._caudit(p, "camera_ptz", "tour%d" % tour)
+            return 202, res
+        st, res = await self.idem(request, p, "camera.ptz:%d" % tour, go)
+        return JSONResponse(res, status_code=st)
+
     async def cam_snapshot(self, request):
         p = self._cam(request)
         cid = request.path_params["id"]
@@ -1078,17 +1104,62 @@ class App:
         door = bool(request.scope.get("portal_door"))
         if quality == "hd" and door and (not config.CAMERA_HD_DOOR or codec != "h264"):       # ADR 0009 amendment C: only the 720p transcode goes out, never the camera's own main stream
             raise GwError(403, "hd_tailnet_only", "the full-quality picture is available at home or over Tailscale only")
-        if self.live_open >= config.CAMERA_LIVE_MAX_STREAMS:
+        key = (p.get("phone_id") or p["person_id"], cid, quality)
+        old = self.live_keys.get(key)
+        if old:                                                                   # the same viewer asks for the same lens again (retry, reload, «Чётче» twice): the older one is dead weight
+            old["dead"] = True
+            if old.get("resp") is not None:
+                try:
+                    old["resp"].close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if self.live_open - (1 if old else 0) >= config.CAMERA_LIVE_MAX_STREAMS:
+            self._refused("too_many_streams")
             raise GwError(429, "too_many_streams", "too many live views at once", {"max": config.CAMERA_LIVE_MAX_STREAMS}, {"Retry-After": "30"})
         token = self._hd_acquire(p["person_id"]) if quality == "hd" else None
         loop = asyncio.get_running_loop()
+        entry = {"resp": None, "dead": False, "counted": True}
+        self.live_keys[key] = entry
         self.live_open += 1
+
+        def finish():                                                             # idempotent: the slot, the HD lease and the registry entry are given back exactly once
+            if entry["counted"]:
+                entry["counted"] = False
+                self.live_open -= 1
+                self._hd_release(token)
+                if self.live_keys.get(key) is entry:
+                    del self.live_keys[key]
+
+        fut = loop.run_in_executor(None, self.cameras.open_live, cid, codec, quality)
+
+        async def gone():
+            while not await request.is_disconnected() and not entry["dead"]:
+                await asyncio.sleep(0.4)
+        watcher = asyncio.ensure_future(gone())
         try:
-            resp = await loop.run_in_executor(None, self.cameras.open_live, cid, codec, quality)
+            await asyncio.wait({fut, watcher}, return_when=asyncio.FIRST_COMPLETED)
         except BaseException:
-            self.live_open -= 1
-            self._hd_release(token)
+            watcher.cancel()
+            finish()
+            fut.add_done_callback(self._close_orphan)
             raise
+        watcher.cancel()
+        if not fut.done():                                                        # the client left (or was replaced) while the camera was still opening: free the slot NOW, close what the open produces
+            finish()
+            fut.add_done_callback(self._close_orphan)
+            return Response(status_code=499)
+        try:
+            resp = fut.result()
+        except BaseException as e:
+            finish()
+            if isinstance(e, GwError):
+                self._refused(e.code)
+            raise
+        if entry["dead"]:
+            finish()
+            resp.close()
+            return Response(status_code=499)
+        entry["resp"] = resp
         if token is not None and self.hd and self.hd["token"] is token:
             self.hd["resp"] = resp
         self._caudit(p, "camera_live", cid, {"codec": codec, "quality": quality, "door": door})
@@ -1102,10 +1173,23 @@ class App:
                         break
                     yield chunk
             finally:
-                self.live_open -= 1
-                self._hd_release(token)
+                finish()
                 resp.close()                          # synchronous on purpose: an await here is cancelled together with the generator and the stream would leak
         return StreamingResponse(gen(), media_type="video/mp4", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+    @staticmethod
+    def _close_orphan(fut):
+        """A stream that finished opening after its client had gone: close it at once (it would otherwise hold go2rtc and the camera until its 31-minute reaper)."""
+        try:
+            if not fut.cancelled() and fut.exception() is None:
+                fut.result().close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _refused(self, code):
+        now = self.clock()
+        self.live_refused = [t for t in self.live_refused if now - t < 3600] + [now]
+        print("camera live refused: %s (open %d)" % (code, self.live_open), flush=True)
 
     async def cam_archive_days(self, request):
         self._cam(request)
@@ -1198,6 +1282,8 @@ def build(app_obj, extra_routes=(), lifespan=None):
         Route("/v1/cameras/archive/at", a.cam_archive_at, methods=["GET"]),
         Route("/v1/cameras/archive/step", a.cam_archive_step, methods=["GET"]),
         Route("/v1/cameras/archive/clips/{cid:int}/video", a.cam_clip_video, methods=["GET"]),
+        Route("/v1/cameras/ptz", a.cam_ptz_status, methods=["GET"]),
+        Route("/v1/cameras/ptz/tour", a.cam_ptz_tour, methods=["POST"]),
         Route("/v1/cameras/{id}/snapshot", a.cam_snapshot, methods=["GET"]),
         Route("/v1/cameras/{id}/live", a.cam_live, methods=["GET"]),
         Route("/v1/services", a.services, methods=["GET"]),

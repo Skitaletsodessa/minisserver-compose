@@ -212,6 +212,12 @@ button.cam-clip-btn { width: 100%; min-height: var(--tap); text-align: left; }
 
 /* Task 34b: 2x2 live grid, big tile, synchronised view */
 .cam-tile .cam-video { border-radius: 0; max-height: none; cursor: pointer; }
+.cam-tile .cam-snap { object-fit: contain; }
+.cam-video[hidden] { display: none; }
+.cam-route { margin: 18px 0 8px; padding: 12px; border: 1px solid var(--line, #8884); border-radius: var(--radius); }
+.cam-route-h { margin: 0 0 6px; font-size: 1rem; }
+.cam-route-btn { min-height: 48px; }
+.cam-route-status { margin: 8px 0 0; }
 .cam-tile .cam-cap { padding: 4px 8px; flex-wrap: wrap; }
 .cam-tile .cam-cap button { min-height: 44px; padding: 0 10px; }
 .cam-more { padding: 12px; gap: 8px; justify-content: center; }

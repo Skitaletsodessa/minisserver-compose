@@ -167,5 +167,11 @@ for path, got in (("/app/update.json", 200), ("/app/releases/1/app.apk", 200), (
 check("door_problems: an unreachable door is not a false alarm", gw.door_problems(lambda u: None) == [])
 
 
+# 2026-11-17: refused live camera opens
+n, _ = run(full=dict(HEALTH, camera_live_refused_1h=3))
+check("few refused camera opens: no alert", ("gateway-camera-live-refused", "B") not in n.alerts())
+n, _ = run(full=dict(HEALTH, camera_live_refused_1h=40))
+check("many refused camera opens: one tier-B alert", ("gateway-camera-live-refused", "B") in n.alerts())
+
 print("\n%d failed" % len(FAILS))
 sys.exit(1 if FAILS else 0)

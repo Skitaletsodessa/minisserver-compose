@@ -32,8 +32,9 @@ def make_webm(path, seconds):
 
 
 class FakeGo2rtc:
-    def __init__(self, media):
+    def __init__(self, media, frame=None, down=None):
         body = open(media, "rb").read()
+        frame_bytes = open(frame, "rb").read() if frame else b""
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -42,7 +43,16 @@ class FakeGo2rtc:
             def do_GET(self):
                 u = urllib.parse.urlparse(self.path)
                 src = urllib.parse.parse_qs(u.query).get("src", [""])[0]
-                if u.path == "/api":
+                if u.path == "/api/stream.mp4" and down and os.path.exists(down):             # Task failover 2026-11-17: the lens cannot be opened as video
+                    self.send_response(503)
+                    self.end_headers()
+                elif u.path == "/api/frame.jpeg" and frame_bytes:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(frame_bytes)))
+                    self.end_headers()
+                    self.wfile.write(frame_bytes)
+                elif u.path == "/api":
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b"{}")
@@ -69,7 +79,9 @@ def main(outdir):
     os.makedirs(outdir, exist_ok=True)
     live_media = os.path.join(outdir, "live.webm")
     make_webm(live_media, 40)
-    g = FakeGo2rtc(live_media)
+    frame = os.path.join(outdir, "frame.jpg")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=64x36", "-frames:v", "1", frame], check=True)
+    g = FakeGo2rtc(live_media, frame, os.path.join(outdir, "live-down"))
     root = os.path.join(outdir, "camera")
     os.makedirs(root, exist_ok=True)
     db = sqlite3.connect(os.path.join(root, "index.sqlite"))
@@ -88,7 +100,9 @@ def main(outdir):
     db.close()
     cams = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Вход"}, {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Левая"},
             {"id": "cam2", "channel": 2, "src": "cam_ch2", "name": "Правая"}]
-    e = Env(camera_opts={"go2rtc_url": g.url, "archive_dir": root, "channels": cams})
+    ptz = os.path.join(outdir, "ptz")
+    os.makedirs(ptz, exist_ok=True)
+    e = Env(camera_opts={"go2rtc_url": g.url, "archive_dir": root, "channels": cams, "ptz_dir": ptz})
     a = {"person_id": "scratch", "phone_id": None, "ip": "scratch"}
     e.people.create(a, "Marta", "household", True, web_login=True)
     raw, _ = e.people.create_setup_link(a, "marta")

@@ -56,8 +56,10 @@ class LiveStream:
 
 
 class Cameras:
-    def __init__(self, go2rtc_url, archive_dir, channels, clock, opener=None, live_ttl=1800 + 60, meta_dir=None):
+    def __init__(self, go2rtc_url, archive_dir, channels, clock, opener=None, live_ttl=1800 + 60, meta_dir=None, warm=False, ptz_dir=None):
         self.live_ttl = live_ttl
+        self.ptz_dir = ptz_dir
+        self.warm_on, self._warm_at = warm, 0.0
         self.base = (go2rtc_url or "").rstrip("/")
         self.archive = archive_dir
         self.meta = meta_dir or archive_dir                 # index.sqlite, status.json and the night staging area `clips/` (NVMe; the library disk stays idle at night)
@@ -156,6 +158,63 @@ class Cameras:
                 break
         drain.close()
         raise GwError(503, "camera_unavailable", "the camera did not answer")
+
+    # ── the camera's saved PTZ route, run once by the host job ──
+    def ptz_status(self):
+        import json
+        try:
+            with open(os.path.join(self.ptz_dir, "status.json")) as f:
+                st = json.load(f)
+        except (OSError, ValueError, TypeError):
+            st = {}
+        return {k: st.get(k) for k in ("state", "tour", "by", "started", "ends_at", "ended", "message", "seconds") if st.get(k) is not None} or {"state": "idle"}
+
+    def ptz_start(self, tour, person, tours):
+        """Ask the host job to run saved route `tour` once. 404 when the button is not configured, 422 for a route that is not offered, 409 while one runs."""
+        import json
+        from datetime import datetime
+        if not self.ptz_dir:
+            raise GwError(404, "not_available", "the camera route is not configured")
+        if tour not in [t["id"] for t in tours]:
+            raise GwError(422, "invalid_tour", "that route is not offered", {"tours": [t["id"] for t in tours]})
+        st = self.ptz_status()
+        if st.get("state") in ("queued", "running"):
+            ends = st.get("ends_at")
+            try:
+                live = ends is None or (datetime.strptime(ends, "%Y-%m-%d %H:%M:%S") - datetime.fromtimestamp(self.clock())).total_seconds() > -90
+            except ValueError:
+                live = True
+            if live:
+                raise GwError(409, "ptz_busy", "a route is already running", {"state": st.get("state")}, {"Retry-After": "30"})
+        rid = "%d-%s" % (int(self.clock()), os.urandom(3).hex())
+        req = {"id": rid, "tour": tour, "by": person, "at": datetime.fromtimestamp(self.clock()).strftime("%Y-%m-%d %H:%M:%S")}
+        tmp = os.path.join(self.ptz_dir, "request.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(req, f)
+        # status first (the page polls it at once), then the request (the path unit fires on it)
+        with open(os.path.join(self.ptz_dir, "status.json.tmp"), "w") as f:
+            json.dump({"request_id": rid, "state": "queued", "tour": tour, "by": person}, f)
+        os.replace(os.path.join(self.ptz_dir, "status.json.tmp"), os.path.join(self.ptz_dir, "status.json"))
+        os.replace(tmp, os.path.join(self.ptz_dir, "request.json"))
+        return {"state": "queued", "tour": tour}
+
+    def warm(self, seconds=40, every=90):
+        """Opening the camera page: hold the three light sources in go2rtc for `seconds` so that the streams the page asks for next start in a few seconds instead of 10-27
+        (a DVRIP source starts cold). Non-blocking, at most once per `every` seconds; a failure is silent (the page opens its streams anyway)."""
+        now = self.clock()
+        with self.lock:
+            if not self.warm_on or now - self._warm_at < every:
+                return False
+            self._warm_at = now
+
+        def one(src):
+            try:
+                LiveStream(self._open_plain(src, 1), None, drain=True, ttl=seconds)
+            except (GwError, OSError, ValueError):
+                pass
+        for c in self.channels:
+            threading.Thread(target=one, args=(c["src"],), daemon=True).start()
+        return True
 
     def live_ok(self):
         try:
