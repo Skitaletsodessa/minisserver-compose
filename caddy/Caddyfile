@@ -241,7 +241,8 @@ minisserver.tail6bf4d5.ts.net:17443 {
 					path /v1/cameras /v1/cameras/archive/days /v1/cameras/archive/clips /v1/cameras/archive/at /v1/cameras/archive/step
 				}
 				key    {vars.client_ip}
-				events 120
+				# Task 35c (Ivan 2026-11-18): viewing is not counted; this is only a flood guard for the archive listing
+				events 1200
 				window 1m
 			}
 			zone camera_snapshot_per_ip {
@@ -249,7 +250,8 @@ minisserver.tail6bf4d5.ts.net:17443 {
 					path /v1/cameras/*/snapshot
 				}
 				key    {vars.client_ip}
-				events 150
+				# Task 35c: the frame fallback fetches a snapshot per lens every 2.5 s; flood guard only
+				events 900
 				window 1m
 			}
 			zone camera_ptz_per_ip {
@@ -284,7 +286,8 @@ minisserver.tail6bf4d5.ts.net:17443 {
 					path /*
 				}
 				key    {vars.client_ip}
-				events 900
+				# Task 35c: 900 -> 3000 per min: a 3-lens archive session (range requests of three clips per event step) and the frame fallback must never reach it; still a flood ceiling
+				events 3000
 				window 1m
 			}
 		}

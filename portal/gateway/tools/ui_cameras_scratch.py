@@ -96,6 +96,18 @@ def main(outdir):
         make_webm(p, 12)
         end = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(calendar.timegm(time.strptime(begin, "%Y-%m-%d %H:%M:%S")) + 12))
         db.execute("INSERT INTO clips VALUES (?,?,?,?,?,?,?,?,?,?,?)", ("%d|%d" % (ch, i), ch, "M", begin, end, 1, os.path.getsize(p), p, 12.0, 12.0, "2026-11-12 14:00:00"))
+    n_extra = int(os.environ.get("SCRATCH_EVENTS", "0"))                                        # Task 35c: many events on 12.11 14:00.. every 2 minutes, three lenses each
+    if n_extra:
+        base = os.path.join(root, "2026-11-12", "ch0", "131526.mp4")
+        for k in range(n_extra):
+            t = 14 * 3600 + k * 120
+            for ch in (0, 1, 2):
+                begin = "2026-11-12 %02d:%02d:%02d" % (t // 3600, t % 3600 // 60, t % 60 + ch)
+                p = os.path.join(root, begin[:10], "ch%d" % ch, begin[11:].replace(":", "") + ".mp4")
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                subprocess.run(["cp", base, p], check=True)
+                end = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(calendar.timegm(time.strptime(begin, "%Y-%m-%d %H:%M:%S")) + 12))
+                db.execute("INSERT INTO clips VALUES (?,?,?,?,?,?,?,?,?,?,?)", ("x%d|%d" % (ch, k), ch, "M", begin, end, 1, os.path.getsize(p), p, 12.0, 12.0, "2026-11-12 14:00:00"))
     db.commit()
     db.close()
     cams = [{"id": "cam0", "channel": 0, "src": "cam_ch0", "name": "Вход"}, {"id": "cam1", "channel": 1, "src": "cam_ch1", "name": "Левая"},

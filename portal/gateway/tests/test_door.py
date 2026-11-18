@@ -143,7 +143,22 @@ class Gate(BaseCase):
         self.assertEqual(r.status_code, 401)                                                           # reached the handler: the same refusal as ever
         self.assertEqual(self.call("GET", "/app/update.json", headers=DOOR).status_code, 401)           # the update path answers its own 401 to an anonymous caller
 
+    def test_viewing_is_not_counted_at_the_door(self):
+        """Task 35c (Ivan 2026-11-18): after ~17 events the clips stopped opening (camera_clip 60 / 10 min). Only the route is counted now."""
+        e = self.e
+        self.assertEqual(set(door.DOOR_LIMITS), {"camera_ptz"})
+        e.o["app"].door_hits.clear()
+        app = self.app_cookie()
+        for path in ("/v1/cameras/cam0/snapshot", "/v1/cameras", "/v1/cameras/archive/days"):
+            codes = {self.call("GET", path, headers={**DOOR, **app}).status_code for _ in range(300)}
+            self.assertNotIn(429, codes, path)
+        codes = {self.call("GET", "/v1/cameras/cam0/live?codec=h265", headers={**DOOR, **app}).status_code for _ in range(20)}
+        self.assertNotIn(429, codes)
+        self.assertNotIn("door_rate_limited", str(codes))
+        e.o["app"].door_hits.clear()
+
     def test_camera_calls_from_outside_are_counted_per_person_and_device(self):
+        """The mechanism still exists (the route uses it): proven here with temporary limits on live and snapshots."""
         e = self.e
         app = self.app_cookie()
         keep = dict(door.DOOR_LIMITS)

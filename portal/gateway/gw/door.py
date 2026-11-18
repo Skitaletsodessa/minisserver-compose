@@ -77,7 +77,7 @@ TABLE = [
 ]
 
 # gateway-side counters for door requests of the camera module: (class) -> (events, window seconds), per person+device (Caddy adds per-IP zones in front)
-DOOR_LIMITS = {"camera_snapshot": (240, 300), "camera_live": (6, 600), "camera_clip": (60, 600), "camera_ptz": (6, 600)}
+DOOR_LIMITS = {"camera_ptz": (6, 600)}            # Task 35c (Ivan 2026-11-18): viewing (live, snapshots, clip files, listings) is NOT counted; only the route (it moves the camera). Concurrency rules live in the camera module.
 
 HEADER = b"x-portal-door"
 VALUE = b"funnel"

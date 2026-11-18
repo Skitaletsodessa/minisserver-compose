@@ -449,7 +449,7 @@ def update_ha(entry, args, logpath, text, current_ref):
     why = "%s -> %s" % (cur_ver, best[1])
     if args.dry_run:
         return {"service": name, "result": "would-update", "reason": why + " (after the restore test)", "to": new_ref}
-    rc, out = sh("HA_IMAGE=%s /srv/compose/_system/restic-backup/restore-test-ha.sh" % new_ref, shell=True, timeout=3000)
+    rc, out = sh("sudo env HA_IMAGE=%s /srv/compose/_system/restic-backup/restore-test-ha.sh" % new_ref, shell=True, timeout=3000)
     if rc != 0:
         alert("container-update-" + name, "Home Assistant %s was NOT installed: the isolated restore test failed with the candidate image (%s). %s" % (best[1], why, out[-200:]))
         return {"service": name, "result": "skipped", "reason": "restore test failed for " + best[1]}
