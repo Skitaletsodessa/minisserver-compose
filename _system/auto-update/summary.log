@@ -5,3 +5,4 @@
 2026-11-15 11:24 | minisserver | containers | kernel: - | apt: - | containers: scrutiny ghcr.io/analogj/scr, immich-redis docker.io/valkey/va, relay sha256:e48f59cdba69, portal-schedules sha256:e48f59cdba69, portal-gateway sha256:e48f59cdba69 | check: OK
 2026-11-17 03:34 | minisserver | apt | kernel: - | apt: docker-ce-cli 5:29.9.3-1~debian.13~trixie>5:29.10.0-1~debian.13~trixie, docker-ce 5:29.9.3-1~debian.13~trixie>5:29.10.0-1~debian.13~trixie, docker-ce-rootless-extras 5:29.9.3-1~debian.13~trixie>5:29.10.0-1~debian.13~trixie | containers: - | check: FAIL(1): containers not up:
 2026-11-18 03:36 | minisserver | apt | kernel: - | apt: docker-compose-plugin 5.7.1-1~debian.13~trixie>5.8.0-1~debian.13~trixie | containers: - | check: OK
+2026-11-21 03:34 | minisserver | apt | kernel: - | apt: python3-gpg 1.24.2-3>1.24.2-3+deb13u1, libgpgme11t64 1.24.2-3>1.24.2-3+deb13u1, docker-buildx-plugin 0.39.0-1~debian.13~trixie>0.39.1-1~debian.13~trixie | containers: - | check: OK
