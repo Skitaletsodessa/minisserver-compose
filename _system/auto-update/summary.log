@@ -12,3 +12,4 @@
 2026-11-25 03:34 | minisserver | apt | kernel: - | apt: docker-ce 5:29.10.0-1~debian.13~trixie>5:29.10.1-1~debian.13~trixie, docker-ce-rootless-extras 5:29.10.0-1~debian.13~trixie>5:29.10.1-1~debian.13~trixie, zstd 1.5.7+dfsg-1>1.5.7+dfsg-1+deb13u1, libzstd1 1.5.7+dfsg-1>1.5.7+dfsg-1+deb13u1, docker-ce-cli 5:29.10.0-1~debian.13~trixie>5:29.10.1-1~debian.13~trixie | containers: - | check: FAIL(1): containers not up:
 2026-11-25 04:35 | minisserver | boot | kernel: 6.12.117+deb13-amd64>6.12.118+deb13-amd64 | apt: - | containers: - | check: OK
 2026-11-26 03:32 | minisserver | apt | kernel: - | apt: login.defs 1:4.17.4-2>1:4.17.4-2+deb13u1, passwd 1:4.17.4-2>1:4.17.4-2+deb13u1 | containers: - | check: OK
+2026-11-28 03:32 | minisserver | apt | kernel: - | apt: docker-compose-plugin 5.8.0-1~debian.13~trixie>5.8.1-1~debian.13~trixie | containers: - | check: OK
